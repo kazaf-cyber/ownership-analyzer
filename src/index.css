@@ -14,6 +14,7 @@ html, body, #root {
   overflow: hidden;
 }
 
+/* 滾動條美化 */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -28,4 +29,3 @@ html, body, #root {
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
-
