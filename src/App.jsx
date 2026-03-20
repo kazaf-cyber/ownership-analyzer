@@ -57,6 +57,14 @@ function wouldCycle(from, to, edges) {
   return false;
 }
 
+function fmtNum(n) { return n == null ? '' : Number(n).toLocaleString(); }
+function fmtShort(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 1e4) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+  return fmtNum(n);
+}
+
 export default function App() {
   const uid = useRef(1);
   const gid = (p) => `${p}${uid.current++}`;
@@ -68,9 +76,14 @@ export default function App() {
 
   const [nName, setNName] = useState('');
   const [nType, setNType] = useState('company');
+  const [nTotalShares, setNTotalShares] = useState('');
+
   const [eFrom, setEFrom] = useState('');
   const [eTo, setETo] = useState('');
   const [ePct, setEPct] = useState('');
+  const [inputMode, setInputMode] = useState('pct');
+  const [eShares, setEShares] = useState('');
+  const [quickTS, setQuickTS] = useState('');
 
   const [target, setTarget] = useState('');
   const [threshold, setThreshold] = useState(25);
@@ -89,6 +102,22 @@ export default function App() {
   const nn = useCallback((id) => nodes.find(n => n.id === id)?.name || id, [nodes]);
   const togRow = (id) => setExpRows(p => ({ ...p, [id]: !p[id] }));
 
+  const investeeNode = useMemo(() => eTo ? nodes.find(n => n.id === eTo) : null, [eTo, nodes]);
+  const computedPct = useMemo(() => {
+    if (inputMode !== 'shares' || !investeeNode?.totalShares || !eShares) return null;
+    const s = parseFloat(eShares);
+    if (isNaN(s) || s <= 0) return null;
+    return (s / investeeNode.totalShares) * 100;
+  }, [inputMode, investeeNode, eShares]);
+
+  const doQuickSetTS = () => {
+    const ts = parseFloat(quickTS);
+    if (!eTo || isNaN(ts) || ts <= 0) return flash(T('⚠️ 請輸入有效的總股數', '⚠️ Enter valid total shares'));
+    setNodes(p => p.map(n => n.id === eTo ? { ...n, totalShares: ts } : n));
+    setQuickTS('');
+    flash(T('✅ 已設定總股數', '✅ Total shares set'));
+  };
+
   const askDeleteNode = (id) => {
     const name = nn(id);
     const relCount = edges.filter(e => e.from === id || e.to === id).length;
@@ -97,7 +126,7 @@ export default function App() {
   const askDeleteEdge = (id) => {
     const e = edges.find(x => x.id === id);
     if (!e) return;
-    setConfirmDel({ type: 'edge', id, name: `${nn(e.from)} → ${e.pct}% → ${nn(e.to)}` });
+    setConfirmDel({ type: 'edge', id, name: `${nn(e.from)} → ${e.pct.toFixed(4)}% → ${nn(e.to)}` });
   };
   const execDelete = () => {
     if (!confirmDel) return;
@@ -112,23 +141,58 @@ export default function App() {
     flash(T('✅ 已刪除', '✅ Deleted'));
   };
 
-  const openEditEdge = (e) => setEditEdge({ id: e.id, pct: String(e.pct) });
+  const openEditEdge = (e) => {
+    const toNode = nodes.find(n => n.id === e.to);
+    setEditEdge({
+      id: e.id, pct: String(e.pct),
+      shares: e.shares != null ? String(e.shares) : '',
+      mode: e.shares != null ? 'shares' : 'pct',
+      toId: e.to, totalShares: toNode?.totalShares || null
+    });
+  };
   const saveEditEdge = () => {
     if (!editEdge) return;
-    const pct = parseFloat(editEdge.pct);
-    if (isNaN(pct) || pct <= 0 || pct > 100) return flash(T('⚠️ 比例須 0~100', '⚠️ Must be 0~100'));
+    let pct, shares = null;
+    if (editEdge.mode === 'pct') {
+      pct = parseFloat(editEdge.pct);
+      if (isNaN(pct) || pct <= 0 || pct > 100) return flash(T('⚠️ 比例須 0~100', '⚠️ Must be 0~100'));
+    } else {
+      shares = parseFloat(editEdge.shares);
+      if (!editEdge.totalShares) return flash(T('⚠️ 被投資方未設定總股數', '⚠️ Investee has no total shares'));
+      if (isNaN(shares) || shares <= 0) return flash(T('⚠️ 請輸入有效股數', '⚠️ Enter valid shares'));
+      pct = (shares / editEdge.totalShares) * 100;
+      if (pct > 100) return flash(T('⚠️ 股數超過總股數', '⚠️ Shares exceed total'));
+    }
     const edge = edges.find(e => e.id === editEdge.id);
     const tot = edges.filter(e => e.to === edge.to && e.id !== editEdge.id).reduce((s, e) => s + e.pct, 0);
     if (tot + pct > 100.01) return flash(T('⚠️ 超過 100%', '⚠️ Exceeds 100%'));
-    setEdges(p => p.map(e => e.id === editEdge.id ? { ...e, pct } : e));
+    setEdges(p => p.map(e => {
+      if (e.id !== editEdge.id) return e;
+      const u = { ...e, pct };
+      if (shares !== null) u.shares = shares; else delete u.shares;
+      return u;
+    }));
     setEditEdge(null);
     flash(T('✅ 已儲存', '✅ Saved'));
   };
 
-  const openEditNode = (n) => setEditNode({ id: n.id, name: n.name, type: n.type });
+  const openEditNode = (n) => setEditNode({ id: n.id, name: n.name, type: n.type, totalShares: n.totalShares != null ? String(n.totalShares) : '' });
   const saveEditNode = () => {
     if (!editNode || !editNode.name.trim()) return flash(T('⚠️ 請輸入名稱', '⚠️ Enter a name'));
-    setNodes(p => p.map(n => n.id === editNode.id ? { ...n, name: editNode.name.trim(), type: editNode.type } : n));
+    const ts = editNode.type === 'company' && editNode.totalShares ? parseFloat(editNode.totalShares) : null;
+    if (editNode.totalShares && editNode.type === 'company' && (isNaN(ts) || ts <= 0)) return flash(T('⚠️ 總股數須為正數', '⚠️ Total shares must be positive'));
+    setNodes(p => p.map(n => {
+      if (n.id !== editNode.id) return n;
+      const u = { ...n, name: editNode.name.trim(), type: editNode.type };
+      if (ts) u.totalShares = ts; else delete u.totalShares;
+      return u;
+    }));
+    if (ts) {
+      setEdges(p => p.map(e => {
+        if (e.to !== editNode.id || e.shares == null) return e;
+        return { ...e, pct: (e.shares / ts) * 100 };
+      }));
+    }
     setEditNode(null);
     flash(T('✅ 已儲存', '✅ Saved'));
   };
@@ -136,24 +200,43 @@ export default function App() {
   const addNode = () => {
     const name = nName.trim();
     if (!name) return flash(T('⚠️ 請輸入名稱', '⚠️ Enter a name'));
-    setNodes(p => [...p, { id: gid('n'), name, type: nType }]);
-    setNName(''); flash(T('✅ 已新增實體', '✅ Entity added'));
+    const node = { id: gid('n'), name, type: nType };
+    if (nType === 'company' && nTotalShares) {
+      const ts = parseFloat(nTotalShares);
+      if (isNaN(ts) || ts <= 0) return flash(T('⚠️ 總股數須為正數', '⚠️ Total shares must be positive'));
+      node.totalShares = ts;
+    }
+    setNodes(p => [...p, node]);
+    setNName(''); setNTotalShares('');
+    flash(T('✅ 已新增實體', '✅ Entity added'));
   };
+
   const addEdge = () => {
-    const pct = parseFloat(ePct);
     if (!eFrom || !eTo) return flash(T('⚠️ 請選擇兩端', '⚠️ Select both sides'));
     if (eFrom === eTo) return flash(T('⚠️ 不能自我持股', '⚠️ Cannot own self'));
-    if (isNaN(pct) || pct <= 0 || pct > 100) return flash(T('⚠️ 比例須 0~100', '⚠️ Must be 0~100'));
     if (edges.some(e => e.from === eFrom && e.to === eTo)) return flash(T('⚠️ 此關係已存在', '⚠️ Already exists'));
+    let pct, shares = null;
+    if (inputMode === 'pct') {
+      pct = parseFloat(ePct);
+      if (isNaN(pct) || pct <= 0 || pct > 100) return flash(T('⚠️ 比例須 0~100', '⚠️ Must be 0~100'));
+    } else {
+      shares = parseFloat(eShares);
+      if (!investeeNode?.totalShares) return flash(T('⚠️ 請先設定被投資方的總股數', '⚠️ Set investee total shares first'));
+      if (isNaN(shares) || shares <= 0) return flash(T('⚠️ 請輸入有效股數', '⚠️ Enter valid shares'));
+      if (shares > investeeNode.totalShares) return flash(T('⚠️ 股數超過總股數', '⚠️ Shares exceed total'));
+      pct = (shares / investeeNode.totalShares) * 100;
+    }
     const tot = edges.filter(e => e.to === eTo).reduce((s, e) => s + e.pct, 0);
     if (tot + pct > 100.01) return flash(T('⚠️ 超過 100%', '⚠️ Exceeds 100%'));
     if (wouldCycle(eFrom, eTo, edges)) return flash(T('⚠️ 會產生循環', '⚠️ Would create cycle'));
-    setEdges(p => [...p, { id: gid('e'), from: eFrom, to: eTo, pct }]);
-    setEPct(''); flash(T('✅ 已新增關係', '✅ Relation added'));
+    const edge = { id: gid('e'), from: eFrom, to: eTo, pct };
+    if (shares !== null) edge.shares = shares;
+    setEdges(p => [...p, edge]);
+    setEPct(''); setEShares('');
+    flash(T('✅ 已新增關係', '✅ Relation added'));
   };
 
   const lay = useMemo(() => buildLayout(nodes, edges), [nodes, edges]);
-
   const analysis = useMemo(() => {
     if (!target) return [];
     const memo = {};
@@ -163,7 +246,6 @@ export default function App() {
       .map(r => ({ ...r, paths: getPaths(r.node.id, target, edges).map(p => ({ edges: p, pct: p.reduce((a, e) => a * e.pct / 100, 1) * 100 })) }))
       .sort((a, b) => b.eff - a.eff);
   }, [nodes, edges, target]);
-
   const roots = useMemo(() => analysis.filter(r => !edges.some(e => e.to === r.node.id)), [analysis, edges]);
   const ubos = useMemo(() => roots.filter(r => r.eff >= threshold), [roots, threshold]);
 
@@ -173,31 +255,32 @@ export default function App() {
       { id: 'a', name: 'A', type: 'company' },
       { id: 'b', name: 'B', type: 'company' },
       { id: 'c', name: 'C', type: 'company' },
-      { id: 'd', name: 'D', type: 'company' },
-      { id: 'e', name: 'E', type: 'company' },
-      { id: 'f', name: 'F', type: 'company' },
-      { id: 'g', name: 'G', type: 'company' },
-      { id: 'h', name: 'H', type: 'company' },
+      { id: 'd', name: 'C', type: 'company', totalShares: 10000000 },
+      { id: 'e', name: 'D', type: 'company', totalShares: 200000000 },
+      { id: 'f', name: 'E', type: 'company' },
+      { id: 'g', name: 'F', type: 'company', totalShares: 80000000 },
+      { id: 'h', name: 'G', type: 'company', totalShares: 50000000 },
     ]);
     setEdges([
       { id: 'e1', from: 'xsp', to: 'a', pct: 100 },
       { id: 'e2', from: 'xsp', to: 'b', pct: 91.67 },
       { id: 'e3', from: 'xsp', to: 'c', pct: 99.55 },
-      { id: 'e4', from: 'a', to: 'd', pct: 60 },
+      { id: 'e4', from: 'a', to: 'd', pct: 60, shares: 6000000 },
       { id: 'e5', from: 'b', to: 'c', pct: 0.45 },
-      { id: 'e6', from: 'd', to: 'e', pct: 4.4405 },
+      { id: 'e6', from: 'd', to: 'e', pct: 4.4405, shares: 8881000 },
       { id: 'e7', from: 'b', to: 'e', pct: 29.0973 },
       { id: 'e8', from: 'c', to: 'e', pct: 14.6022 },
       { id: 'e9', from: 'xsp', to: 'f', pct: 6.1437 },
-      { id: 'e10', from: 'e', to: 'g', pct: 83.5014 },
+      { id: 'e10', from: 'e', to: 'g', pct: 83.5014, shares: 66801120 },
       { id: 'e11', from: 'f', to: 'g', pct: 16.4986 },
-      { id: 'e12', from: 'g', to: 'h', pct: 100 },
+      { id: 'e12', from: 'g', to: 'h', pct: 100, shares: 50000000 },
     ]);
     setTarget('h'); setTab('analyze'); setExpRows({}); uid.current = 100;
     flash(T('✅ 已載入範例', '✅ Demo loaded'));
   };
   const reset = () => {
-    setNodes([]); setEdges([]); setTarget(''); setNName(''); setEFrom(''); setETo(''); setEPct('');
+    setNodes([]); setEdges([]); setTarget(''); setNName(''); setNTotalShares('');
+    setEFrom(''); setETo(''); setEPct(''); setEShares(''); setInputMode('pct'); setQuickTS('');
     setExpRows({}); uid.current = 1; setTab('build'); setZoom(1);
     setEditEdge(null); setEditNode(null); setConfirmDel(null);
   };
@@ -210,9 +293,9 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col bg-gradient-to-br from-slate-50 to-blue-50 overflow-hidden text-gray-800">
-
       {toast && <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white text-sm px-6 py-2.5 rounded-xl shadow-2xl font-medium">{toast}</div>}
 
+      {/* ── 確認刪除 ── */}
       {confirmDel && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setConfirmDel(null)}>
           <div className="bg-white rounded-2xl shadow-2xl w-96 max-w-sm mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
@@ -221,32 +304,25 @@ export default function App() {
               <span className="font-bold text-sm">{T('確認刪除', 'Confirm Delete')}</span>
             </div>
             <div className="p-5">
-              <p className="text-sm text-gray-600 mb-3">{T('確定要刪除以下項目嗎？', 'Are you sure you want to delete:')}</p>
+              <p className="text-sm text-gray-600 mb-3">{T('確定要刪除以下項目嗎？', 'Delete the following?')}</p>
               <div className="bg-red-50 border-2 border-red-200 rounded-xl p-3 mb-3">
-                <p className="text-sm font-bold text-red-700 break-all">
-                  {confirmDel.type === 'node' ? '🏢 ' : '🔗 '}{confirmDel.name}
-                </p>
+                <p className="text-sm font-bold text-red-700 break-all">{confirmDel.type === 'node' ? '🏢 ' : '🔗 '}{confirmDel.name}</p>
               </div>
               {confirmDel.type === 'node' && confirmDel.relCount > 0 && (
                 <div className="bg-orange-50 border border-orange-200 rounded-lg p-2.5 mb-3">
-                  <p className="text-xs text-orange-700 font-medium">
-                    ⚠️ {T(`將同時刪除 ${confirmDel.relCount} 條相關持股關係`, `${confirmDel.relCount} related relation(s) will also be removed`)}
-                  </p>
+                  <p className="text-xs text-orange-700 font-medium">⚠️ {T(`將同時刪除 ${confirmDel.relCount} 條相關持股關係`, `${confirmDel.relCount} related relation(s) will also be removed`)}</p>
                 </div>
               )}
               <div className="flex gap-3 mt-4">
-                <button onClick={() => setConfirmDel(null)} className="flex-1 py-2.5 border-2 border-gray-300 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-100 transition">
-                  {T('取消', 'Cancel')}
-                </button>
-                <button onClick={execDelete} className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-bold hover:bg-red-700 transition">
-                  {T('🗑️ 確認刪除', '🗑️ Delete')}
-                </button>
+                <button onClick={() => setConfirmDel(null)} className="flex-1 py-2.5 border-2 border-gray-300 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-100 transition">{T('取消', 'Cancel')}</button>
+                <button onClick={execDelete} className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-bold hover:bg-red-700 transition">{T('🗑️ 確認刪除', '🗑️ Delete')}</button>
               </div>
             </div>
           </div>
         </div>
       )}
 
+      {/* ── 編輯持股關係 ── */}
       {editEdge && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditEdge(null)}>
           <div className="bg-white rounded-2xl shadow-2xl w-96 max-w-sm mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
@@ -259,8 +335,52 @@ export default function App() {
                   <span className="font-bold">{nn(ed.to)}</span>
                 </div>
               ) : null; })()}
-              <label className="text-xs font-bold text-gray-600 block mb-1">{T('持股比例 %', 'Ownership %')}</label>
-              <input type="number" className="w-full border-2 border-blue-300 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-blue-400 outline-none mb-4" value={editEdge.pct} onChange={e => setEditEdge(p => ({ ...p, pct: e.target.value }))} min="0.0001" max="100" step="0.0001" />
+
+              <div className="flex gap-1 mb-3">
+                <button onClick={() => setEditEdge(p => {
+                  if (p.mode === 'pct') return p;
+                  const sh = parseFloat(p.shares);
+                  const newPct = (p.totalShares && !isNaN(sh) && sh > 0) ? String((sh / p.totalShares) * 100) : p.pct;
+                  return { ...p, mode: 'pct', pct: newPct };
+                })} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${editEdge.mode === 'pct' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                  📊 {T('百分比 %', 'Percentage %')}
+                </button>
+                <button onClick={() => {
+                  if (!editEdge.totalShares) return flash(T('⚠️ 被投資方未設定總股數', '⚠️ No total shares set'));
+                  setEditEdge(p => {
+                    if (p.mode === 'shares') return p;
+                    const pct = parseFloat(p.pct);
+                    const newSh = (p.totalShares && !isNaN(pct) && pct > 0) ? String(pct / 100 * p.totalShares) : p.shares;
+                    return { ...p, mode: 'shares', shares: newSh };
+                  });
+                }} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${editEdge.mode === 'shares' ? 'bg-blue-600 text-white' : editEdge.totalShares ? 'bg-gray-100 text-gray-500 hover:bg-gray-200' : 'bg-gray-50 text-gray-300 cursor-not-allowed'}`}>
+                  🔢 {T('股數', 'Shares')}
+                </button>
+              </div>
+
+              {editEdge.mode === 'pct' ? (<>
+                <label className="text-xs font-bold text-gray-600 block mb-1">{T('持股比例 %', 'Ownership %')}</label>
+                <input type="number" className="w-full border-2 border-blue-300 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-blue-400 outline-none mb-4" value={editEdge.pct} onChange={e => setEditEdge(p => ({ ...p, pct: e.target.value }))} min="0.0001" max="100" step="any" />
+              </>) : (<>
+                {editEdge.totalShares && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 mb-2">
+                    <span className="text-xs text-blue-700 font-medium">📊 {T('總發行股數', 'Total Shares')}: <b>{fmtNum(editEdge.totalShares)}</b></span>
+                  </div>
+                )}
+                <label className="text-xs font-bold text-gray-600 block mb-1">{T('持有股數', 'Number of Shares')}</label>
+                <input type="number" className="w-full border-2 border-blue-300 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-blue-400 outline-none mb-2" value={editEdge.shares} onChange={e => setEditEdge(p => ({ ...p, shares: e.target.value }))} min="1" step="any" />
+                {(() => {
+                  const sh = parseFloat(editEdge.shares);
+                  const cp = (editEdge.totalShares && !isNaN(sh) && sh > 0) ? (sh / editEdge.totalShares * 100) : null;
+                  return cp !== null ? (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-2 mb-4">
+                      <span className="text-xs text-green-700 font-bold">≈ {cp.toFixed(4)}%</span>
+                      <span className="text-xs text-green-600 ml-1">({fmtNum(sh)} / {fmtNum(editEdge.totalShares)})</span>
+                    </div>
+                  ) : <div className="mb-4" />;
+                })()}
+              </>)}
+
               <div className="flex gap-3">
                 <button onClick={() => setEditEdge(null)} className="flex-1 py-2.5 border-2 border-gray-300 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-100 transition">{T('取消', 'Cancel')}</button>
                 <button onClick={saveEditEdge} className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition">{T('💾 儲存', '💾 Save')}</button>
@@ -270,6 +390,7 @@ export default function App() {
         </div>
       )}
 
+      {/* ── 編輯實體 ── */}
       {editNode && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditNode(null)}>
           <div className="bg-white rounded-2xl shadow-2xl w-96 max-w-sm mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
@@ -278,10 +399,18 @@ export default function App() {
               <label className="text-xs font-bold text-gray-600 block mb-1">{T('名稱', 'Name')}</label>
               <input className="w-full border-2 border-green-300 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-green-400 outline-none mb-3" value={editNode.name} onChange={e => setEditNode(p => ({ ...p, name: e.target.value }))} />
               <label className="text-xs font-bold text-gray-600 block mb-1">{T('類型', 'Type')}</label>
-              <select className="w-full border-2 border-green-300 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-green-400 outline-none mb-4" value={editNode.type} onChange={e => setEditNode(p => ({ ...p, type: e.target.value }))}>
+              <select className="w-full border-2 border-green-300 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-green-400 outline-none mb-3" value={editNode.type} onChange={e => setEditNode(p => ({ ...p, type: e.target.value, totalShares: e.target.value === 'person' ? '' : p.totalShares }))}>
                 <option value="company">{T('🏢 公司', '🏢 Company')}</option>
                 <option value="person">{T('👤 個人', '👤 Person')}</option>
               </select>
+              {editNode.type === 'company' && (<>
+                <label className="text-xs font-bold text-gray-600 block mb-1">{T('總發行股數（選填）', 'Total Issued Shares (optional)')}</label>
+                <input type="number" className="w-full border-2 border-green-300 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-green-400 outline-none mb-1" placeholder={T('例：10000000', 'e.g. 10000000')} value={editNode.totalShares} onChange={e => setEditNode(p => ({ ...p, totalShares: e.target.value }))} min="1" step="any" />
+                {editNode.totalShares && (
+                  <p className="text-xs text-gray-400 mb-3">= {fmtNum(parseFloat(editNode.totalShares) || 0)} {T('股', 'shares')}</p>
+                )}
+                {!editNode.totalShares && <div className="mb-3" />}
+              </>)}
               <div className="flex gap-3">
                 <button onClick={() => setEditNode(null)} className="flex-1 py-2.5 border-2 border-gray-300 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-100 transition">{T('取消', 'Cancel')}</button>
                 <button onClick={saveEditNode} className="flex-1 py-2.5 bg-green-600 text-white rounded-xl text-sm font-bold hover:bg-green-700 transition">{T('💾 儲存', '💾 Save')}</button>
@@ -291,6 +420,7 @@ export default function App() {
         </div>
       )}
 
+      {/* ── 頂部導航 ── */}
       <div className="bg-white border-b shadow-sm px-4 py-2.5 flex flex-wrap items-center gap-3 flex-shrink-0">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#2563eb" strokeWidth="2"><path d="M6 3v12"/><path d="M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M18 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M18 9v3a3 3 0 0 1-3 3H9"/></svg>
         <h1 className="text-lg font-bold text-gray-800">{T('多層股權穿透分析工具', 'Multi-Layer Ownership Analyzer')}</h1>
@@ -302,6 +432,7 @@ export default function App() {
       </div>
 
       <div className="flex-1 flex overflow-hidden">
+        {/* ── 左側面板 ── */}
         <div className="w-80 2xl:w-96 flex-shrink-0 bg-white border-r flex flex-col overflow-hidden">
           <div className="flex gap-1 p-2 bg-gray-50 border-b">
             {[['build', T('🏗️ 建構', '🏗️ Build')], ['manage', T('📋 管理', '📋 Manage')], ['analyze', T('🔍 分析', '🔍 Analyze')]].map(([k, label]) => (
@@ -310,18 +441,27 @@ export default function App() {
           </div>
 
           <div className="flex-1 overflow-y-auto p-2.5 space-y-3">
+            {/* ── 建構 ── */}
             {tab === 'build' && (<>
               <div className="border rounded-xl p-3 bg-white shadow-sm">
                 <h3 className="text-xs font-bold text-gray-700 mb-2">{T('➕ 新增實體', '➕ Add Entity')}</h3>
                 <input className="w-full border rounded-lg px-3 py-2 text-sm mb-2 focus:ring-1 focus:ring-blue-300 focus:border-blue-400 outline-none" placeholder={T('輸入名稱', 'Enter name')} value={nName} onChange={e => setNName(e.target.value)} onKeyDown={e => e.key === 'Enter' && addNode()} />
-                <div className="flex gap-2">
-                  <select className="flex-1 border rounded-lg px-2 py-2 text-sm" value={nType} onChange={e => setNType(e.target.value)}>
+                <div className="flex gap-2 mb-2">
+                  <select className="flex-1 border rounded-lg px-2 py-2 text-sm" value={nType} onChange={e => { setNType(e.target.value); if (e.target.value === 'person') setNTotalShares(''); }}>
                     <option value="company">{T('🏢 公司', '🏢 Company')}</option>
                     <option value="person">{T('👤 個人', '👤 Person')}</option>
                   </select>
-                  <button onClick={addNode} className="px-5 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition">{T('新增', 'Add')}</button>
                 </div>
+                {nType === 'company' && (
+                  <div className="mb-2">
+                    <label className="text-xs text-gray-500 font-medium">{T('總發行股數（選填）', 'Total Shares (optional):')}</label>
+                    <input type="number" className="w-full border rounded-lg px-3 py-2 text-sm mt-0.5 focus:ring-1 focus:ring-blue-300 outline-none" placeholder={T('例：10000000', 'e.g. 10000000')} value={nTotalShares} onChange={e => setNTotalShares(e.target.value)} min="1" step="any" />
+                    {nTotalShares && <p className="text-xs text-gray-400 mt-0.5">= {fmtNum(parseFloat(nTotalShares) || 0)} {T('股', 'shares')}</p>}
+                  </div>
+                )}
+                <button onClick={addNode} className="w-full py-2.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition">{T('＋ 新增實體', '＋ Add Entity')}</button>
               </div>
+
               <div className="border rounded-xl p-3 bg-white shadow-sm">
                 <h3 className="text-xs font-bold text-gray-700 mb-2">{T('🔗 新增持股關係', '🔗 Add Ownership')}</h3>
                 <label className="text-xs text-gray-500 font-medium">{T('股東（持有方）', 'Shareholder:')}</label>
@@ -330,16 +470,56 @@ export default function App() {
                   {nodes.map(n => <option key={n.id} value={n.id}>{n.type === 'person' ? '👤' : '🏢'} {n.name}</option>)}
                 </select>
                 <label className="text-xs text-gray-500 font-medium">{T('被投資方', 'Investee:')}</label>
-                <select className="w-full border rounded-lg px-2 py-2 text-sm mb-1.5" value={eTo} onChange={e => setETo(e.target.value)}>
+                <select className="w-full border rounded-lg px-2 py-2 text-sm mb-2" value={eTo} onChange={e => { setETo(e.target.value); setQuickTS(''); }}>
                   <option value="">{T('-- 選擇 --', '-- Select --')}</option>
-                  {nodes.filter(n => n.id !== eFrom).map(n => <option key={n.id} value={n.id}>{n.type === 'person' ? '👤' : '🏢'} {n.name}</option>)}
+                  {nodes.filter(n => n.id !== eFrom).map(n => <option key={n.id} value={n.id}>{n.type === 'person' ? '👤' : '🏢'} {n.name}{n.totalShares ? ` [${fmtShort(n.totalShares)}${T('股','')}]` : ''}</option>)}
                 </select>
-                <label className="text-xs text-gray-500 font-medium">{T('持股 %', 'Ownership %:')}</label>
-                <input className="w-full border rounded-lg px-3 py-2 text-sm mb-2 focus:ring-1 focus:ring-green-300 outline-none" type="number" placeholder="e.g. 60" min="0.0001" max="100" step="0.0001" value={ePct} onChange={e => setEPct(e.target.value)} onKeyDown={e => e.key === 'Enter' && addEdge()} />
+
+                {/* ── 輸入模式切換 ── */}
+                <div className="flex gap-1 mb-2">
+                  <button onClick={() => setInputMode('pct')} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${inputMode === 'pct' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                    📊 {T('百分比 %', 'Percentage %')}
+                  </button>
+                  <button onClick={() => setInputMode('shares')} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${inputMode === 'shares' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                    🔢 {T('股數', 'Shares')}
+                  </button>
+                </div>
+
+                {inputMode === 'pct' ? (<>
+                  <label className="text-xs text-gray-500 font-medium">{T('持股 %', 'Ownership %:')}</label>
+                  <input className="w-full border rounded-lg px-3 py-2 text-sm mb-2 focus:ring-1 focus:ring-green-300 outline-none" type="number" placeholder="e.g. 60" min="0.0001" max="100" step="any" value={ePct} onChange={e => setEPct(e.target.value)} onKeyDown={e => e.key === 'Enter' && addEdge()} />
+                </>) : (<>
+                  {/* 股數模式 */}
+                  {eTo && investeeNode?.totalShares && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 mb-1.5">
+                      <span className="text-xs text-blue-700 font-medium">📊 {T('總發行股數', 'Total Shares')}: <b>{fmtNum(investeeNode.totalShares)}</b></span>
+                    </div>
+                  )}
+                  {eTo && investeeNode && !investeeNode.totalShares && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-1.5">
+                      <p className="text-xs text-amber-700 font-medium mb-1.5">⚠️ {T('被投資方尚未設定總股數', 'Investee has no total shares')}</p>
+                      <div className="flex gap-1.5">
+                        <input className="flex-1 border border-amber-300 rounded-lg px-2 py-1.5 text-xs focus:ring-1 focus:ring-amber-400 outline-none" type="number" placeholder={T('輸入總股數', 'Total shares')} value={quickTS} onChange={e => setQuickTS(e.target.value)} onKeyDown={e => e.key === 'Enter' && doQuickSetTS()} min="1" step="any" />
+                        <button onClick={doQuickSetTS} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600 transition">{T('設定', 'Set')}</button>
+                      </div>
+                    </div>
+                  )}
+                  <label className="text-xs text-gray-500 font-medium">{T('持有股數', 'Number of Shares:')}</label>
+                  <input className="w-full border rounded-lg px-3 py-2 text-sm mb-1 focus:ring-1 focus:ring-green-300 outline-none" type="number" placeholder={T('例：500000', 'e.g. 500000')} min="1" step="any" value={eShares} onChange={e => setEShares(e.target.value)} onKeyDown={e => e.key === 'Enter' && addEdge()} />
+                  {computedPct !== null && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-2 mb-2">
+                      <span className="text-xs text-green-700 font-bold">≈ {computedPct.toFixed(4)}%</span>
+                      <span className="text-xs text-green-600 ml-1">({fmtNum(parseFloat(eShares))} / {fmtNum(investeeNode.totalShares)})</span>
+                    </div>
+                  )}
+                  {computedPct === null && <div className="mb-2" />}
+                </>)}
+
                 <button onClick={addEdge} className="w-full py-2.5 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700 transition">{T('＋ 新增持股關係', '＋ Add Ownership')}</button>
               </div>
             </>)}
 
+            {/* ── 管理 ── */}
             {tab === 'manage' && (<>
               <div className="border-2 border-blue-200 rounded-xl bg-white shadow-sm overflow-hidden">
                 <div className="bg-blue-50 px-3 py-2 border-b border-blue-200 flex items-center gap-2">
@@ -354,9 +534,12 @@ export default function App() {
                     {nodes.map(n => (
                       <div key={n.id} className="flex items-center gap-2 px-3 py-2.5 hover:bg-gray-50 transition">
                         <span className="text-base flex-shrink-0">{n.type === 'person' ? '👤' : '🏢'}</span>
-                        <span className="text-xs font-semibold flex-1 truncate text-gray-800">{n.name}</span>
-                        <button onClick={() => openEditNode(n)} className="flex-shrink-0 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg px-2.5 py-1.5 text-xs font-bold transition">✏️ {T('編輯', 'Edit')}</button>
-                        <button onClick={() => askDeleteNode(n.id)} className="flex-shrink-0 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg px-2.5 py-1.5 text-xs font-bold transition">🗑️ {T('刪除', 'Del')}</button>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs font-semibold text-gray-800 block truncate">{n.name}</span>
+                          {n.totalShares && <span className="text-xs text-gray-400">{T('總股數', 'Total')}: {fmtNum(n.totalShares)}</span>}
+                        </div>
+                        <button onClick={() => openEditNode(n)} className="flex-shrink-0 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg px-2.5 py-1.5 text-xs font-bold transition">✏️</button>
+                        <button onClick={() => askDeleteNode(n.id)} className="flex-shrink-0 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg px-2.5 py-1.5 text-xs font-bold transition">🗑️</button>
                       </div>
                     ))}
                   </div>
@@ -377,14 +560,15 @@ export default function App() {
                         <div className="flex items-start gap-2">
                           <div className="flex-1 min-w-0">
                             <div className="text-xs font-semibold text-gray-800 truncate">{nn(e.from)}</div>
-                            <div className="flex items-center gap-1 my-0.5">
-                              <span className="text-blue-600 font-black text-xs">↓ {e.pct}%</span>
+                            <div className="flex items-center gap-1 my-0.5 flex-wrap">
+                              <span className="text-blue-600 font-black text-xs">↓ {e.pct.toFixed(4)}%</span>
+                              {e.shares != null && <span className="text-gray-400 text-xs">({fmtNum(e.shares)} {T('股', 'shr')})</span>}
                             </div>
                             <div className="text-xs font-semibold text-gray-800 truncate">{nn(e.to)}</div>
                           </div>
                           <div className="flex flex-col gap-1.5 flex-shrink-0 pt-1">
-                            <button onClick={() => openEditEdge(e)} className="bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg px-2.5 py-1.5 text-xs font-bold transition whitespace-nowrap">✏️ {T('編輯', 'Edit')}</button>
-                            <button onClick={() => askDeleteEdge(e.id)} className="bg-red-100 hover:bg-red-200 text-red-700 rounded-lg px-2.5 py-1.5 text-xs font-bold transition whitespace-nowrap">🗑️ {T('刪除', 'Del')}</button>
+                            <button onClick={() => openEditEdge(e)} className="bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg px-2.5 py-1.5 text-xs font-bold transition">✏️</button>
+                            <button onClick={() => askDeleteEdge(e.id)} className="bg-red-100 hover:bg-red-200 text-red-700 rounded-lg px-2.5 py-1.5 text-xs font-bold transition">🗑️</button>
                           </div>
                         </div>
                       </div>
@@ -394,6 +578,7 @@ export default function App() {
               </div>
             </>)}
 
+            {/* ── 分析 ── */}
             {tab === 'analyze' && (<>
               <div className="border rounded-xl p-3 bg-white shadow-sm">
                 <h3 className="text-xs font-bold text-gray-700 mb-2">{T('🎯 分析目標', '🎯 Analysis Target')}</h3>
@@ -410,8 +595,8 @@ export default function App() {
               </div>
               <div className="border rounded-xl p-3 bg-white shadow-sm">
                 <h3 className="text-xs font-bold text-gray-700 mb-2">{T('⚠️ UBO 最終受益人', '⚠️ Ultimate Beneficial Owner')}</h3>
-                {ubos.length > 0 ? ubos.map((u, i) => (
-                  <div key={i} className="bg-red-50 border border-red-200 rounded-lg p-2.5 mb-2">
+                {ubos.length > 0 ? ubos.map((u, idx) => (
+                  <div key={idx} className="bg-red-50 border border-red-200 rounded-lg p-2.5 mb-2">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-bold truncate">{u.node.type === 'person' ? '👤' : '🏢'} {u.node.name}</span>
                       <span className="text-base font-black text-red-600 flex-shrink-0">{u.eff.toFixed(4)}%</span>
@@ -429,8 +614,8 @@ export default function App() {
                       [ubos.length, 'UBO', 'bg-red-50', 'text-red-600'],
                       [roots.length, T('最終股東', 'Ultimate SH'), 'bg-green-50', 'text-green-600'],
                       [Math.max(0, ...analysis.flatMap(r => r.paths.map(p => p.edges.length))), T('最深層數', 'Max Depth'), 'bg-purple-50', 'text-purple-600'],
-                    ].map(([v, l, bg, tc], i) => (
-                      <div key={i} className={`${bg} rounded-lg p-2`}>
+                    ].map(([v, l, bg, tc], idx) => (
+                      <div key={idx} className={`${bg} rounded-lg p-2`}>
                         <div className={`text-xl font-black ${tc}`}>{v}</div>
                         <div className="text-xs text-gray-500">{l}</div>
                       </div>
@@ -442,6 +627,7 @@ export default function App() {
           </div>
         </div>
 
+        {/* ── 主區域 ── */}
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="flex-1 overflow-auto relative bg-gray-50" style={{ backgroundImage: 'radial-gradient(#e5e7eb 1px, transparent 1px)', backgroundSize: '20px 20px' }}>
             <div className="sticky top-2 left-2 z-10 inline-flex items-center gap-1 bg-white/90 backdrop-blur rounded-lg shadow border px-2 py-1 ml-2 mt-2">
@@ -463,12 +649,22 @@ export default function App() {
                     if (!fp || !tp) return null;
                     const x1 = fp.x + NW / 2, y1 = fp.y + NH, x2 = tp.x + NW / 2, y2 = tp.y;
                     const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-                    const lbl = `${e.pct}%`, lw = Math.max(50, lbl.length * 7.5 + 14);
+                    const hasS = e.shares != null;
+                    const lbl = `${e.pct.toFixed(4)}%`;
+                    const slbl = hasS ? `(${fmtShort(e.shares)}${T('股',' shr')})` : '';
+                    const tw = Math.max(lbl.length, slbl.length) * 6.5 + 18;
+                    const lw = Math.max(56, tw);
+                    const lh = hasS ? 36 : 22;
                     return (
                       <g key={e.id}>
                         <path d={curve(x1, y1, x2, y2)} fill="none" stroke="#94a3b8" strokeWidth="1.5" markerEnd="url(#arw)" />
-                        <rect x={mx - lw / 2} y={my - 11} width={lw} height="22" rx="11" fill="white" stroke="#cbd5e1" strokeWidth="1" />
-                        <text x={mx} y={my + 4} textAnchor="middle" fontSize="10" fontWeight="700" fill="#334155">{lbl}</text>
+                        <rect x={mx - lw / 2} y={my - lh / 2} width={lw} height={lh} rx={lh / 2} fill="white" stroke="#cbd5e1" strokeWidth="1" />
+                        {hasS ? (<>
+                          <text x={mx} y={my - 2} textAnchor="middle" fontSize="10" fontWeight="700" fill="#334155">{lbl}</text>
+                          <text x={mx} y={my + 11} textAnchor="middle" fontSize="8" fontWeight="500" fill="#64748b">{slbl}</text>
+                        </>) : (
+                          <text x={mx} y={my + 4} textAnchor="middle" fontSize="10" fontWeight="700" fill="#334155">{lbl}</text>
+                        )}
                       </g>
                     );
                   })}
@@ -505,6 +701,7 @@ export default function App() {
             )}
           </div>
 
+          {/* ── 穿透明細表 ── */}
           {tab === 'analyze' && target && analysis.length > 0 && (
             <div className="border-t bg-white overflow-auto flex-shrink-0" style={{ maxHeight: '38vh' }}>
               <div className="p-3 pb-1 flex items-center gap-2 border-b bg-gray-50 sticky top-0 z-10">
@@ -525,12 +722,12 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {analysis.map((r, i) => {
+                  {analysis.map((r, idx) => {
                     const isRt = !edges.some(e => e.to === r.node.id);
                     const isU = isRt && r.eff >= threshold;
                     const isE = expRows[r.node.id];
                     return (
-                      <React.Fragment key={i}>
+                      <React.Fragment key={idx}>
                         <tr className={`border-b cursor-pointer transition-colors ${isU ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-gray-50'}`} onClick={() => togRow(r.node.id)}>
                           <td className="py-1.5 px-3 text-gray-400 text-xs">{r.paths.length > 0 ? (isE ? '▼' : '▶') : ''}</td>
                           <td className="py-1.5 px-3 font-medium text-xs">{r.node.type === 'person' ? '👤' : '🏢'} {r.node.name}</td>
@@ -540,7 +737,7 @@ export default function App() {
                           <td className="py-1.5 px-3 text-center">{isU && <span className="bg-red-100 text-red-600 text-xs px-2 py-0.5 rounded-full font-bold">⚠ UBO</span>}</td>
                         </tr>
                         {isE && r.paths.map((p, j) => (
-                          <tr key={`${i}-${j}`} className="bg-blue-50/50 border-b">
+                          <tr key={`${idx}-${j}`} className="bg-blue-50/50 border-b">
                             <td></td>
                             <td colSpan={4} className="py-1.5 px-3">
                               <div className="flex items-center gap-1 flex-wrap text-xs">
@@ -548,7 +745,7 @@ export default function App() {
                                 <span className="font-semibold text-gray-700">{r.node.name}</span>
                                 {p.edges.map((pe, k) => (
                                   <React.Fragment key={k}>
-                                    <span className="text-blue-500 font-bold">—[{pe.pct}%]→</span>
+                                    <span className="text-blue-500 font-bold">—[{pe.pct.toFixed(4)}%{pe.shares != null ? ` / ${fmtNum(pe.shares)}${T('股',' shr')}` : ''}]→</span>
                                     <span className="font-semibold text-gray-700">{nn(pe.to)}</span>
                                   </React.Fragment>
                                 ))}
@@ -567,8 +764,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="bg-white border-t px-4 py-1.5 text-center text-xs text-gray-400 flex-shrink-0">{T('多層 DAG 穿透分析 ｜ 支持多父節點 ｜ 所有路徑加總 ｜ 點擊節點分析', 'Multi-Layer DAG ｜ Multiple Parents ｜ Sum All Paths ｜ Click Node to Analyze')}</div>
+      <div className="bg-white border-t px-4 py-1.5 text-center text-xs text-gray-400 flex-shrink-0">{T('多層 DAG 穿透分析 ｜ 支援百分比 / 股數輸入 ｜ 所有路徑加總 ｜ 點擊節點分析', 'Multi-Layer DAG ｜ Supports % / Shares Input ｜ Sum All Paths ｜ Click Node to Analyze')}</div>
     </div>
   );
 }
-
