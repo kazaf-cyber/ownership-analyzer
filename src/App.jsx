@@ -169,15 +169,15 @@ export default function App() {
 
   const loadDemo = () => {
     setNodes([
-      { id: 'xsp', name: '徐胜平 (Xu Shengping)', type: 'person' },
-      { id: 'a', name: '上海迪赛诺维生素有限公司', type: 'company' },
-      { id: 'b', name: '上海迪赛诺实业发展有限公司', type: 'company' },
-      { id: 'c', name: '宜春赛诺嘉扬企业管理中心', type: 'company' },
-      { id: 'd', name: '上海诺信实业有限公司', type: 'company' },
-      { id: 'e', name: '上海迪赛诺医药集团股份有限公司', type: 'company' },
-      { id: 'f', name: 'MEDITAB HOLDINGS LIMITED', type: 'company' },
-      { id: 'g', name: '上海迪赛诺药业股份有限公司', type: 'company' },
-      { id: 'h', name: '上海迪赛诺化学制药有限公司', type: 'company' },
+      { id: 'xsp', name: 'Chan Tai Man', type: 'person' },
+      { id: 'a', name: 'A', type: 'company' },
+      { id: 'b', name: 'B', type: 'company' },
+      { id: 'c', name: 'C', type: 'company' },
+      { id: 'd', name: 'D', type: 'company' },
+      { id: 'e', name: 'E', type: 'company' },
+      { id: 'f', name: 'F', type: 'company' },
+      { id: 'g', name: 'G', type: 'company' },
+      { id: 'h', name: 'H', type: 'company' },
     ]);
     setEdges([
       { id: 'e1', from: 'xsp', to: 'a', pct: 100 },
