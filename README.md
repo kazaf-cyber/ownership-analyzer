@@ -1,7 +1,5 @@
-# ownership-analyzer
-# 🔍 多層股權穿透分析工具
-
-Multi-Layer Ownership Analyzer — 基於 DAG 結構的最終受益人 (UBO) 分析工具。
+# CDD investigation platform 
+# 🔍 CDD 盡職調查分析平台
 
 ## 功能特色
 
