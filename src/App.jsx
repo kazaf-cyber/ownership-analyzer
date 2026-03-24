@@ -1,770 +1,1057 @@
-import React, { useState, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { AlertTriangle, Shield, ShieldAlert, ShieldCheck, Users, Building2, User, Plus, Trash2, ChevronDown, ChevronRight, Eye, EyeOff, FileText, Clock, Search, AlertCircle, Flag, Globe, Briefcase, Scale, Star, Download, History, X, Check, Info, Layers, Link2, Crown, Ban, Landmark, Languages, GitBranch, PanelLeftClose, PanelLeftOpen, Maximize2, Minimize2, MousePointer, Hash, Percent, ShieldOff, Lock } from 'lucide-react';
 
-const NW = 220, NH = 62, GX = 50, GY = 95, PAD = 60;
-
-function calcEff(from, to, edges, memo = {}, d = 0) {
-  if (d > 30) return 0;
-  if (from === to) return 1;
-  const k = from + '→' + to;
-  if (k in memo) return memo[k];
-  let s = 0;
-  for (const e of edges) if (e.from === from) s += (e.pct / 100) * calcEff(e.to, to, edges, memo, d + 1);
-  return (memo[k] = s);
-}
-
-function getPaths(from, to, edges, vis = new Set()) {
-  if (from === to) return [[]];
-  if (vis.has(from)) return [];
-  vis.add(from);
-  const res = [];
-  for (const e of edges)
-    if (e.from === from)
-      for (const sub of getPaths(e.to, to, edges, new Set(vis))) {
-        res.push([e, ...sub]);
-        if (res.length >= 200) return res;
-      }
-  return res;
-}
-
-function buildLayout(nodes, edges) {
-  if (!nodes.length) return { pos: {}, w: 500, h: 200 };
-  const out = {}, deg = {};
-  nodes.forEach(n => { out[n.id] = []; deg[n.id] = 0; });
-  edges.forEach(e => { if (out[e.from]) out[e.from].push(e.to); if (deg[e.to] !== undefined) deg[e.to]++; });
-  const lay = {}, q = [], rem = { ...deg };
-  nodes.forEach(n => { if (!rem[n.id]) { q.push(n.id); lay[n.id] = 0; } });
-  const done = new Set(); let sf = 0;
-  while (q.length && sf++ < 9999) {
-    const c = q.shift(); if (done.has(c)) continue; done.add(c);
-    for (const ch of out[c]) { lay[ch] = Math.max(lay[ch] || 0, (lay[c] || 0) + 1); if (--rem[ch] <= 0 && !done.has(ch)) q.push(ch); }
+const i18n = {
+  en: {
+    appTitle: 'CDD Analysis Platform', appSubtitle: 'Customer Due Diligence • UBO Identification • Risk Assessment',
+    workspace: 'Workspace', uboAnalysis: 'UBO Analysis', warnings: 'Warnings', auditTrail: 'Audit Trail', report: 'Report',
+    entitiesPanel: 'Entities', relationshipsPanel: 'Relationships',
+    addEntity: 'Add Entity', editEntity: 'Edit Entity', search: 'Search entities...',
+    name: 'Name', type: 'Type', company: 'Company', person: 'Individual',
+    jurisdiction: 'Jurisdiction / Nationality', subtype: 'Entity Subtype',
+    pepStatus: 'PEP Status', sanctions: 'Sanctions Screening', adverseMedia: 'Adverse Media',
+    industry: 'Industry', sof: 'Source of Funds', sofDetail: 'SOF Detail',
+    sow: 'Source of Wealth', sowDetail: 'SOW Detail', incorporationDate: 'Incorporation Date',
+    lastReviewDate: 'Last Review Date', regulated: 'Regulated Entity (holds licence)',
+    notes: 'Notes', save: 'Save', cancel: 'Cancel', select: '— Select —',
+    addRelationship: 'Add Relationship', from: 'From (Shareholder/Controller)',
+    to: 'To (Company/Entity)', ownershipPct: 'Ownership %', controlTypes: 'Control Types',
+    nomineeArrangement: 'Nominee arrangement', add: 'Add',
+    crr: 'Comprehensive Risk Rating (CRR)', score: 'Score', reviewCycle: 'Review Cycle',
+    ddLevel: 'DD Level', edd: 'EDD Required', cdd: 'Standard CDD', sdd: 'SDD Eligible',
+    highRisk: 'High', mediumRisk: 'Medium', lowRisk: 'Low',
+    uboThreshold: 'UBO threshold: ≥25% effective ownership OR significant control.',
+    effectiveOwnership: 'effective', depth: 'Depth', layers: 'layers',
+    control: 'Control', via: 'via', viaNominee: 'VIA NOMINEE',
+    noEntities: 'No entities yet. Click "Add Entity" to begin.',
+    noRelationships: 'No relationships yet. Add from the Relationships tab.',
+    noUBOs: 'No UBOs identified. Add entities and relationships.',
+    noWarnings: 'No warnings detected.', noAudit: 'No audit entries yet.',
+    criticalSanctions: 'CRITICAL: Sanctions Hit', escalateMLRO: 'Escalate to MLRO. Consider STR.',
+    bearerShareWarning: 'Bearer shares permitted — verify none issued.',
+    shellCompanyWarning: 'Incorporated < 1 year — potential shell company.',
+    reviewOverdue: 'CDD review overdue!',
+    due: 'Due', annual: 'Annual (12m)', biennial: 'Biennial (24m)', triennial: 'Triennial (36m)',
+    shareholders: 'Shareholders / Controllers', identifiedUBOs: 'Identified UBOs',
+    regulatedNote: 'Regulated Entity — SDD eligible on look-through',
+    reportTitle: 'CDD Analysis Report', generated: 'Generated',
+    totalEntities: 'Total Entities', highRiskCount: 'High Risk',
+    ubosIdentified: 'UBOs Identified', warningsCount: 'Warnings',
+    sanctionsAlert: 'SANCTIONS ALERT', pepIdentified: 'PEP Identified',
+    uboSummary: 'UBO Summary', complexityWarnings: 'Complexity & Red Flag Warnings',
+    entityAdded: 'Entity Added', entityRemoved: 'Entity Removed', entityUpdated: 'Entity Updated',
+    relationshipAdded: 'Relationship Added', relationshipRemoved: 'Relationship Removed',
+    added: 'Added', removed: 'Removed', updated: 'Updated',
+    allChangesLogged: 'All changes logged for compliance audit.',
+    dagTitle: 'Ownership & Control Structure (DAG)',
+    dagDescription: 'Real-time DAG visualization. Click nodes to view details.',
+    dagEmpty: 'Add entities to visualize the structure.',
+    complexStructure: 'Complex structure', offshoreJurisdictions: 'offshore jurisdictions — complex cross-border',
+    highRiskJurisdiction: 'High-risk jurisdiction', offshoreJurisdiction: 'Offshore jurisdiction',
+    pep: 'PEP', sanctionsConfirmed: 'Sanctions confirmed hit', sanctionsPotential: 'Sanctions potential hit',
+    highAdverseMedia: 'High adverse media', medAdverseMedia: 'Medium adverse media', lowAdverseMedia: 'Low adverse media',
+    highRiskIndustry: 'High-risk industry', nomineeStructure: 'Nominee structure',
+    trustFoundation: 'Trust/Foundation structure', bearerShareJurisdiction: 'Bearer share jurisdiction',
+    shellRisk: 'Company < 1yr (shell risk)', regulatedReduction: 'Regulated entity (risk ↓)',
+    ownershipChainDepth: 'Chain depth',
+    assessCommercial: 'layers — assess rationale',
+    blockTransaction: 'SANCTIONS HIT — BLOCK TRANSACTION',
+    escalateReview: 'Potential sanctions — escalate',
+    flags: 'Flags', nominee: 'NOMINEE', sanctioned: 'SANCTIONED',
+    zoomIn: '+', zoomOut: '−', resetView: 'Reset', fitView: 'Fit',
+    legend: 'Legend', companyNode: 'Company', personNode: 'Individual',
+    highRiskNode: 'High Risk', nomineeLink: 'Nominee',
+    collapsePanel: 'Collapse', expandPanel: 'Expand',
+    clickNodeHint: 'Click a node in the DAG or list to view details',
+    entityDetail: 'Entity Detail', close: 'Close',
+    totalShares: 'Total Issued Shares', sharesHeld: 'Shares Held',
+    inputMode: 'Input Mode', byPercentage: 'By Percentage', byShares: 'By Shares',
+    autoCalc: 'Auto-calculated', shares: 'shares',
+    personCannotBeOwned: 'Individuals cannot be owned/held by another entity.',
+    onlyCompaniesAsTarget: 'Only companies can be selected as target.',
+    noCompanyTarget: 'Please add a company entity first to set as target.',
+    shareInfo: 'Enter total issued shares so the system can auto-calculate ownership %.',
+    autoHighRiskTrust: '⚠️ Trust/Foundation — AUTO HIGH RISK, mandatory annual review',
+    autoHighRiskNominee: '⚠️ Nominee Shareholder — AUTO HIGH RISK, mandatory annual review',
+    forcedHighRisk: 'Forced High Risk',
+    forcedAnnualReview: 'Mandatory Annual Review',
+    trustNomineePolicy: 'Per policy: Trusts, Foundations & Nominee Shareholders are automatically classified as High Risk with mandatory Annual (12m) EDD review cycle.',
+    lockedHighRisk: 'LOCKED: High Risk (Policy)',
+    autoTag: 'AUTO',
+  },
+  zh: {
+    appTitle: 'CDD 盡職調查分析平台', appSubtitle: '客戶盡職調查 • UBO 識別 • 風險評估',
+    workspace: '工作區', uboAnalysis: 'UBO 分析', warnings: '警示', auditTrail: '審計軌跡', report: '報告',
+    entitiesPanel: '實體', relationshipsPanel: '關係',
+    addEntity: '新增實體', editEntity: '編輯實體', search: '搜尋...',
+    name: '名稱', type: '類型', company: '公司', person: '個人',
+    jurisdiction: '管轄區/國籍', subtype: '子類型',
+    pepStatus: 'PEP 狀態', sanctions: '制裁篩查', adverseMedia: '負面新聞',
+    industry: '行業', sof: '資金來源', sofDetail: '資金來源詳情',
+    sow: '財富來源', sowDetail: '財富來源詳情', incorporationDate: '成立日期',
+    lastReviewDate: '上次審查日期', regulated: '受監管實體（持牌照）',
+    notes: '備註', save: '儲存', cancel: '取消', select: '— 請選擇 —',
+    addRelationship: '新增關係', from: '從（股東/控制人）',
+    to: '至（被持有公司）', ownershipPct: '持股 %', controlTypes: '控制類型',
+    nomineeArrangement: '代名人安排', add: '新增',
+    crr: '綜合風險評級 (CRR)', score: '分數', reviewCycle: '審查週期',
+    ddLevel: '盡調等級', edd: '加強盡調 (EDD)', cdd: '標準盡調 (CDD)', sdd: '簡化盡調 (SDD)',
+    highRisk: '高風險', mediumRisk: '中風險', lowRisk: '低風險',
+    uboThreshold: 'UBO 門檻：≥25% 有效持股或重大控制權。',
+    effectiveOwnership: '有效持股', depth: '深度', layers: '層',
+    control: '控制', via: '透過', viaNominee: '透過代名人',
+    noEntities: '尚未新增實體。點擊「新增實體」開始。',
+    noRelationships: '尚未新增關係。請在「關係」面板中新增。',
+    noUBOs: '未識別到 UBO。請新增實體和關係。',
+    noWarnings: '未偵測到警示。', noAudit: '尚無審計記錄。',
+    criticalSanctions: '嚴重：制裁命中', escalateMLRO: '立即上報 MLRO。考慮提交 STR。',
+    bearerShareWarning: '允許不記名股份——請確認未發行。',
+    shellCompanyWarning: '成立不到 1 年——潛在空殼公司。',
+    reviewOverdue: 'CDD 審查已逾期！',
+    due: '到期', annual: '每年（12月）', biennial: '兩年（24月）', triennial: '三年（36月）',
+    shareholders: '股東/控制人', identifiedUBOs: '已識別 UBO',
+    regulatedNote: '受監管實體——可簡化盡調',
+    reportTitle: 'CDD 分析報告', generated: '生成日期',
+    totalEntities: '實體總數', highRiskCount: '高風險',
+    ubosIdentified: '已識別 UBO', warningsCount: '警示',
+    sanctionsAlert: '制裁警報', pepIdentified: '已識別 PEP',
+    uboSummary: 'UBO 摘要', complexityWarnings: '複雜性與紅旗警示',
+    entityAdded: '新增實體', entityRemoved: '刪除實體', entityUpdated: '更新實體',
+    relationshipAdded: '新增關係', relationshipRemoved: '刪除關係',
+    added: '已新增', removed: '已刪除', updated: '已更新',
+    allChangesLogged: '所有變更均記錄以供審計。',
+    dagTitle: '持股與控制架構圖（DAG）',
+    dagDescription: '即時 DAG 視覺化。點擊節點查看詳情。',
+    dagEmpty: '新增實體以視覺化架構。',
+    complexStructure: '複雜架構', offshoreJurisdictions: '個離岸管轄區——跨境架構',
+    highRiskJurisdiction: '高風險管轄區', offshoreJurisdiction: '離岸管轄區',
+    pep: 'PEP', sanctionsConfirmed: '制裁確認命中', sanctionsPotential: '制裁潛在命中',
+    highAdverseMedia: '高度負面新聞', medAdverseMedia: '中度負面新聞', lowAdverseMedia: '低度負面新聞',
+    highRiskIndustry: '高風險行業', nomineeStructure: '代名人架構',
+    trustFoundation: '信託/基金會架構', bearerShareJurisdiction: '不記名股份管轄區',
+    shellRisk: '成立不足1年（空殼風險）', regulatedReduction: '受監管實體（風險↓）',
+    ownershipChainDepth: '持股鏈深度',
+    assessCommercial: '層——需評估商業合理性',
+    blockTransaction: '制裁命中——阻止交易',
+    escalateReview: '潛在制裁——上報審查',
+    flags: '風險標記', nominee: '代名人', sanctioned: '已制裁',
+    zoomIn: '+', zoomOut: '−', resetView: '重置', fitView: '適配',
+    legend: '圖例', companyNode: '公司', personNode: '個人',
+    highRiskNode: '高風險', nomineeLink: '代名人',
+    collapsePanel: '收合', expandPanel: '展開',
+    clickNodeHint: '點擊 DAG 節點或列表查看詳情',
+    entityDetail: '實體詳情', close: '關閉',
+    totalShares: '已發行總股數', sharesHeld: '持有股數',
+    inputMode: '輸入方式', byPercentage: '按百分比', byShares: '按股數',
+    autoCalc: '自動計算', shares: '股',
+    personCannotBeOwned: '個人不能被其他實體持有。',
+    onlyCompaniesAsTarget: '只能選擇公司作為被持有目標。',
+    noCompanyTarget: '請先新增一個公司實體作為被持有目標。',
+    shareInfo: '填寫公司已發行總股數，系統將自動計算持股百分比。',
+    autoHighRiskTrust: '⚠️ 信託/基金會——自動歸為高風險，強制每年審查',
+    autoHighRiskNominee: '⚠️ 代名人股東——自動歸為高風險，強制每年審查',
+    forcedHighRisk: '強制高風險',
+    forcedAnnualReview: '強制每年審查',
+    trustNomineePolicy: '根據政策：信託、基金會及代名人股東自動歸為高風險，並強制執行每年（12個月）EDD 審查週期。',
+    lockedHighRisk: '鎖定：高風險（政策）',
+    autoTag: '自動',
   }
-  nodes.forEach(n => { if (lay[n.id] == null) lay[n.id] = 0; });
-  const grp = {}; let mxL = 0;
-  nodes.forEach(n => { const l = lay[n.id]; (grp[l] = grp[l] || []).push(n.id); mxL = Math.max(mxL, l); });
-  let mxW = 0;
-  for (let l = 0; l <= mxL; l++) { const g = grp[l] || []; mxW = Math.max(mxW, g.length * NW + Math.max(0, g.length - 1) * GX); }
-  const pos = {};
-  for (let l = 0; l <= mxL; l++) {
-    const ids = grp[l] || [], rw = ids.length * NW + Math.max(0, ids.length - 1) * GX, sx = (mxW - rw) / 2 + PAD;
-    ids.forEach((id, i) => { pos[id] = { x: sx + i * (NW + GX), y: PAD + l * (NH + GY) }; });
+};
+
+const FATF_HIGH_RISK = ['Iran','DPRK','Myanmar','Syria','Yemen','Afghanistan','Albania','Barbados','Burkina Faso','Cambodia','Cayman Islands','Democratic Republic of Congo','Gibraltar','Haiti','Jamaica','Jordan','Mali','Mozambique','Nigeria','Pakistan','Panama','Philippines','Senegal','South Africa','South Sudan','Tanzania','Trinidad and Tobago','Türkiye','Uganda','Vietnam'];
+const OFFSHORE_JURISDICTIONS = ['BVI','Cayman Islands','Panama','Bermuda','Jersey','Guernsey','Isle of Man','Liechtenstein','Marshall Islands','Seychelles','Mauritius','Samoa','Vanuatu','Bahamas','Curaçao','Luxembourg','Cyprus','Malta','Hong Kong','Singapore','Labuan'];
+const BEARER_SHARE_JURISDICTIONS = ['Panama','Marshall Islands','Liberia','Antigua and Barbuda','Dominica','St. Kitts and Nevis','St. Vincent and the Grenadines'];
+const HIGH_RISK_INDUSTRIES = ['Gambling & Casinos','Virtual Assets / Crypto','Arms & Defence','Precious Metals & Stones','Money Services Business','Real Estate','Art & Antiquities','Tobacco','Adult Entertainment','Shell Company Services','Trust & Company Services','Non-Profit / Charity'];
+const PEP_TYPES = ['None','Foreign PEP','Domestic PEP','International Org PEP','RCA (Relative/Close Associate)'];
+const SANCTION_STATUS = ['Not Screened','No Hit','Potential Hit','Confirmed Hit'];
+const ADVERSE_MEDIA_STATUS = ['Not Checked','No Findings','Findings - Low','Findings - Medium','Findings - High'];
+const CONTROL_TYPES = ['Ownership','Voting Rights','Board Appointment','Veto Power','Contractual Control','Trust Beneficiary','Nominee Arrangement','Other'];
+const SOF_OPTIONS = ['Employment Income','Business Profits','Investment Returns','Inheritance','Sale of Property','Gift/Donation','Pension/Retirement','Government Funds','Other'];
+const ENTITY_SUBTYPES_COMPANY = ['Standard Company','Trust','Foundation','Fund','SPV','Partnership','Government Entity','Regulated Entity'];
+const ENTITY_SUBTYPES_PERSON = ['Individual','Nominee Shareholder','Sole Proprietorship'];
+const FORCED_HIGH_RISK_SUBTYPES = ['Trust', 'Foundation', 'Nominee Shareholder'];
+const ALL_JURISDICTIONS = ['Afghanistan','Albania','Antigua and Barbuda','Australia','Austria','Bahamas','Barbados','Belgium','Bermuda','Brazil','BVI','Burkina Faso','Cambodia','Canada','Cayman Islands','China','Curaçao','Cyprus','Czech Republic','Democratic Republic of Congo','Denmark','Dominica','DPRK','Estonia','Finland','France','Germany','Gibraltar','Greece','Guernsey','Haiti','Hong Kong','Hungary','Iceland','India','Indonesia','Iran','Ireland','Isle of Man','Israel','Italy','Jamaica','Japan','Jersey','Jordan','Kenya','Labuan','Latvia','Lebanon','Liberia','Liechtenstein','Lithuania','Luxembourg','Malaysia','Mali','Malta','Marshall Islands','Mauritius','Mexico','Monaco','Mozambique','Myanmar','Netherlands','New Zealand','Nigeria','Norway','Pakistan','Panama','Philippines','Poland','Portugal','Romania','Russia','Samoa','Saudi Arabia','Senegal','Seychelles','Singapore','Slovakia','Slovenia','South Africa','South Korea','South Sudan','Spain','Sri Lanka','St. Kitts and Nevis','St. Vincent and the Grenadines','Sweden','Switzerland','Syria','Taiwan','Tanzania','Thailand','Trinidad and Tobago','Türkiye','UAE','UK','Ukraine','USA','Vanuatu','Vietnam','Yemen'].sort();
+
+const getJurisdictionRisk = (j) => FATF_HIGH_RISK.includes(j) ? 'High' : OFFSHORE_JURISDICTIONS.includes(j) ? 'Medium' : 'Low';
+const isOffshore = (j) => OFFSHORE_JURISDICTIONS.includes(j);
+const isBearerShareRisk = (j) => BEARER_SHARE_JURISDICTIONS.includes(j);
+const isForcedHighRisk = (entity) => FORCED_HIGH_RISK_SUBTYPES.includes(entity.subtype);
+
+function calcCRR(entity) {
+  let score = 0; const flags = [];
+  const forced = isForcedHighRisk(entity);
+  const jr = getJurisdictionRisk(entity.jurisdiction);
+  if (jr === 'High') { score += 30; flags.push('highRiskJurisdiction'); }
+  else if (jr === 'Medium') { score += 15; flags.push('offshoreJurisdiction'); }
+  if (entity.pepType && entity.pepType !== 'None') { score += 25; flags.push('pep'); }
+  if (entity.sanctionStatus === 'Confirmed Hit') { score += 50; flags.push('sanctionsConfirmed'); }
+  else if (entity.sanctionStatus === 'Potential Hit') { score += 20; flags.push('sanctionsPotential'); }
+  if (entity.adverseMedia === 'Findings - High') { score += 25; flags.push('highAdverseMedia'); }
+  else if (entity.adverseMedia === 'Findings - Medium') { score += 15; flags.push('medAdverseMedia'); }
+  else if (entity.adverseMedia === 'Findings - Low') { score += 5; flags.push('lowAdverseMedia'); }
+  if (entity.industry && HIGH_RISK_INDUSTRIES.includes(entity.industry)) { score += 15; flags.push('highRiskIndustry'); }
+  if (entity.subtype === 'Nominee Shareholder') { score += 15; flags.push('nomineeStructure'); }
+  if (entity.subtype === 'Trust' || entity.subtype === 'Foundation') { score += 10; flags.push('trustFoundation'); }
+  if (isBearerShareRisk(entity.jurisdiction)) { score += 15; flags.push('bearerShareJurisdiction'); }
+  if (entity.type === 'company' && entity.incorporationDate) {
+    const age = (new Date() - new Date(entity.incorporationDate)) / (365.25 * 24 * 60 * 60 * 1000);
+    if (age < 1) { score += 10; flags.push('shellRisk'); }
   }
-  return { pos, w: Math.max(mxW + PAD * 2, 500), h: Math.max(PAD * 2 + (mxL + 1) * NH + mxL * GY, 250) };
+  if (entity.isRegulated) { score -= 15; flags.push('regulatedReduction'); }
+
+  // ★ POLICY: Trust, Foundation, Nominee Shareholder → forced High Risk, annual EDD
+  if (forced) {
+    score = Math.max(score, 50);
+    if (entity.subtype === 'Nominee Shareholder') { flags.push('autoHighRiskNominee'); }
+    else { flags.push('autoHighRiskTrust'); }
+  }
+
+  return {
+    score: Math.max(0, Math.min(100, score)),
+    level: score >= 50 ? 'High' : score >= 25 ? 'Medium' : 'Low',
+    flags,
+    forced,
+  };
 }
 
-function wouldCycle(from, to, edges) {
-  const vis = new Set(), q = [to];
-  while (q.length) { const c = q.shift(); if (c === from) return true; if (vis.has(c)) continue; vis.add(c); for (const e of edges) if (e.from === c) q.push(e.to); }
-  return false;
-}
+const riskBadge = (level, t) => {
+  const label = level === 'High' ? t.highRisk : level === 'Medium' ? t.mediumRisk : t.lowRisk;
+  const c = level === 'High' ? 'bg-red-100 text-red-800 border-red-300' : level === 'Medium' ? 'bg-yellow-100 text-yellow-800 border-yellow-300' : 'bg-green-100 text-green-800 border-green-300';
+  return <span className={`px-1.5 py-0.5 rounded-full text-xs font-semibold border ${c}`}>{label}</span>;
+};
 
-function fmtNum(n) { return n == null ? '' : Number(n).toLocaleString(); }
-function fmtShort(n) {
-  if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
-  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
-  if (n >= 1e4) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
-  return fmtNum(n);
-}
+const defaultEntity = () => ({
+  id: '', name: '', type: 'company', jurisdiction: 'Hong Kong', subtype: 'Standard Company',
+  pepType: 'None', sanctionStatus: 'Not Screened', adverseMedia: 'Not Checked',
+  industry: '', controlTypes: ['Ownership'], isRegulated: false,
+  incorporationDate: '', lastReviewDate: '', sof: '', sow: '', sofDetail: '', sowDetail: '', notes: '',
+  totalShares: '',
+});
 
-export default function App() {
-  const uid = useRef(1);
-  const gid = (p) => `${p}${uid.current++}`;
+let auditIdCounter = 1;
 
-  const [nodes, setNodes] = useState([]);
-  const [edges, setEdges] = useState([]);
-  const [tab, setTab] = useState('build');
-  const [lang, setLang] = useState('zh');
-
-  const [nName, setNName] = useState('');
-  const [nType, setNType] = useState('company');
-  const [nTotalShares, setNTotalShares] = useState('');
-
-  const [eFrom, setEFrom] = useState('');
-  const [eTo, setETo] = useState('');
-  const [ePct, setEPct] = useState('');
-  const [inputMode, setInputMode] = useState('pct');
-  const [eShares, setEShares] = useState('');
-  const [quickTS, setQuickTS] = useState('');
-
-  const [target, setTarget] = useState('');
-  const [threshold, setThreshold] = useState(25);
-  const [expRows, setExpRows] = useState({});
-  const [toast, setToast] = useState('');
-  const [zoom, setZoom] = useState(1);
-
-  const [confirmDel, setConfirmDel] = useState(null);
-  const [editEdge, setEditEdge] = useState(null);
-  const [editNode, setEditNode] = useState(null);
-
-  const i = lang === 'zh' ? 0 : 1;
-  const T = (zh, en) => [zh, en][i];
-
-  const flash = (m) => { setToast(m); setTimeout(() => setToast(''), 2400); };
-  const nn = useCallback((id) => nodes.find(n => n.id === id)?.name || id, [nodes]);
-  const togRow = (id) => setExpRows(p => ({ ...p, [id]: !p[id] }));
-
-  const investeeNode = useMemo(() => eTo ? nodes.find(n => n.id === eTo) : null, [eTo, nodes]);
-  const computedPct = useMemo(() => {
-    if (inputMode !== 'shares' || !investeeNode?.totalShares || !eShares) return null;
-    const s = parseFloat(eShares);
-    if (isNaN(s) || s <= 0) return null;
-    return (s / investeeNode.totalShares) * 100;
-  }, [inputMode, investeeNode, eShares]);
-
-  const doQuickSetTS = () => {
-    const ts = parseFloat(quickTS);
-    if (!eTo || isNaN(ts) || ts <= 0) return flash(T('⚠️ 請輸入有效的總股數', '⚠️ Enter valid total shares'));
-    setNodes(p => p.map(n => n.id === eTo ? { ...n, totalShares: ts } : n));
-    setQuickTS('');
-    flash(T('✅ 已設定總股數', '✅ Total shares set'));
-  };
-
-  const askDeleteNode = (id) => {
-    const name = nn(id);
-    const relCount = edges.filter(e => e.from === id || e.to === id).length;
-    setConfirmDel({ type: 'node', id, name, relCount });
-  };
-  const askDeleteEdge = (id) => {
-    const e = edges.find(x => x.id === id);
-    if (!e) return;
-    setConfirmDel({ type: 'edge', id, name: `${nn(e.from)} → ${e.pct.toFixed(4)}% → ${nn(e.to)}` });
-  };
-  const execDelete = () => {
-    if (!confirmDel) return;
-    if (confirmDel.type === 'node') {
-      setNodes(p => p.filter(n => n.id !== confirmDel.id));
-      setEdges(p => p.filter(e => e.from !== confirmDel.id && e.to !== confirmDel.id));
-      if (target === confirmDel.id) setTarget('');
-    } else {
-      setEdges(p => p.filter(e => e.id !== confirmDel.id));
-    }
-    setConfirmDel(null);
-    flash(T('✅ 已刪除', '✅ Deleted'));
-  };
-
-  const openEditEdge = (e) => {
-    const toNode = nodes.find(n => n.id === e.to);
-    setEditEdge({
-      id: e.id, pct: String(e.pct),
-      shares: e.shares != null ? String(e.shares) : '',
-      mode: e.shares != null ? 'shares' : 'pct',
-      toId: e.to, totalShares: toNode?.totalShares || null
+function computeDAGLayout(entities, relationships) {
+  if (entities.length === 0) return { nodes: [], edges: [] };
+  const adj = {}; const inDeg = {};
+  entities.forEach(e => { adj[e.id] = []; inDeg[e.id] = 0; });
+  relationships.forEach(r => {
+    if (adj[r.fromId]) { adj[r.fromId].push(r.toId); inDeg[r.toId] = (inDeg[r.toId] || 0) + 1; }
+  });
+  const layers = {}; const queue = [];
+  entities.forEach(e => { if ((inDeg[e.id] || 0) === 0) { queue.push(e.id); layers[e.id] = 0; } });
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    (adj[cur] || []).forEach(nb => {
+      layers[nb] = Math.max(layers[nb] || 0, (layers[cur] || 0) + 1);
+      inDeg[nb]--; if (inDeg[nb] === 0) queue.push(nb);
     });
-  };
-  const saveEditEdge = () => {
-    if (!editEdge) return;
-    let pct, shares = null;
-    if (editEdge.mode === 'pct') {
-      pct = parseFloat(editEdge.pct);
-      if (isNaN(pct) || pct <= 0 || pct > 100) return flash(T('⚠️ 比例須 0~100', '⚠️ Must be 0~100'));
-    } else {
-      shares = parseFloat(editEdge.shares);
-      if (!editEdge.totalShares) return flash(T('⚠️ 被投資方未設定總股數', '⚠️ Investee has no total shares'));
-      if (isNaN(shares) || shares <= 0) return flash(T('⚠️ 請輸入有效股數', '⚠️ Enter valid shares'));
-      pct = (shares / editEdge.totalShares) * 100;
-      if (pct > 100) return flash(T('⚠️ 股數超過總股數', '⚠️ Shares exceed total'));
-    }
-    const edge = edges.find(e => e.id === editEdge.id);
-    const tot = edges.filter(e => e.to === edge.to && e.id !== editEdge.id).reduce((s, e) => s + e.pct, 0);
-    if (tot + pct > 100.01) return flash(T('⚠️ 超過 100%', '⚠️ Exceeds 100%'));
-    setEdges(p => p.map(e => {
-      if (e.id !== editEdge.id) return e;
-      const u = { ...e, pct };
-      if (shares !== null) u.shares = shares; else delete u.shares;
-      return u;
-    }));
-    setEditEdge(null);
-    flash(T('✅ 已儲存', '✅ Saved'));
+  }
+  entities.forEach(e => { if (layers[e.id] === undefined) layers[e.id] = 0; });
+  const layerGroups = {};
+  entities.forEach(e => { const l = layers[e.id]; if (!layerGroups[l]) layerGroups[l] = []; layerGroups[l].push(e); });
+  const nodeW = 170; const nodeH = 64; const hGap = 32; const vGap = 90;
+  const nodes = [];
+  Object.keys(layerGroups).forEach(l => {
+    const group = layerGroups[l]; const totalW = group.length * nodeW + (group.length - 1) * hGap;
+    group.forEach((e, idx) => {
+      nodes.push({ ...e, x: idx * (nodeW + hGap) - totalW / 2 + nodeW / 2, y: Number(l) * (nodeH + vGap), w: nodeW, h: nodeH, layer: Number(l) });
+    });
+  });
+  const nodeMap = {}; nodes.forEach(n => nodeMap[n.id] = n);
+  const edges = relationships.map(r => ({ ...r, from: nodeMap[r.fromId], to: nodeMap[r.toId] })).filter(e => e.from && e.to);
+  return { nodes, edges };
+}
+
+function DAGCanvas({ entities, relationships, t, selectedEntity, onSelectEntity }) {
+  const containerRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [hovered, setHovered] = useState(null);
+  const [canvasSize, setCanvasSize] = useState({ w: 600, h: 400 });
+  const layout = useMemo(() => computeDAGLayout(entities, relationships), [entities, relationships]);
+
+  useEffect(() => {
+    const obs = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        setCanvasSize({ w: entry.contentRect.width, h: entry.contentRect.height });
+      }
+    });
+    if (containerRef.current) obs.observe(containerRef.current);
+    return () => obs.disconnect();
+  }, []);
+
+  const fitView = useCallback(() => {
+    if (layout.nodes.length === 0) return;
+    const xs = layout.nodes.map(n => n.x); const ys = layout.nodes.map(n => n.y);
+    const minX = Math.min(...xs) - 100; const maxX = Math.max(...xs) + 100;
+    const minY = Math.min(...ys) - 50; const maxY = Math.max(...ys) + 50;
+    const w = maxX - minX; const h = maxY - minY;
+    const scaleX = canvasSize.w / (w + 40); const scaleY = (canvasSize.h - 20) / (h + 40);
+    const newZoom = Math.min(scaleX, scaleY, 1.5);
+    setZoom(newZoom);
+    setPan({ x: -(minX + maxX) / 2 * newZoom, y: -(minY + maxY) / 2 * newZoom + 20 });
+  }, [layout, canvasSize]);
+
+  useEffect(() => { if (layout.nodes.length > 0) fitView(); }, [layout.nodes.length]);
+
+  const getMousePos = (e) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return { mx: 0, my: 0 };
+    return { mx: (e.clientX - rect.left - canvasSize.w / 2 - pan.x) / zoom, my: (e.clientY - rect.top - canvasSize.h / 2 - pan.y) / zoom };
   };
 
-  const openEditNode = (n) => setEditNode({ id: n.id, name: n.name, type: n.type, totalShares: n.totalShares != null ? String(n.totalShares) : '' });
-  const saveEditNode = () => {
-    if (!editNode || !editNode.name.trim()) return flash(T('⚠️ 請輸入名稱', '⚠️ Enter a name'));
-    const ts = editNode.type === 'company' && editNode.totalShares ? parseFloat(editNode.totalShares) : null;
-    if (editNode.totalShares && editNode.type === 'company' && (isNaN(ts) || ts <= 0)) return flash(T('⚠️ 總股數須為正數', '⚠️ Total shares must be positive'));
-    setNodes(p => p.map(n => {
-      if (n.id !== editNode.id) return n;
-      const u = { ...n, name: editNode.name.trim(), type: editNode.type };
-      if (ts) u.totalShares = ts; else delete u.totalShares;
-      return u;
-    }));
-    if (ts) {
-      setEdges(p => p.map(e => {
-        if (e.to !== editNode.id || e.shares == null) return e;
-        return { ...e, pct: (e.shares / ts) * 100 };
-      }));
-    }
-    setEditNode(null);
-    flash(T('✅ 已儲存', '✅ Saved'));
+  const handleWheel = (e) => { e.preventDefault(); setZoom(z => Math.max(0.2, Math.min(3, z + (e.deltaY > 0 ? -0.08 : 0.08)))); };
+  const handleMouseDown = (e) => {
+    const { mx, my } = getMousePos(e);
+    const clickedNode = layout.nodes.find(n => mx >= n.x - n.w / 2 && mx <= n.x + n.w / 2 && my >= n.y - n.h / 2 && my <= n.y + n.h / 2);
+    if (clickedNode) { onSelectEntity(clickedNode.id); return; }
+    setDragging(true); setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
   };
+  const handleMouseMove = (e) => {
+    if (dragging) { setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y }); return; }
+    const { mx, my } = getMousePos(e);
+    const found = layout.nodes.find(n => mx >= n.x - n.w / 2 && mx <= n.x + n.w / 2 && my >= n.y - n.h / 2 && my <= n.y + n.h / 2);
+    setHovered(found?.id || null);
+  };
+  const handleMouseUp = () => setDragging(false);
 
-  const addNode = () => {
-    const name = nName.trim();
-    if (!name) return flash(T('⚠️ 請輸入名稱', '⚠️ Enter a name'));
-    const node = { id: gid('n'), name, type: nType };
-    if (nType === 'company' && nTotalShares) {
-      const ts = parseFloat(nTotalShares);
-      if (isNaN(ts) || ts <= 0) return flash(T('⚠️ 總股數須為正數', '⚠️ Total shares must be positive'));
-      node.totalShares = ts;
-    }
-    setNodes(p => [...p, node]);
-    setNName(''); setNTotalShares('');
-    flash(T('✅ 已新增實體', '✅ Entity added'));
-  };
+  useEffect(() => {
+    const canvas = canvasRef.current; if (!canvas) return;
+    const dpr = window.devicePixelRatio || 2;
+    canvas.width = canvasSize.w * dpr; canvas.height = canvasSize.h * dpr;
+    canvas.style.width = canvasSize.w + 'px'; canvas.style.height = canvasSize.h + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, canvasSize.w, canvasSize.h);
+    ctx.save();
+    ctx.translate(canvasSize.w / 2 + pan.x, canvasSize.h / 2 + pan.y);
+    ctx.scale(zoom, zoom);
 
-  const addEdge = () => {
-    if (!eFrom || !eTo) return flash(T('⚠️ 請選擇兩端', '⚠️ Select both sides'));
-    if (eFrom === eTo) return flash(T('⚠️ 不能自我持股', '⚠️ Cannot own self'));
-    if (edges.some(e => e.from === eFrom && e.to === eTo)) return flash(T('⚠️ 此關係已存在', '⚠️ Already exists'));
-    let pct, shares = null;
-    if (inputMode === 'pct') {
-      pct = parseFloat(ePct);
-      if (isNaN(pct) || pct <= 0 || pct > 100) return flash(T('⚠️ 比例須 0~100', '⚠️ Must be 0~100'));
-    } else {
-      shares = parseFloat(eShares);
-      if (!investeeNode?.totalShares) return flash(T('⚠️ 請先設定被投資方的總股數', '⚠️ Set investee total shares first'));
-      if (isNaN(shares) || shares <= 0) return flash(T('⚠️ 請輸入有效股數', '⚠️ Enter valid shares'));
-      if (shares > investeeNode.totalShares) return flash(T('⚠️ 股數超過總股數', '⚠️ Shares exceed total'));
-      pct = (shares / investeeNode.totalShares) * 100;
-    }
-    const tot = edges.filter(e => e.to === eTo).reduce((s, e) => s + e.pct, 0);
-    if (tot + pct > 100.01) return flash(T('⚠️ 超過 100%', '⚠️ Exceeds 100%'));
-    if (wouldCycle(eFrom, eTo, edges)) return flash(T('⚠️ 會產生循環', '⚠️ Would create cycle'));
-    const edge = { id: gid('e'), from: eFrom, to: eTo, pct };
-    if (shares !== null) edge.shares = shares;
-    setEdges(p => [...p, edge]);
-    setEPct(''); setEShares('');
-    flash(T('✅ 已新增關係', '✅ Relation added'));
-  };
+    layout.edges.forEach(edge => {
+      const fx = edge.from.x, fy = edge.from.y + edge.from.h / 2;
+      const tx = edge.to.x, ty = edge.to.y - edge.to.h / 2;
+      ctx.beginPath();
+      const cy1 = fy + (ty - fy) * 0.35, cy2 = fy + (ty - fy) * 0.65;
+      ctx.moveTo(fx, fy); ctx.bezierCurveTo(fx, cy1, tx, cy2, tx, ty);
+      const isHL = selectedEntity && (edge.fromId === selectedEntity || edge.toId === selectedEntity);
+      ctx.strokeStyle = edge.isNominee ? '#EF4444' : isHL ? '#3B82F6' : '#94A3B8';
+      ctx.lineWidth = edge.isNominee ? 2.5 : isHL ? 2 : 1.2;
+      if (edge.isNominee) ctx.setLineDash([6, 4]); else ctx.setLineDash([]);
+      ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(tx - 5, ty - 9); ctx.lineTo(tx + 5, ty - 9); ctx.closePath();
+      ctx.fillStyle = edge.isNominee ? '#EF4444' : isHL ? '#3B82F6' : '#94A3B8'; ctx.fill();
+      const lx = (fx + tx) / 2 + 12, ly = (fy + ty) / 2;
+      ctx.font = 'bold 10px system-ui'; ctx.fillStyle = edge.isNominee ? '#DC2626' : '#475569'; ctx.textAlign = 'center';
+      ctx.fillText(`${edge.percentage}%`, lx, ly);
+      if (edge.sharesHeld) { ctx.font = '8px system-ui'; ctx.fillStyle = '#94A3B8'; ctx.fillText(`${Number(edge.sharesHeld).toLocaleString()} shares`, lx, ly + 11); }
+    });
 
-  const lay = useMemo(() => buildLayout(nodes, edges), [nodes, edges]);
-  const analysis = useMemo(() => {
-    if (!target) return [];
-    const memo = {};
-    return nodes.filter(n => n.id !== target)
-      .map(n => ({ node: n, eff: calcEff(n.id, target, edges, memo) * 100 }))
-      .filter(r => r.eff > 0.00005)
-      .map(r => ({ ...r, paths: getPaths(r.node.id, target, edges).map(p => ({ edges: p, pct: p.reduce((a, e) => a * e.pct / 100, 1) * 100 })) }))
-      .sort((a, b) => b.eff - a.eff);
-  }, [nodes, edges, target]);
-  const roots = useMemo(() => analysis.filter(r => !edges.some(e => e.to === r.node.id)), [analysis, edges]);
-  const ubos = useMemo(() => roots.filter(r => r.eff >= threshold), [roots, threshold]);
-
-  const loadDemo = () => {
-    setNodes([
-      { id: 'xsp', name: 'Chan Tai Man', type: 'person' },
-      { id: 'a', name: 'A', type: 'company' },
-      { id: 'b', name: 'B', type: 'company' },
-      { id: 'c', name: 'C', type: 'company' },
-      { id: 'd', name: 'C', type: 'company', totalShares: 10000000 },
-      { id: 'e', name: 'D', type: 'company', totalShares: 200000000 },
-      { id: 'f', name: 'E', type: 'company' },
-      { id: 'g', name: 'F', type: 'company', totalShares: 80000000 },
-      { id: 'h', name: 'G', type: 'company', totalShares: 50000000 },
-    ]);
-    setEdges([
-      { id: 'e1', from: 'xsp', to: 'a', pct: 100 },
-      { id: 'e2', from: 'xsp', to: 'b', pct: 91.67 },
-      { id: 'e3', from: 'xsp', to: 'c', pct: 99.55 },
-      { id: 'e4', from: 'a', to: 'd', pct: 60, shares: 6000000 },
-      { id: 'e5', from: 'b', to: 'c', pct: 0.45 },
-      { id: 'e6', from: 'd', to: 'e', pct: 4.4405, shares: 8881000 },
-      { id: 'e7', from: 'b', to: 'e', pct: 29.0973 },
-      { id: 'e8', from: 'c', to: 'e', pct: 14.6022 },
-      { id: 'e9', from: 'xsp', to: 'f', pct: 6.1437 },
-      { id: 'e10', from: 'e', to: 'g', pct: 83.5014, shares: 66801120 },
-      { id: 'e11', from: 'f', to: 'g', pct: 16.4986 },
-      { id: 'e12', from: 'g', to: 'h', pct: 100, shares: 50000000 },
-    ]);
-    setTarget('h'); setTab('analyze'); setExpRows({}); uid.current = 100;
-    flash(T('✅ 已載入範例', '✅ Demo loaded'));
-  };
-  const reset = () => {
-    setNodes([]); setEdges([]); setTarget(''); setNName(''); setNTotalShares('');
-    setEFrom(''); setETo(''); setEPct(''); setEShares(''); setInputMode('pct'); setQuickTS('');
-    setExpRows({}); uid.current = 1; setTab('build'); setZoom(1);
-    setEditEdge(null); setEditNode(null); setConfirmDel(null);
-  };
-
-  const curve = (x1, y1, x2, y2) => {
-    if (Math.abs(x1 - x2) < 5) return `M${x1},${y1} L${x2},${y2}`;
-    const dy = y2 - y1;
-    return `M${x1},${y1} C${x1},${y1 + dy * 0.4} ${x2},${y2 - dy * 0.4} ${x2},${y2}`;
-  };
+    layout.nodes.forEach(node => {
+      const crr = calcCRR(node);
+      const isHov = hovered === node.id;
+      const isSel = selectedEntity === node.id;
+      const x = node.x - node.w / 2, y = node.y - node.h / 2;
+      const r = 8;
+      ctx.shadowColor = isSel ? 'rgba(59,130,246,0.5)' : isHov ? 'rgba(59,130,246,0.3)' : 'rgba(0,0,0,0.08)';
+      ctx.shadowBlur = isSel ? 14 : isHov ? 10 : 5; ctx.shadowOffsetY = 2;
+      ctx.beginPath();
+      ctx.moveTo(x + r, y); ctx.lineTo(x + node.w - r, y); ctx.quadraticCurveTo(x + node.w, y, x + node.w, y + r);
+      ctx.lineTo(x + node.w, y + node.h - r); ctx.quadraticCurveTo(x + node.w, y + node.h, x + node.w - r, y + node.h);
+      ctx.lineTo(x + r, y + node.h); ctx.quadraticCurveTo(x, y + node.h, x, y + node.h - r);
+      ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
+      ctx.fillStyle = node.sanctionStatus === 'Confirmed Hit' ? '#FEE2E2' : crr.forced ? '#FEF2F2' : node.type === 'company' ? '#EFF6FF' : '#ECFDF5';
+      ctx.fill();
+      ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+      const bColor = crr.level === 'High' ? '#EF4444' : crr.level === 'Medium' ? '#F59E0B' : node.type === 'company' ? '#3B82F6' : '#10B981';
+      ctx.strokeStyle = isSel ? '#2563EB' : bColor;
+      ctx.lineWidth = isSel ? 2.5 : crr.forced ? 2.5 : isHov ? 2 : 1.2; ctx.stroke();
+      // Forced high risk: double border indicator
+      if (crr.forced) {
+        ctx.strokeStyle = '#B91C1C'; ctx.lineWidth = 1;
+        ctx.beginPath();
+        const inset = 3;
+        ctx.moveTo(x + r + inset, y + inset); ctx.lineTo(x + node.w - r - inset, y + inset);
+        ctx.quadraticCurveTo(x + node.w - inset, y + inset, x + node.w - inset, y + r + inset);
+        ctx.lineTo(x + node.w - inset, y + node.h - r - inset);
+        ctx.quadraticCurveTo(x + node.w - inset, y + node.h - inset, x + node.w - r - inset, y + node.h - inset);
+        ctx.lineTo(x + r + inset, y + node.h - inset);
+        ctx.quadraticCurveTo(x + inset, y + node.h - inset, x + inset, y + node.h - r - inset);
+        ctx.lineTo(x + inset, y + r + inset);
+        ctx.quadraticCurveTo(x + inset, y + inset, x + r + inset, y + inset);
+        ctx.closePath();
+        ctx.setLineDash([3, 2]); ctx.stroke(); ctx.setLineDash([]);
+      }
+      ctx.fillStyle = bColor;
+      ctx.beginPath();
+      ctx.moveTo(x + r, y); ctx.lineTo(x + node.w - r, y); ctx.quadraticCurveTo(x + node.w, y, x + node.w, y + r);
+      ctx.lineTo(x + node.w, y + 5); ctx.lineTo(x, y + 5); ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath(); ctx.fill();
+      ctx.font = '13px system-ui'; ctx.fillText(node.type === 'company' ? '🏢' : '👤', x + 8, y + 24);
+      ctx.font = 'bold 11px system-ui'; ctx.fillStyle = '#1E293B'; ctx.textAlign = 'left';
+      const dn = node.name.length > 14 ? node.name.substring(0, 13) + '…' : node.name;
+      ctx.fillText(dn, x + 26, y + 24);
+      ctx.font = '9px system-ui'; ctx.fillStyle = '#64748B'; ctx.fillText(node.jurisdiction, x + 26, y + 37);
+      if (node.type === 'company' && node.totalShares) {
+        ctx.font = '8px system-ui'; ctx.fillStyle = '#94A3B8';
+        ctx.fillText(`${Number(node.totalShares).toLocaleString()} shares`, x + 26, y + 47);
+      }
+      ctx.font = 'bold 9px system-ui';
+      ctx.fillStyle = crr.level === 'High' ? '#DC2626' : crr.level === 'Medium' ? '#D97706' : '#16A34A';
+      ctx.fillText(`CRR ${crr.score}`, x + 8, y + 58);
+      if (crr.forced) {
+        ctx.font = 'bold 7px system-ui'; ctx.fillStyle = '#FFFFFF';
+        const lockX = x + node.w - 32; const lockY = y + 50;
+        ctx.fillStyle = '#B91C1C';
+        ctx.beginPath(); ctx.roundRect(lockX, lockY, 26, 12, 2); ctx.fill();
+        ctx.fillStyle = '#FFFFFF'; ctx.textAlign = 'center';
+        ctx.fillText('🔒 AUTO', lockX + 13, lockY + 9);
+      }
+      ctx.textAlign = 'left';
+      if (node.pepType !== 'None') { ctx.fillStyle = '#D97706'; ctx.font = 'bold 8px system-ui'; ctx.fillText('PEP', x + node.w - 28, y + 24); }
+      if (node.sanctionStatus === 'Confirmed Hit') { ctx.font = '12px system-ui'; ctx.fillText('⛔', x + node.w - 18, y + 38); }
+    });
+    ctx.restore();
+  }, [layout, zoom, pan, hovered, selectedEntity, canvasSize, t]);
 
   return (
-    <div className="h-screen flex flex-col bg-gradient-to-br from-slate-50 to-blue-50 overflow-hidden text-gray-800">
-      {toast && <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white text-sm px-6 py-2.5 rounded-xl shadow-2xl font-medium">{toast}</div>}
-
-      {/* ── 確認刪除 ── */}
-      {confirmDel && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setConfirmDel(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-96 max-w-sm mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="bg-red-600 text-white px-5 py-3 flex items-center gap-2">
-              <span className="text-lg">⚠️</span>
-              <span className="font-bold text-sm">{T('確認刪除', 'Confirm Delete')}</span>
-            </div>
-            <div className="p-5">
-              <p className="text-sm text-gray-600 mb-3">{T('確定要刪除以下項目嗎？', 'Delete the following?')}</p>
-              <div className="bg-red-50 border-2 border-red-200 rounded-xl p-3 mb-3">
-                <p className="text-sm font-bold text-red-700 break-all">{confirmDel.type === 'node' ? '🏢 ' : '🔗 '}{confirmDel.name}</p>
-              </div>
-              {confirmDel.type === 'node' && confirmDel.relCount > 0 && (
-                <div className="bg-orange-50 border border-orange-200 rounded-lg p-2.5 mb-3">
-                  <p className="text-xs text-orange-700 font-medium">⚠️ {T(`將同時刪除 ${confirmDel.relCount} 條相關持股關係`, `${confirmDel.relCount} related relation(s) will also be removed`)}</p>
-                </div>
-              )}
-              <div className="flex gap-3 mt-4">
-                <button onClick={() => setConfirmDel(null)} className="flex-1 py-2.5 border-2 border-gray-300 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-100 transition">{T('取消', 'Cancel')}</button>
-                <button onClick={execDelete} className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-bold hover:bg-red-700 transition">{T('🗑️ 確認刪除', '🗑️ Delete')}</button>
-              </div>
-            </div>
-          </div>
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between px-2 py-1 bg-slate-50 border-b text-xs shrink-0">
+        <span className="font-semibold text-slate-600 flex items-center gap-1"><GitBranch size={12} /> {t.dagTitle}</span>
+        <div className="flex items-center gap-1">
+          <button onClick={() => setZoom(z => Math.min(3, z + 0.15))} className="bg-white border hover:bg-gray-100 w-6 h-6 rounded flex items-center justify-center font-bold">{t.zoomIn}</button>
+          <button onClick={() => setZoom(z => Math.max(0.2, z - 0.15))} className="bg-white border hover:bg-gray-100 w-6 h-6 rounded flex items-center justify-center font-bold">{t.zoomOut}</button>
+          <button onClick={fitView} className="bg-white border hover:bg-gray-100 px-2 h-6 rounded text-xs">{t.fitView}</button>
+          <button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} className="bg-white border hover:bg-gray-100 px-2 h-6 rounded text-xs">{t.resetView}</button>
+          <span className="text-gray-400 ml-1">{Math.round(zoom * 100)}%</span>
         </div>
-      )}
-
-      {/* ── 編輯持股關係 ── */}
-      {editEdge && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditEdge(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-96 max-w-sm mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="bg-blue-600 text-white px-5 py-3 font-bold text-sm">✏️ {T('編輯持股關係', 'Edit Ownership')}</div>
-            <div className="p-5">
-              {(() => { const ed = edges.find(e => e.id === editEdge.id); return ed ? (
-                <div className="bg-gray-50 rounded-xl p-3 mb-4 text-sm">
-                  <span className="font-bold">{nn(ed.from)}</span>
-                  <span className="text-blue-600 font-bold"> → </span>
-                  <span className="font-bold">{nn(ed.to)}</span>
-                </div>
-              ) : null; })()}
-
-              <div className="flex gap-1 mb-3">
-                <button onClick={() => setEditEdge(p => {
-                  if (p.mode === 'pct') return p;
-                  const sh = parseFloat(p.shares);
-                  const newPct = (p.totalShares && !isNaN(sh) && sh > 0) ? String((sh / p.totalShares) * 100) : p.pct;
-                  return { ...p, mode: 'pct', pct: newPct };
-                })} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${editEdge.mode === 'pct' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
-                  📊 {T('百分比 %', 'Percentage %')}
-                </button>
-                <button onClick={() => {
-                  if (!editEdge.totalShares) return flash(T('⚠️ 被投資方未設定總股數', '⚠️ No total shares set'));
-                  setEditEdge(p => {
-                    if (p.mode === 'shares') return p;
-                    const pct = parseFloat(p.pct);
-                    const newSh = (p.totalShares && !isNaN(pct) && pct > 0) ? String(pct / 100 * p.totalShares) : p.shares;
-                    return { ...p, mode: 'shares', shares: newSh };
-                  });
-                }} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${editEdge.mode === 'shares' ? 'bg-blue-600 text-white' : editEdge.totalShares ? 'bg-gray-100 text-gray-500 hover:bg-gray-200' : 'bg-gray-50 text-gray-300 cursor-not-allowed'}`}>
-                  🔢 {T('股數', 'Shares')}
-                </button>
-              </div>
-
-              {editEdge.mode === 'pct' ? (<>
-                <label className="text-xs font-bold text-gray-600 block mb-1">{T('持股比例 %', 'Ownership %')}</label>
-                <input type="number" className="w-full border-2 border-blue-300 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-blue-400 outline-none mb-4" value={editEdge.pct} onChange={e => setEditEdge(p => ({ ...p, pct: e.target.value }))} min="0.0001" max="100" step="any" />
-              </>) : (<>
-                {editEdge.totalShares && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 mb-2">
-                    <span className="text-xs text-blue-700 font-medium">📊 {T('總發行股數', 'Total Shares')}: <b>{fmtNum(editEdge.totalShares)}</b></span>
-                  </div>
-                )}
-                <label className="text-xs font-bold text-gray-600 block mb-1">{T('持有股數', 'Number of Shares')}</label>
-                <input type="number" className="w-full border-2 border-blue-300 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-blue-400 outline-none mb-2" value={editEdge.shares} onChange={e => setEditEdge(p => ({ ...p, shares: e.target.value }))} min="1" step="any" />
-                {(() => {
-                  const sh = parseFloat(editEdge.shares);
-                  const cp = (editEdge.totalShares && !isNaN(sh) && sh > 0) ? (sh / editEdge.totalShares * 100) : null;
-                  return cp !== null ? (
-                    <div className="bg-green-50 border border-green-200 rounded-lg p-2 mb-4">
-                      <span className="text-xs text-green-700 font-bold">≈ {cp.toFixed(4)}%</span>
-                      <span className="text-xs text-green-600 ml-1">({fmtNum(sh)} / {fmtNum(editEdge.totalShares)})</span>
-                    </div>
-                  ) : <div className="mb-4" />;
-                })()}
-              </>)}
-
-              <div className="flex gap-3">
-                <button onClick={() => setEditEdge(null)} className="flex-1 py-2.5 border-2 border-gray-300 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-100 transition">{T('取消', 'Cancel')}</button>
-                <button onClick={saveEditEdge} className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition">{T('💾 儲存', '💾 Save')}</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── 編輯實體 ── */}
-      {editNode && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditNode(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-96 max-w-sm mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="bg-green-600 text-white px-5 py-3 font-bold text-sm">✏️ {T('編輯實體', 'Edit Entity')}</div>
-            <div className="p-5">
-              <label className="text-xs font-bold text-gray-600 block mb-1">{T('名稱', 'Name')}</label>
-              <input className="w-full border-2 border-green-300 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-green-400 outline-none mb-3" value={editNode.name} onChange={e => setEditNode(p => ({ ...p, name: e.target.value }))} />
-              <label className="text-xs font-bold text-gray-600 block mb-1">{T('類型', 'Type')}</label>
-              <select className="w-full border-2 border-green-300 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-green-400 outline-none mb-3" value={editNode.type} onChange={e => setEditNode(p => ({ ...p, type: e.target.value, totalShares: e.target.value === 'person' ? '' : p.totalShares }))}>
-                <option value="company">{T('🏢 公司', '🏢 Company')}</option>
-                <option value="person">{T('👤 個人', '👤 Person')}</option>
-              </select>
-              {editNode.type === 'company' && (<>
-                <label className="text-xs font-bold text-gray-600 block mb-1">{T('總發行股數（選填）', 'Total Issued Shares (optional)')}</label>
-                <input type="number" className="w-full border-2 border-green-300 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-green-400 outline-none mb-1" placeholder={T('例：10000000', 'e.g. 10000000')} value={editNode.totalShares} onChange={e => setEditNode(p => ({ ...p, totalShares: e.target.value }))} min="1" step="any" />
-                {editNode.totalShares && (
-                  <p className="text-xs text-gray-400 mb-3">= {fmtNum(parseFloat(editNode.totalShares) || 0)} {T('股', 'shares')}</p>
-                )}
-                {!editNode.totalShares && <div className="mb-3" />}
-              </>)}
-              <div className="flex gap-3">
-                <button onClick={() => setEditNode(null)} className="flex-1 py-2.5 border-2 border-gray-300 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-100 transition">{T('取消', 'Cancel')}</button>
-                <button onClick={saveEditNode} className="flex-1 py-2.5 bg-green-600 text-white rounded-xl text-sm font-bold hover:bg-green-700 transition">{T('💾 儲存', '💾 Save')}</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── 頂部導航 ── */}
-      <div className="bg-white border-b shadow-sm px-4 py-2.5 flex flex-wrap items-center gap-3 flex-shrink-0">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#2563eb" strokeWidth="2"><path d="M6 3v12"/><path d="M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M18 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M18 9v3a3 3 0 0 1-3 3H9"/></svg>
-        <h1 className="text-lg font-bold text-gray-800">{T('多層股權穿透分析工具', 'Multi-Layer Ownership Analyzer')}</h1>
-        <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">{T('DAG 穿透', 'DAG Analysis')}</span>
-        <div className="flex-1" />
-        <button onClick={() => setLang(l => l === 'zh' ? 'en' : 'zh')} className="px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-lg text-xs hover:bg-indigo-200 transition font-bold border border-indigo-200">🌐 {lang === 'zh' ? 'EN' : '中文'}</button>
-        <button onClick={loadDemo} className="px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg text-xs hover:bg-purple-200 transition font-medium border border-purple-200">{T('📊 載入範例', '📊 Load Demo')}</button>
-        <button onClick={reset} className="px-3 py-1.5 bg-red-100 text-red-600 rounded-lg text-xs hover:bg-red-200 transition font-medium border border-red-200">{T('↺ 重置', '↺ Reset')}</button>
       </div>
+      <div ref={containerRef} className="flex-1 relative overflow-hidden bg-white">
+        {entities.length === 0 ? (
+          <div className="absolute inset-0 flex items-center justify-center text-gray-300 text-sm">{t.dagEmpty}</div>
+        ) : (
+          <canvas ref={canvasRef} className={`w-full h-full ${dragging ? 'cursor-grabbing' : hovered ? 'cursor-pointer' : 'cursor-grab'}`}
+            onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} />
+        )}
+      </div>
+      <div className="flex items-center gap-3 px-2 py-1 bg-slate-50 border-t text-xs text-gray-400 shrink-0">
+        <span className="font-semibold">{t.legend}:</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-blue-100 border border-blue-500 inline-block"></span>{t.companyNode}</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-green-100 border border-green-500 inline-block"></span>{t.personNode}</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-red-100 border-2 border-red-500 inline-block"></span>{t.highRiskNode} / {t.autoTag}</span>
+        <span className="flex items-center gap-1"><span className="w-5 border-t-2 border-dashed border-red-500 inline-block"></span>{t.nomineeLink}</span>
+      </div>
+    </div>
+  );
+}
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* ── 左側面板 ── */}
-        <div className="w-80 2xl:w-96 flex-shrink-0 bg-white border-r flex flex-col overflow-hidden">
-          <div className="flex gap-1 p-2 bg-gray-50 border-b">
-            {[['build', T('🏗️ 建構', '🏗️ Build')], ['manage', T('📋 管理', '📋 Manage')], ['analyze', T('🔍 分析', '🔍 Analyze')]].map(([k, label]) => (
-              <button key={k} onClick={() => setTab(k)} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${tab === k ? 'bg-white shadow text-blue-700 border' : 'text-gray-500 hover:bg-gray-100'}`}>{label}</button>
-            ))}
-          </div>
+export default function CDDApp() {
+  const [lang, setLang] = useState('zh');
+  const t = i18n[lang];
+  const [entities, setEntities] = useState([]);
+  const [relationships, setRelationships] = useState([]);
+  const [selectedEntity, setSelectedEntity] = useState(null);
+  const [activeTab, setActiveTab] = useState('workspace');
+  const [auditLog, setAuditLog] = useState([]);
+  const [showAddEntity, setShowAddEntity] = useState(false);
+  const [newEntity, setNewEntity] = useState(defaultEntity());
+  const [editingEntity, setEditingEntity] = useState(null);
+  const [showReport, setShowReport] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showRelForm, setShowRelForm] = useState(false);
+  const [newRel, setNewRel] = useState({ fromId: '', toId: '', percentage: 0, sharesHeld: '', controlTypes: ['Ownership'], isNominee: false, inputMode: 'percentage' });
+  const [leftPanelTab, setLeftPanelTab] = useState('entities');
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
 
-          <div className="flex-1 overflow-y-auto p-2.5 space-y-3">
-            {/* ── 建構 ── */}
-            {tab === 'build' && (<>
-              <div className="border rounded-xl p-3 bg-white shadow-sm">
-                <h3 className="text-xs font-bold text-gray-700 mb-2">{T('➕ 新增實體', '➕ Add Entity')}</h3>
-                <input className="w-full border rounded-lg px-3 py-2 text-sm mb-2 focus:ring-1 focus:ring-blue-300 focus:border-blue-400 outline-none" placeholder={T('輸入名稱', 'Enter name')} value={nName} onChange={e => setNName(e.target.value)} onKeyDown={e => e.key === 'Enter' && addNode()} />
-                <div className="flex gap-2 mb-2">
-                  <select className="flex-1 border rounded-lg px-2 py-2 text-sm" value={nType} onChange={e => { setNType(e.target.value); if (e.target.value === 'person') setNTotalShares(''); }}>
-                    <option value="company">{T('🏢 公司', '🏢 Company')}</option>
-                    <option value="person">{T('👤 個人', '👤 Person')}</option>
-                  </select>
-                </div>
-                {nType === 'company' && (
-                  <div className="mb-2">
-                    <label className="text-xs text-gray-500 font-medium">{T('總發行股數（選填）', 'Total Shares (optional):')}</label>
-                    <input type="number" className="w-full border rounded-lg px-3 py-2 text-sm mt-0.5 focus:ring-1 focus:ring-blue-300 outline-none" placeholder={T('例：10000000', 'e.g. 10000000')} value={nTotalShares} onChange={e => setNTotalShares(e.target.value)} min="1" step="any" />
-                    {nTotalShares && <p className="text-xs text-gray-400 mt-0.5">= {fmtNum(parseFloat(nTotalShares) || 0)} {T('股', 'shares')}</p>}
-                  </div>
-                )}
-                <button onClick={addNode} className="w-full py-2.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition">{T('＋ 新增實體', '＋ Add Entity')}</button>
-              </div>
+  const addAudit = useCallback((action, detail) => {
+    setAuditLog(prev => [{ id: auditIdCounter++, timestamp: new Date().toISOString(), action, detail }, ...prev]);
+  }, []);
 
-              <div className="border rounded-xl p-3 bg-white shadow-sm">
-                <h3 className="text-xs font-bold text-gray-700 mb-2">{T('🔗 新增持股關係', '🔗 Add Ownership')}</h3>
-                <label className="text-xs text-gray-500 font-medium">{T('股東（持有方）', 'Shareholder:')}</label>
-                <select className="w-full border rounded-lg px-2 py-2 text-sm mb-1.5" value={eFrom} onChange={e => setEFrom(e.target.value)}>
-                  <option value="">{T('-- 選擇 --', '-- Select --')}</option>
-                  {nodes.map(n => <option key={n.id} value={n.id}>{n.type === 'person' ? '👤' : '🏢'} {n.name}</option>)}
-                </select>
-                <label className="text-xs text-gray-500 font-medium">{T('被投資方', 'Investee:')}</label>
-                <select className="w-full border rounded-lg px-2 py-2 text-sm mb-2" value={eTo} onChange={e => { setETo(e.target.value); setQuickTS(''); }}>
-                  <option value="">{T('-- 選擇 --', '-- Select --')}</option>
-                  {nodes.filter(n => n.id !== eFrom).map(n => <option key={n.id} value={n.id}>{n.type === 'person' ? '👤' : '🏢'} {n.name}{n.totalShares ? ` [${fmtShort(n.totalShares)}${T('股','')}]` : ''}</option>)}
-                </select>
+  const addEntity = () => {
+    if (!newEntity.name) return;
+    const ne = { ...newEntity, id: Date.now().toString() + Math.random().toString(36).substr(2, 5) };
+    setEntities(prev => [...prev, ne]);
+    addAudit(t.entityAdded, `${t.added} ${newEntity.type === 'company' ? t.company : t.person}: ${newEntity.name}`);
+    setNewEntity(defaultEntity()); setShowAddEntity(false);
+  };
 
-                {/* ── 輸入模式切換 ── */}
-                <div className="flex gap-1 mb-2">
-                  <button onClick={() => setInputMode('pct')} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${inputMode === 'pct' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
-                    📊 {T('百分比 %', 'Percentage %')}
-                  </button>
-                  <button onClick={() => setInputMode('shares')} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${inputMode === 'shares' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
-                    🔢 {T('股數', 'Shares')}
-                  </button>
-                </div>
+  const removeEntity = (id) => {
+    const ent = entities.find(e => e.id === id);
+    setEntities(prev => prev.filter(e => e.id !== id));
+    setRelationships(prev => prev.filter(r => r.fromId !== id && r.toId !== id));
+    if (selectedEntity === id) { setSelectedEntity(null); setDetailOpen(false); }
+    if (ent) addAudit(t.entityRemoved, `${t.removed}: ${ent.name}`);
+  };
 
-                {inputMode === 'pct' ? (<>
-                  <label className="text-xs text-gray-500 font-medium">{T('持股 %', 'Ownership %:')}</label>
-                  <input className="w-full border rounded-lg px-3 py-2 text-sm mb-2 focus:ring-1 focus:ring-green-300 outline-none" type="number" placeholder="e.g. 60" min="0.0001" max="100" step="any" value={ePct} onChange={e => setEPct(e.target.value)} onKeyDown={e => e.key === 'Enter' && addEdge()} />
-                </>) : (<>
-                  {/* 股數模式 */}
-                  {eTo && investeeNode?.totalShares && (
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 mb-1.5">
-                      <span className="text-xs text-blue-700 font-medium">📊 {T('總發行股數', 'Total Shares')}: <b>{fmtNum(investeeNode.totalShares)}</b></span>
-                    </div>
-                  )}
-                  {eTo && investeeNode && !investeeNode.totalShares && (
-                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-1.5">
-                      <p className="text-xs text-amber-700 font-medium mb-1.5">⚠️ {T('被投資方尚未設定總股數', 'Investee has no total shares')}</p>
-                      <div className="flex gap-1.5">
-                        <input className="flex-1 border border-amber-300 rounded-lg px-2 py-1.5 text-xs focus:ring-1 focus:ring-amber-400 outline-none" type="number" placeholder={T('輸入總股數', 'Total shares')} value={quickTS} onChange={e => setQuickTS(e.target.value)} onKeyDown={e => e.key === 'Enter' && doQuickSetTS()} min="1" step="any" />
-                        <button onClick={doQuickSetTS} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600 transition">{T('設定', 'Set')}</button>
-                      </div>
-                    </div>
-                  )}
-                  <label className="text-xs text-gray-500 font-medium">{T('持有股數', 'Number of Shares:')}</label>
-                  <input className="w-full border rounded-lg px-3 py-2 text-sm mb-1 focus:ring-1 focus:ring-green-300 outline-none" type="number" placeholder={T('例：500000', 'e.g. 500000')} min="1" step="any" value={eShares} onChange={e => setEShares(e.target.value)} onKeyDown={e => e.key === 'Enter' && addEdge()} />
-                  {computedPct !== null && (
-                    <div className="bg-green-50 border border-green-200 rounded-lg p-2 mb-2">
-                      <span className="text-xs text-green-700 font-bold">≈ {computedPct.toFixed(4)}%</span>
-                      <span className="text-xs text-green-600 ml-1">({fmtNum(parseFloat(eShares))} / {fmtNum(investeeNode.totalShares)})</span>
-                    </div>
-                  )}
-                  {computedPct === null && <div className="mb-2" />}
-                </>)}
+  const updateEntity = (id, updates) => {
+    setEntities(prev => prev.map(e => e.id === id ? { ...e, ...updates } : e));
+    const ent = entities.find(e => e.id === id);
+    if (ent) addAudit(t.entityUpdated, `${t.updated} ${ent.name}`);
+  };
 
-                <button onClick={addEdge} className="w-full py-2.5 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700 transition">{T('＋ 新增持股關係', '＋ Add Ownership')}</button>
-              </div>
-            </>)}
+  const addRelationship = () => {
+    if (!newRel.fromId || !newRel.toId || newRel.fromId === newRel.toId) return;
+    const toEntity = entities.find(e => e.id === newRel.toId);
+    if (toEntity && toEntity.type === 'person') return;
+    let finalPct = newRel.percentage;
+    let sharesHeld = '';
+    if (newRel.inputMode === 'shares' && toEntity) {
+      const total = parseFloat(toEntity.totalShares);
+      const held = parseFloat(newRel.sharesHeld);
+      if (total > 0 && held >= 0) {
+        finalPct = Math.round((held / total) * 10000) / 100;
+        sharesHeld = newRel.sharesHeld;
+      }
+    }
+    const relToAdd = { ...newRel, id: Date.now().toString(), percentage: finalPct, sharesHeld };
+    setRelationships(prev => [...prev, relToAdd]);
+    const from = entities.find(e => e.id === newRel.fromId);
+    addAudit(t.relationshipAdded, `${from?.name} → ${toEntity?.name}: ${finalPct}%${sharesHeld ? ` (${sharesHeld} ${t.shares})` : ''}`);
+    setNewRel({ fromId: '', toId: '', percentage: 0, sharesHeld: '', controlTypes: ['Ownership'], isNominee: false, inputMode: 'percentage' }); setShowRelForm(false);
+  };
 
-            {/* ── 管理 ── */}
-            {tab === 'manage' && (<>
-              <div className="border-2 border-blue-200 rounded-xl bg-white shadow-sm overflow-hidden">
-                <div className="bg-blue-50 px-3 py-2 border-b border-blue-200 flex items-center gap-2">
-                  <span className="text-sm">🏢</span>
-                  <span className="text-xs font-bold text-blue-800">{T('實體管理', 'Entity Management')}</span>
-                  <span className="ml-auto bg-blue-200 text-blue-800 text-xs font-bold px-2 py-0.5 rounded-full">{nodes.length}</span>
-                </div>
-                {nodes.length === 0 ? (
-                  <p className="text-xs text-gray-400 text-center py-6">{T('尚無實體', 'No entities yet')}</p>
-                ) : (
-                  <div className="divide-y max-h-60 overflow-y-auto">
-                    {nodes.map(n => (
-                      <div key={n.id} className="flex items-center gap-2 px-3 py-2.5 hover:bg-gray-50 transition">
-                        <span className="text-base flex-shrink-0">{n.type === 'person' ? '👤' : '🏢'}</span>
-                        <div className="flex-1 min-w-0">
-                          <span className="text-xs font-semibold text-gray-800 block truncate">{n.name}</span>
-                          {n.totalShares && <span className="text-xs text-gray-400">{T('總股數', 'Total')}: {fmtNum(n.totalShares)}</span>}
-                        </div>
-                        <button onClick={() => openEditNode(n)} className="flex-shrink-0 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg px-2.5 py-1.5 text-xs font-bold transition">✏️</button>
-                        <button onClick={() => askDeleteNode(n.id)} className="flex-shrink-0 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg px-2.5 py-1.5 text-xs font-bold transition">🗑️</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="border-2 border-green-200 rounded-xl bg-white shadow-sm overflow-hidden">
-                <div className="bg-green-50 px-3 py-2 border-b border-green-200 flex items-center gap-2">
-                  <span className="text-sm">🔗</span>
-                  <span className="text-xs font-bold text-green-800">{T('持股關係管理', 'Relation Management')}</span>
-                  <span className="ml-auto bg-green-200 text-green-800 text-xs font-bold px-2 py-0.5 rounded-full">{edges.length}</span>
-                </div>
-                {edges.length === 0 ? (
-                  <p className="text-xs text-gray-400 text-center py-6">{T('尚無關係', 'No relations yet')}</p>
-                ) : (
-                  <div className="divide-y max-h-72 overflow-y-auto">
-                    {edges.map(e => (
-                      <div key={e.id} className="px-3 py-2.5 hover:bg-gray-50 transition">
-                        <div className="flex items-start gap-2">
-                          <div className="flex-1 min-w-0">
-                            <div className="text-xs font-semibold text-gray-800 truncate">{nn(e.from)}</div>
-                            <div className="flex items-center gap-1 my-0.5 flex-wrap">
-                              <span className="text-blue-600 font-black text-xs">↓ {e.pct.toFixed(4)}%</span>
-                              {e.shares != null && <span className="text-gray-400 text-xs">({fmtNum(e.shares)} {T('股', 'shr')})</span>}
-                            </div>
-                            <div className="text-xs font-semibold text-gray-800 truncate">{nn(e.to)}</div>
-                          </div>
-                          <div className="flex flex-col gap-1.5 flex-shrink-0 pt-1">
-                            <button onClick={() => openEditEdge(e)} className="bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg px-2.5 py-1.5 text-xs font-bold transition">✏️</button>
-                            <button onClick={() => askDeleteEdge(e.id)} className="bg-red-100 hover:bg-red-200 text-red-700 rounded-lg px-2.5 py-1.5 text-xs font-bold transition">🗑️</button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </>)}
+  const removeRelationship = (id) => { setRelationships(prev => prev.filter(r => r.id !== id)); addAudit(t.relationshipRemoved, t.removed); };
 
-            {/* ── 分析 ── */}
-            {tab === 'analyze' && (<>
-              <div className="border rounded-xl p-3 bg-white shadow-sm">
-                <h3 className="text-xs font-bold text-gray-700 mb-2">{T('🎯 分析目標', '🎯 Analysis Target')}</h3>
-                <select className="w-full border-2 border-blue-200 rounded-lg px-3 py-2 text-sm bg-blue-50 font-medium" value={target} onChange={e => { setTarget(e.target.value); setExpRows({}); }}>
-                  <option value="">{T('-- 選擇目標 --', '-- Select Target --')}</option>
-                  {nodes.map(n => <option key={n.id} value={n.id}>{n.type === 'person' ? '👤' : '🏢'} {n.name}</option>)}
-                </select>
-                <p className="text-xs text-gray-400 mt-1.5">{T('💡 也可在圖中點擊節點設為目標', '💡 Click a node in the chart to set target')}</p>
-                <div className="flex items-center gap-2 mt-2 pt-2 border-t">
-                  <span className="text-xs text-gray-500 font-medium">{T('UBO 門檻', 'UBO Threshold:')}</span>
-                  <input type="number" className="border rounded px-2 py-1 text-sm w-16 text-center font-bold" value={threshold} onChange={e => setThreshold(parseFloat(e.target.value) || 25)} min="1" max="100" />
-                  <span className="text-xs text-gray-500">%</span>
-                </div>
-              </div>
-              <div className="border rounded-xl p-3 bg-white shadow-sm">
-                <h3 className="text-xs font-bold text-gray-700 mb-2">{T('⚠️ UBO 最終受益人', '⚠️ Ultimate Beneficial Owner')}</h3>
-                {ubos.length > 0 ? ubos.map((u, idx) => (
-                  <div key={idx} className="bg-red-50 border border-red-200 rounded-lg p-2.5 mb-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-bold truncate">{u.node.type === 'person' ? '👤' : '🏢'} {u.node.name}</span>
-                      <span className="text-base font-black text-red-600 flex-shrink-0">{u.eff.toFixed(4)}%</span>
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">{u.paths.length} {T('條持股路徑', 'path(s)')}</div>
-                  </div>
-                )) : <p className="text-xs text-gray-400 text-center py-3">{target ? `${T('未發現 UBO ≥', 'No UBO ≥')} ${threshold}%` : T('請先選擇目標', 'Select a target')}</p>}
-              </div>
-              {target && analysis.length > 0 && (
-                <div className="border rounded-xl p-3 bg-white shadow-sm">
-                  <h3 className="text-xs font-bold text-gray-700 mb-2">{T('📊 統計摘要', '📊 Statistics')}</h3>
-                  <div className="grid grid-cols-2 gap-2 text-center">
-                    {[
-                      [analysis.length, T('全部股東', 'All SH'), 'bg-blue-50', 'text-blue-600'],
-                      [ubos.length, 'UBO', 'bg-red-50', 'text-red-600'],
-                      [roots.length, T('最終股東', 'Ultimate SH'), 'bg-green-50', 'text-green-600'],
-                      [Math.max(0, ...analysis.flatMap(r => r.paths.map(p => p.edges.length))), T('最深層數', 'Max Depth'), 'bg-purple-50', 'text-purple-600'],
-                    ].map(([v, l, bg, tc], idx) => (
-                      <div key={idx} className={`${bg} rounded-lg p-2`}>
-                        <div className={`text-xl font-black ${tc}`}>{v}</div>
-                        <div className="text-xs text-gray-500">{l}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </>)}
-          </div>
+  const calcSharesPreview = useMemo(() => {
+    if (newRel.inputMode !== 'shares' || !newRel.toId) return null;
+    const toEntity = entities.find(e => e.id === newRel.toId);
+    if (!toEntity || !toEntity.totalShares) return null;
+    const total = parseFloat(toEntity.totalShares);
+    const held = parseFloat(newRel.sharesHeld);
+    if (!total || total <= 0 || isNaN(held)) return null;
+    return Math.round((held / total) * 10000) / 100;
+  }, [newRel.inputMode, newRel.toId, newRel.sharesHeld, entities]);
+
+  const companyEntities = useMemo(() => entities.filter(e => e.type === 'company'), [entities]);
+
+  const findUBOs = useMemo(() => {
+    const ubos = [];
+    const persons = entities.filter(e => e.type === 'person');
+    const companies = entities.filter(e => e.type === 'company');
+    const calcChain = (personId, targetId, visited = new Set()) => {
+      if (visited.has(targetId)) return [];
+      visited.add(targetId);
+      const directRels = relationships.filter(r => r.fromId === personId && r.toId === targetId);
+      const chains = directRels.map(r => [{ percentage: r.percentage, via: targetId, controlTypes: r.controlTypes, isNominee: r.isNominee }]);
+      companies.forEach(comp => {
+        const relsToTarget = relationships.filter(r => r.fromId === comp.id && r.toId === targetId);
+        if (relsToTarget.length === 0) return;
+        const subChains = calcChain(personId, comp.id, new Set(visited));
+        subChains.forEach(sc => { relsToTarget.forEach(rt => { chains.push([...sc, { percentage: rt.percentage, via: targetId, controlTypes: rt.controlTypes, isNominee: rt.isNominee }]); }); });
+      });
+      return chains;
+    };
+    companies.forEach(company => {
+      persons.forEach(person => {
+        const chains = calcChain(person.id, company.id);
+        chains.forEach(chain => {
+          const effectivePct = chain.reduce((acc, step) => acc * step.percentage / 100, 1) * 100;
+          const allControlTypes = [...new Set(chain.flatMap(s => s.controlTypes))];
+          const hasNominee = chain.some(s => s.isNominee);
+          if (effectivePct >= 25 || allControlTypes.some(ct => ct !== 'Ownership')) {
+            ubos.push({ personId: person.id, personName: person.name, companyId: company.id, companyName: company.name, effectivePct: Math.round(effectivePct * 100) / 100, chain, depth: chain.length, controlTypes: allControlTypes, hasNominee });
+          }
+        });
+      });
+    });
+    return ubos;
+  }, [entities, relationships]);
+
+  const complexityWarnings = useMemo(() => {
+    const warnings = [];
+    entities.forEach(entity => {
+      const crr = calcCRR(entity);
+      crr.flags.forEach(f => {
+        if (['nomineeStructure', 'bearerShareJurisdiction', 'shellRisk'].includes(f))
+          warnings.push({ entityId: entity.id, entityName: entity.name, warning: t[f] || f, severity: 'high' });
+        if (f === 'autoHighRiskTrust')
+          warnings.push({ entityId: entity.id, entityName: entity.name, warning: t.autoHighRiskTrust, severity: 'high' });
+        if (f === 'autoHighRiskNominee')
+          warnings.push({ entityId: entity.id, entityName: entity.name, warning: t.autoHighRiskNominee, severity: 'high' });
+      });
+    });
+    const maxDepth = findUBOs.reduce((max, u) => Math.max(max, u.depth), 0);
+    if (maxDepth > 3) warnings.push({ entityId: null, entityName: t.complexStructure, warning: `${t.ownershipChainDepth}: ${maxDepth} ${t.assessCommercial}`, severity: 'high' });
+    const offshoreCount = [...new Set(entities.map(e => e.jurisdiction))].filter(j => isOffshore(j)).length;
+    if (offshoreCount >= 3) warnings.push({ entityId: null, entityName: t.complexStructure, warning: `${offshoreCount} ${t.offshoreJurisdictions}`, severity: 'medium' });
+    return warnings;
+  }, [entities, relationships, findUBOs, t]);
+
+  const filteredEntities = entities.filter(e => e.name.toLowerCase().includes(searchTerm.toLowerCase()) || e.jurisdiction.toLowerCase().includes(searchTerm.toLowerCase()));
+
+  const getReviewCycle = (level, forced) => {
+    if (forced) return { months: 12, label: t.annual };
+    return level === 'High' ? { months: 12, label: t.annual } : level === 'Medium' ? { months: 24, label: t.biennial } : { months: 36, label: t.triennial };
+  };
+
+  const handleSelectEntity = (id) => { setSelectedEntity(id); setDetailOpen(true); };
+
+  const ForcedHighRiskBanner = ({ entity }) => {
+    if (!isForcedHighRisk(entity)) return null;
+    return (
+      <div className="bg-red-100 border-2 border-red-400 border-dashed rounded-lg p-2 text-xs">
+        <div className="flex items-center gap-1.5 text-red-800 font-bold">
+          <Lock size={12} />
+          <span>{t.lockedHighRisk}</span>
+          <span className="bg-red-600 text-white px-1.5 py-0.5 rounded text-xs ml-auto">{t.autoTag}</span>
         </div>
+        <div className="text-red-700 mt-1">{entity.subtype === 'Nominee Shareholder' ? t.autoHighRiskNominee : t.autoHighRiskTrust}</div>
+      </div>
+    );
+  };
 
-        {/* ── 主區域 ── */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-auto relative bg-gray-50" style={{ backgroundImage: 'radial-gradient(#e5e7eb 1px, transparent 1px)', backgroundSize: '20px 20px' }}>
-            <div className="sticky top-2 left-2 z-10 inline-flex items-center gap-1 bg-white/90 backdrop-blur rounded-lg shadow border px-2 py-1 ml-2 mt-2">
-              <button onClick={() => setZoom(z => Math.max(0.2, +(z - 0.1).toFixed(1)))} className="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 font-bold text-sm">−</button>
-              <span className="text-xs w-10 text-center font-medium">{(zoom * 100).toFixed(0)}%</span>
-              <button onClick={() => setZoom(z => Math.min(2, +(z + 0.1).toFixed(1)))} className="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 font-bold text-sm">+</button>
-              <div className="w-px h-4 bg-gray-200 mx-0.5" />
-              <button onClick={() => setZoom(1)} className="text-xs text-blue-600 font-medium hover:underline px-1">1:1</button>
-            </div>
-
-            {nodes.length > 0 ? (
-              <div style={{ transform: `scale(${zoom})`, transformOrigin: 'top left', width: lay.w, height: lay.h, minWidth: lay.w }}>
-                <svg width={lay.w} height={lay.h}>
-                  <defs>
-                    <marker id="arw" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#94a3b8" /></marker>
-                  </defs>
-                  {edges.map(e => {
-                    const fp = lay.pos[e.from], tp = lay.pos[e.to];
-                    if (!fp || !tp) return null;
-                    const x1 = fp.x + NW / 2, y1 = fp.y + NH, x2 = tp.x + NW / 2, y2 = tp.y;
-                    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-                    const hasS = e.shares != null;
-                    const lbl = `${e.pct.toFixed(4)}%`;
-                    const slbl = hasS ? `(${fmtShort(e.shares)}${T('股',' shr')})` : '';
-                    const tw = Math.max(lbl.length, slbl.length) * 6.5 + 18;
-                    const lw = Math.max(56, tw);
-                    const lh = hasS ? 36 : 22;
-                    return (
-                      <g key={e.id}>
-                        <path d={curve(x1, y1, x2, y2)} fill="none" stroke="#94a3b8" strokeWidth="1.5" markerEnd="url(#arw)" />
-                        <rect x={mx - lw / 2} y={my - lh / 2} width={lw} height={lh} rx={lh / 2} fill="white" stroke="#cbd5e1" strokeWidth="1" />
-                        {hasS ? (<>
-                          <text x={mx} y={my - 2} textAnchor="middle" fontSize="10" fontWeight="700" fill="#334155">{lbl}</text>
-                          <text x={mx} y={my + 11} textAnchor="middle" fontSize="8" fontWeight="500" fill="#64748b">{slbl}</text>
-                        </>) : (
-                          <text x={mx} y={my + 4} textAnchor="middle" fontSize="10" fontWeight="700" fill="#334155">{lbl}</text>
-                        )}
-                      </g>
-                    );
-                  })}
-                  {nodes.map(n => {
-                    const p = lay.pos[n.id]; if (!p) return null;
-                    const isPerson = n.type === 'person';
-                    const isTgt = n.id === target;
-                    const isRoot = !edges.some(e => e.to === n.id);
-                    return (
-                      <g key={n.id} className="cursor-pointer" onClick={() => { setTarget(n.id); setExpRows({}); if (tab !== 'analyze') setTab('analyze'); }}>
-                        {isTgt && <rect x={p.x - 4} y={p.y - 4} width={NW + 8} height={NH + 8} rx="14" fill="none" stroke="#f59e0b" strokeWidth="2.5" strokeDasharray="6 3" />}
-                        <rect x={p.x} y={p.y} width={NW} height={NH} rx="10"
-                          fill={isTgt ? '#fef9c3' : isPerson ? '#dcfce7' : '#eff6ff'}
-                          stroke={isTgt ? '#eab308' : isPerson ? '#22c55e' : '#3b82f6'}
-                          strokeWidth={isTgt ? 2 : 1.5} />
-                        <foreignObject x={p.x} y={p.y} width={NW} height={NH}>
-                          <div style={{ width: NW, height: NH, display: 'flex', alignItems: 'center', padding: '0 10px', gap: 6, overflow: 'hidden' }}>
-                            <span style={{ fontSize: 17, flexShrink: 0, lineHeight: 1 }}>{isPerson ? '👤' : '🏢'}</span>
-                            <span style={{ fontSize: 10.5, lineHeight: '13px', fontWeight: 600, color: '#1e293b', overflow: 'hidden', wordBreak: 'break-all', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' }}>{n.name}</span>
-                          </div>
-                        </foreignObject>
-                        {isTgt && <text x={p.x + NW / 2} y={p.y - 10} textAnchor="middle" fontSize="10" fill="#b45309" fontWeight="bold">🎯 {T('分析目標', 'Target')}</text>}
-                        {isRoot && !isTgt && <circle cx={p.x + NW - 6} cy={p.y + 6} r="5" fill="#22c55e" stroke="white" strokeWidth="1.5" />}
-                      </g>
-                    );
-                  })}
-                </svg>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
-                <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="8" y="14" width="7" height="7" rx="1"/><path d="M6 10v2a2 2 0 0 0 2 2h1M17 10v2a2 2 0 0 1-2 2h-1"/></svg>
-                <p className="text-sm">{T('請先新增實體和關係，或點擊「載入範例」', 'Add entities & relations, or click "Load Demo"')}</p>
-              </div>
-            )}
+  const EntityForm = ({ entity, setEntity, onSubmit, onCancel, title }) => {
+    const subtypes = entity.type === 'company' ? ENTITY_SUBTYPES_COMPANY : ENTITY_SUBTYPES_PERSON;
+    const forced = isForcedHighRisk(entity);
+    return (
+      <div className="bg-white border rounded-lg p-2.5 space-y-1.5 text-xs shadow-sm">
+        <h3 className="font-bold text-sm">{title}</h3>
+        {forced && <ForcedHighRiskBanner entity={entity} />}
+        <div className="grid grid-cols-2 gap-1.5">
+          <div><label className="text-gray-500">{t.name} *</label><input className="w-full border rounded px-1.5 py-1 text-xs" value={entity.name} onChange={e => setEntity({ ...entity, name: e.target.value })} /></div>
+          <div><label className="text-gray-500">{t.type}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.type} onChange={e => {
+            const newType = e.target.value;
+            const newSubtype = newType === 'company' ? 'Standard Company' : 'Individual';
+            setEntity({ ...entity, type: newType, subtype: newSubtype, totalShares: newType === 'person' ? '' : entity.totalShares });
+          }}><option value="company">{t.company}</option><option value="person">{t.person}</option></select></div>
+          <div><label className="text-gray-500">{t.jurisdiction}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.jurisdiction} onChange={e => setEntity({ ...entity, jurisdiction: e.target.value })}>{ALL_JURISDICTIONS.map(j => <option key={j} value={j}>{j}{FATF_HIGH_RISK.includes(j) ? ' ⚠️' : isOffshore(j) ? ' 🏝️' : ''}</option>)}</select></div>
+          <div>
+            <label className="text-gray-500 flex items-center gap-1">
+              {t.subtype}
+              {FORCED_HIGH_RISK_SUBTYPES.includes(entity.subtype) && <Lock size={9} className="text-red-500" />}
+            </label>
+            <select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.subtype} onChange={e => setEntity({ ...entity, subtype: e.target.value })}>
+              {subtypes.map(s => <option key={s} value={s}>{s}{FORCED_HIGH_RISK_SUBTYPES.includes(s) ? ' 🔒' : ''}</option>)}
+            </select>
           </div>
-
-          {/* ── 穿透明細表 ── */}
-          {tab === 'analyze' && target && analysis.length > 0 && (
-            <div className="border-t bg-white overflow-auto flex-shrink-0" style={{ maxHeight: '38vh' }}>
-              <div className="p-3 pb-1 flex items-center gap-2 border-b bg-gray-50 sticky top-0 z-10">
-                <span className="text-xs font-bold text-gray-700">{T('🔍 穿透持股明細', '🔍 Ownership Detail')}</span>
-                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold">{nn(target)}</span>
-                <div className="flex-1" />
-                <span className="text-xs text-gray-400">{analysis.length} {T('個股東', 'shareholder(s)')}</span>
-              </div>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50 text-left border-b text-xs text-gray-500 font-bold">
-                    <th className="py-1.5 px-3 w-7"></th>
-                    <th className="py-1.5 px-3">{T('股東', 'Shareholder')}</th>
-                    <th className="py-1.5 px-3">{T('層級', 'Level')}</th>
-                    <th className="py-1.5 px-3 text-right">{T('實際持股', 'Effective %')}</th>
-                    <th className="py-1.5 px-3 text-center">{T('路徑', 'Paths')}</th>
-                    <th className="py-1.5 px-3 text-center">UBO</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {analysis.map((r, idx) => {
-                    const isRt = !edges.some(e => e.to === r.node.id);
-                    const isU = isRt && r.eff >= threshold;
-                    const isE = expRows[r.node.id];
-                    return (
-                      <React.Fragment key={idx}>
-                        <tr className={`border-b cursor-pointer transition-colors ${isU ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-gray-50'}`} onClick={() => togRow(r.node.id)}>
-                          <td className="py-1.5 px-3 text-gray-400 text-xs">{r.paths.length > 0 ? (isE ? '▼' : '▶') : ''}</td>
-                          <td className="py-1.5 px-3 font-medium text-xs">{r.node.type === 'person' ? '👤' : '🏢'} {r.node.name}</td>
-                          <td className="py-1.5 px-3"><span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${isRt ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{isRt ? T('最終', 'Ultimate') : T('中間', 'Middle')}</span></td>
-                          <td className={`py-1.5 px-3 text-right font-black ${isU ? 'text-red-600' : 'text-blue-600'}`}>{r.eff.toFixed(4)}%</td>
-                          <td className="py-1.5 px-3 text-center text-xs text-gray-400">{r.paths.length}</td>
-                          <td className="py-1.5 px-3 text-center">{isU && <span className="bg-red-100 text-red-600 text-xs px-2 py-0.5 rounded-full font-bold">⚠ UBO</span>}</td>
-                        </tr>
-                        {isE && r.paths.map((p, j) => (
-                          <tr key={`${idx}-${j}`} className="bg-blue-50/50 border-b">
-                            <td></td>
-                            <td colSpan={4} className="py-1.5 px-3">
-                              <div className="flex items-center gap-1 flex-wrap text-xs">
-                                <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold flex-shrink-0">{T('路徑', 'Path')} {j + 1}</span>
-                                <span className="font-semibold text-gray-700">{r.node.name}</span>
-                                {p.edges.map((pe, k) => (
-                                  <React.Fragment key={k}>
-                                    <span className="text-blue-500 font-bold">—[{pe.pct.toFixed(4)}%{pe.shares != null ? ` / ${fmtNum(pe.shares)}${T('股',' shr')}` : ''}]→</span>
-                                    <span className="font-semibold text-gray-700">{nn(pe.to)}</span>
-                                  </React.Fragment>
-                                ))}
-                              </div>
-                            </td>
-                            <td className="py-1.5 px-3 text-right text-xs font-black text-purple-600 whitespace-nowrap">{p.pct.toFixed(4)}%</td>
-                          </tr>
-                        ))}
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
+          {entity.type === 'company' && (
+            <div className="col-span-2">
+              <label className="text-gray-500 flex items-center gap-1"><Hash size={10} />{t.totalShares}</label>
+              <input type="number" min="0" className="w-full border rounded px-1.5 py-1 text-xs" placeholder="e.g. 10000"
+                value={entity.totalShares} onChange={e => setEntity({ ...entity, totalShares: e.target.value })} />
+              <div className="text-gray-400 mt-0.5 text-xs flex items-center gap-1"><Info size={9} />{t.shareInfo}</div>
             </div>
           )}
+          <div><label className="text-gray-500">{t.pepStatus}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.pepType} onChange={e => setEntity({ ...entity, pepType: e.target.value })}>{PEP_TYPES.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
+          <div><label className="text-gray-500">{t.sanctions}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.sanctionStatus} onChange={e => setEntity({ ...entity, sanctionStatus: e.target.value })}>{SANCTION_STATUS.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
+          <div><label className="text-gray-500">{t.adverseMedia}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.adverseMedia} onChange={e => setEntity({ ...entity, adverseMedia: e.target.value })}>{ADVERSE_MEDIA_STATUS.map(a => <option key={a} value={a}>{a}</option>)}</select></div>
+          <div><label className="text-gray-500">{t.industry}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.industry} onChange={e => setEntity({ ...entity, industry: e.target.value })}><option value="">{t.select}</option>{HIGH_RISK_INDUSTRIES.map(i2 => <option key={i2} value={i2}>⚠️ {i2}</option>)}<option value="Banking">Banking</option><option value="Insurance">Insurance</option><option value="Manufacturing">Manufacturing</option><option value="Technology">Technology</option><option value="Retail">Retail</option><option value="Other">Other</option></select></div>
+          <div><label className="text-gray-500">{t.sof}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.sof} onChange={e => setEntity({ ...entity, sof: e.target.value })}><option value="">{t.select}</option>{SOF_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
+          <div><label className="text-gray-500">{t.sofDetail}</label><input className="w-full border rounded px-1.5 py-1 text-xs" value={entity.sofDetail} onChange={e => setEntity({ ...entity, sofDetail: e.target.value })} /></div>
+          <div><label className="text-gray-500">{t.sow}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.sow} onChange={e => setEntity({ ...entity, sow: e.target.value })}><option value="">{t.select}</option>{SOF_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
+          <div><label className="text-gray-500">{t.sowDetail}</label><input className="w-full border rounded px-1.5 py-1 text-xs" value={entity.sowDetail} onChange={e => setEntity({ ...entity, sowDetail: e.target.value })} /></div>
+          {entity.type === 'company' && <div><label className="text-gray-500">{t.incorporationDate}</label><input type="date" className="w-full border rounded px-1.5 py-1 text-xs" value={entity.incorporationDate} onChange={e => setEntity({ ...entity, incorporationDate: e.target.value })} /></div>}
+          <div><label className="text-gray-500">{t.lastReviewDate}</label><input type="date" className="w-full border rounded px-1.5 py-1 text-xs" value={entity.lastReviewDate} onChange={e => setEntity({ ...entity, lastReviewDate: e.target.value })} /></div>
+          <div className="col-span-2"><label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={entity.isRegulated} onChange={e => setEntity({ ...entity, isRegulated: e.target.checked })} /> {t.regulated}</label></div>
+          <div className="col-span-2"><label className="text-gray-500">{t.notes}</label><textarea className="w-full border rounded px-1.5 py-1 text-xs" rows={2} value={entity.notes} onChange={e => setEntity({ ...entity, notes: e.target.value })} /></div>
+        </div>
+        <div className="flex gap-2"><button onClick={onSubmit} className="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700">{t.save}</button><button onClick={onCancel} className="bg-gray-200 px-3 py-1 rounded text-xs hover:bg-gray-300">{t.cancel}</button></div>
+      </div>
+    );
+  };
+
+  const DetailModal = () => {
+    const entity = entities.find(e => e.id === selectedEntity);
+    if (!entity || !detailOpen) return null;
+    const crr = calcCRR(entity);
+    const cycle = getReviewCycle(crr.level, crr.forced);
+    const relatedUBOs = findUBOs.filter(u => u.companyId === selectedEntity);
+    const incomingRels = relationships.filter(r => r.toId === selectedEntity);
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setDetailOpen(false)}>
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-screen overflow-y-auto m-4 p-4 space-y-3" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-bold flex items-center gap-2">
+              {entity.type === 'company' ? <Building2 size={18} className="text-blue-600" /> : <User size={18} className="text-green-600" />}
+              {entity.name}
+              {entity.sanctionStatus === 'Confirmed Hit' && <span className="bg-red-600 text-white text-xs px-2 py-0.5 rounded animate-pulse">{t.sanctioned}</span>}
+              {crr.forced && <span className="bg-red-700 text-white text-xs px-2 py-0.5 rounded flex items-center gap-0.5"><Lock size={9} />{t.autoTag}</span>}
+            </h3>
+            <button onClick={() => setDetailOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          </div>
+
+          {/* Forced High Risk Banner */}
+          {crr.forced && (
+            <div className="bg-red-100 border-2 border-red-400 border-dashed rounded-lg p-2.5">
+              <div className="flex items-center gap-2 text-red-800 font-bold text-xs">
+                <Lock size={14} />
+                <span>{t.lockedHighRisk}</span>
+              </div>
+              <div className="text-red-700 text-xs mt-1">{entity.subtype === 'Nominee Shareholder' ? t.autoHighRiskNominee : t.autoHighRiskTrust}</div>
+              <div className="text-red-600 text-xs mt-1 flex items-center gap-1"><Clock size={10} />{t.forcedAnnualReview}: {t.annual} | EDD</div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-1.5 text-xs">
+            <div className="bg-gray-50 rounded p-1.5"><span className="text-gray-500">{t.type}:</span> <span className="font-medium">{entity.type === 'company' ? t.company : t.person}</span></div>
+            <div className={`rounded p-1.5 ${crr.forced ? 'bg-red-50 border border-red-200' : 'bg-gray-50'}`}>
+              <span className="text-gray-500">{t.subtype}:</span> <span className="font-medium">{entity.subtype}</span>
+              {crr.forced && <Lock size={9} className="inline ml-1 text-red-500" />}
+            </div>
+            <div className="bg-gray-50 rounded p-1.5"><span className="text-gray-500">{t.jurisdiction}:</span> <span className="font-medium">{entity.jurisdiction}</span> {riskBadge(getJurisdictionRisk(entity.jurisdiction), t)}</div>
+            <div className="bg-gray-50 rounded p-1.5"><span className="text-gray-500">{t.industry}:</span> <span className="font-medium">{entity.industry || 'N/A'}</span></div>
+            {entity.type === 'company' && entity.totalShares && <div className="bg-gray-50 rounded p-1.5 col-span-2"><span className="text-gray-500">{t.totalShares}:</span> <span className="font-medium">{Number(entity.totalShares).toLocaleString()} {t.shares}</span></div>}
+          </div>
+          <div className={`rounded-lg p-2.5 border ${crr.level === 'High' ? 'bg-red-50 border-red-200' : crr.level === 'Medium' ? 'bg-yellow-50 border-yellow-200' : 'bg-green-50 border-green-200'}`}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-bold text-xs flex items-center gap-1">
+                {t.crr}
+                {crr.forced && <span className="bg-red-600 text-white px-1.5 py-0.5 rounded text-xs flex items-center gap-0.5"><Lock size={8} />{t.autoTag}</span>}
+              </span>
+              <div className="flex items-center gap-2">{riskBadge(crr.level, t)} <span className="text-xs font-mono">{crr.score}/100</span></div>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-1.5 mb-1"><div className={`h-1.5 rounded-full ${crr.level === 'High' ? 'bg-red-500' : crr.level === 'Medium' ? 'bg-yellow-500' : 'bg-green-500'}`} style={{ width: `${crr.score}%` }}></div></div>
+            <div className="text-xs space-y-0.5">{crr.flags.map((f, i) => (
+              <div key={i} className={`flex items-center gap-1 ${(f === 'autoHighRiskTrust' || f === 'autoHighRiskNominee') ? 'text-red-700 font-semibold' : ''}`}>
+                {(f === 'autoHighRiskTrust' || f === 'autoHighRiskNominee') ? <Lock size={9} /> : <AlertCircle size={9} />}
+                {t[f] || f}
+              </div>
+            ))}</div>
+            <div className={`mt-1 text-xs flex items-center gap-1 ${crr.forced ? 'text-red-700 font-semibold' : ''}`}>
+              {crr.forced ? <Lock size={9} /> : <Clock size={9} />}
+              {t.reviewCycle}: {cycle.label} | {crr.level === 'High' ? t.edd : crr.level === 'Medium' ? t.cdd : t.sdd}
+              {crr.forced && ` (${t.forcedAnnualReview})`}
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-1.5 text-xs">
+            <div className={`rounded p-1.5 border ${entity.pepType !== 'None' ? 'bg-amber-50 border-amber-200' : 'bg-gray-50'}`}><Crown size={10} /><div className="font-semibold">{t.pepStatus}</div><div>{entity.pepType}</div></div>
+            <div className={`rounded p-1.5 border ${entity.sanctionStatus.includes('Hit') ? 'bg-red-50 border-red-200' : 'bg-gray-50'}`}><Ban size={10} /><div className="font-semibold">{t.sanctions}</div><div>{entity.sanctionStatus}</div></div>
+            <div className={`rounded p-1.5 border ${entity.adverseMedia?.includes('High') ? 'bg-red-50 border-red-200' : 'bg-gray-50'}`}><Search size={10} /><div className="font-semibold">{t.adverseMedia}</div><div>{entity.adverseMedia}</div></div>
+          </div>
+          {incomingRels.length > 0 && <div><div className="text-xs font-semibold mb-1">{t.shareholders}:</div>{incomingRels.map(r => { const from = entities.find(e => e.id === r.fromId); return from ? <div key={r.id} className="text-xs bg-gray-50 rounded p-1 mb-0.5">{from.name} → {r.percentage}%{r.sharesHeld ? ` (${Number(r.sharesHeld).toLocaleString()} ${t.shares})` : ''} ({r.controlTypes?.join(', ')}) {r.isNominee && <span className="text-red-600 font-semibold">[{t.nominee}]</span>}</div> : null; })}</div>}
+          {relatedUBOs.length > 0 && <div><div className="text-xs font-semibold mb-1">{t.identifiedUBOs}:</div>{relatedUBOs.map((u, i) => <div key={i} className="text-xs bg-purple-50 border border-purple-200 rounded p-1 mb-0.5"><span className="font-semibold">{u.personName}</span> — {u.effectivePct}% {t.effectiveOwnership} {u.hasNominee && <span className="text-red-600">[{t.viaNominee}]</span>}</div>)}</div>}
+          {entity.notes && <div className="text-xs bg-gray-50 rounded p-1.5"><span className="font-semibold">{t.notes}:</span> {entity.notes}</div>}
+        </div>
+      </div>
+    );
+  };
+
+  const ReportView = () => {
+    const highRiskEntities = entities.filter(e => calcCRR(e).level === 'High');
+    const forcedEntities = entities.filter(e => isForcedHighRisk(e));
+    const sanctionHits = entities.filter(e => e.sanctionStatus === 'Confirmed Hit' || e.sanctionStatus === 'Potential Hit');
+    const peps = entities.filter(e => e.pepType !== 'None');
+    return (
+      <div className="space-y-3 p-4 overflow-y-auto h-full">
+        <div className="flex items-center justify-between"><h2 className="text-lg font-bold">📋 {t.reportTitle}</h2><button onClick={() => setShowReport(false)} className="text-gray-400 hover:text-gray-600"><X size={16} /></button></div>
+        <div className="text-xs text-gray-500">{t.generated}: {new Date().toISOString().split('T')[0]}</div>
+        <div className="grid grid-cols-4 gap-2 text-center">
+          <div className="bg-blue-50 rounded p-2"><div className="text-xl font-bold text-blue-700">{entities.length}</div><div className="text-xs">{t.totalEntities}</div></div>
+          <div className="bg-red-50 rounded p-2"><div className="text-xl font-bold text-red-700">{highRiskEntities.length}</div><div className="text-xs">{t.highRiskCount}</div></div>
+          <div className="bg-purple-50 rounded p-2"><div className="text-xl font-bold text-purple-700">{findUBOs.length}</div><div className="text-xs">{t.ubosIdentified}</div></div>
+          <div className="bg-orange-50 rounded p-2"><div className="text-xl font-bold text-orange-700">{complexityWarnings.length}</div><div className="text-xs">{t.warningsCount}</div></div>
+        </div>
+        {/* Policy: Forced High Risk entities */}
+        {forcedEntities.length > 0 && (
+          <div className="bg-red-50 border-2 border-red-300 border-dashed rounded-lg p-3">
+            <div className="font-bold text-red-800 text-sm flex items-center gap-1"><Lock size={14} />{t.forcedHighRisk}</div>
+            <div className="text-xs text-red-700 mt-1 mb-2">{t.trustNomineePolicy}</div>
+            {forcedEntities.map(e => <div key={e.id} className="text-xs mt-1 flex items-center gap-1">• <span className="font-semibold">{e.name}</span> <span className="text-red-500">({e.subtype})</span> — {t.annual} | EDD</div>)}
+          </div>
+        )}
+        {sanctionHits.length > 0 && <div className="bg-red-50 border-2 border-red-300 rounded-lg p-3"><div className="font-bold text-red-800 text-sm flex items-center gap-1"><Ban size={14} />{t.sanctionsAlert}</div>{sanctionHits.map(e => <div key={e.id} className="text-xs mt-1">• {e.name}: {e.sanctionStatus}</div>)}</div>}
+        {peps.length > 0 && <div className="bg-amber-50 border border-amber-300 rounded-lg p-3"><div className="font-bold text-amber-800 text-sm flex items-center gap-1"><Crown size={14} />{t.pepIdentified}</div>{peps.map(e => <div key={e.id} className="text-xs mt-1">• {e.name}: {e.pepType}</div>)}</div>}
+        {findUBOs.length > 0 && <div className="bg-purple-50 border border-purple-200 rounded-lg p-3"><div className="font-bold text-sm mb-1">{t.uboSummary}</div>{findUBOs.map((u, i) => <div key={i} className="text-xs mt-1">• {u.personName} → {u.companyName}: {u.effectivePct}% {u.hasNominee && `⚠️ ${t.viaNominee}`}</div>)}</div>}
+        {complexityWarnings.length > 0 && <div className="bg-orange-50 border border-orange-200 rounded-lg p-3"><div className="font-bold text-sm mb-1">⚠️ {t.complexityWarnings}</div>{complexityWarnings.map((w, i) => <div key={i} className="text-xs mt-1">• {w.entityName}: {w.warning}</div>)}</div>}
+        <div className="border rounded-lg overflow-hidden"><table className="w-full text-xs"><thead className="bg-gray-100"><tr><th className="p-1.5 text-left">{t.name}</th><th className="p-1.5">{t.type}</th><th className="p-1.5">{t.subtype}</th><th className="p-1.5">{t.jurisdiction}</th><th className="p-1.5">{t.crr}</th><th className="p-1.5">{t.ddLevel}</th><th className="p-1.5">{t.reviewCycle}</th></tr></thead><tbody>{entities.map(e => { const crr = calcCRR(e); const cycle = getReviewCycle(crr.level, crr.forced); return (<tr key={e.id} className={`border-t ${crr.forced ? 'bg-red-50' : ''}`}><td className="p-1.5 font-medium flex items-center gap-1">{e.name}{crr.forced && <Lock size={9} className="text-red-500" />}</td><td className="p-1.5 text-center">{e.type === 'company' ? t.company : t.person}</td><td className={`p-1.5 text-center ${crr.forced ? 'text-red-700 font-semibold' : ''}`}>{e.subtype}</td><td className="p-1.5 text-center">{e.jurisdiction}</td><td className="p-1.5 text-center">{riskBadge(crr.level, t)}</td><td className="p-1.5 text-center">{crr.level === 'High' ? 'EDD' : crr.level === 'Medium' ? 'CDD' : 'SDD'}</td><td className={`p-1.5 text-center ${crr.forced ? 'text-red-700 font-bold' : ''}`}>{cycle.label}</td></tr>); })}</tbody></table></div>
+      </div>
+    );
+  };
+
+  const tabs = [
+    { key: 'workspace', label: t.workspace, icon: <Layers size={13} /> },
+    { key: 'ubos', label: t.uboAnalysis, icon: <Eye size={13} /> },
+    { key: 'warnings', label: `${t.warnings} (${complexityWarnings.length})`, icon: <AlertTriangle size={13} /> },
+    { key: 'audit', label: t.auditTrail, icon: <History size={13} /> },
+  ];
+
+  const selectedToEntity = entities.find(e => e.id === newRel.toId);
+  const toHasShares = selectedToEntity && selectedToEntity.totalShares && parseFloat(selectedToEntity.totalShares) > 0;
+
+  return (
+    <div className="h-screen flex flex-col bg-gray-50 text-gray-900 overflow-hidden">
+      {/* HEADER */}
+      <div className="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-4 py-2 shrink-0">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Shield size={22} />
+            <div><h1 className="text-sm font-bold leading-tight">{t.appTitle}</h1><p className="text-xs text-slate-400">{t.appSubtitle}</p></div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setLang(lang === 'en' ? 'zh' : 'en')} className="bg-white/10 hover:bg-white/20 px-2.5 py-1 rounded text-xs flex items-center gap-1"><Languages size={13} />{lang === 'en' ? '中文' : 'EN'}</button>
+            <button onClick={() => { setShowReport(true); setActiveTab('report'); }} className="bg-white/10 hover:bg-white/20 px-2.5 py-1 rounded text-xs flex items-center gap-1"><FileText size={13} />{t.report}</button>
+          </div>
         </div>
       </div>
 
-      <div className="bg-white border-t px-4 py-1.5 text-center text-xs text-gray-400 flex-shrink-0">{T('多層 DAG 穿透分析 ｜ 支援百分比 / 股數輸入 ｜ 所有路徑加總 ｜ 點擊節點分析', 'Multi-Layer DAG ｜ Supports % / Shares Input ｜ Sum All Paths ｜ Click Node to Analyze')}</div>
+      {/* Policy Banner */}
+      <div className="bg-red-50 border-b border-red-200 px-4 py-1 text-xs text-red-700 flex items-center gap-2 shrink-0">
+        <Lock size={11} className="shrink-0" />
+        <span className="font-medium">{t.trustNomineePolicy}</span>
+      </div>
+
+      {/* TABS */}
+      <div className="flex border-b bg-white shrink-0 overflow-x-auto">
+        {tabs.map(tab => (
+          <button key={tab.key} onClick={() => { setActiveTab(tab.key); setShowReport(false); }}
+            className={`flex items-center gap-1 px-3 py-1.5 text-xs font-medium border-b-2 whitespace-nowrap transition ${activeTab === tab.key && !showReport ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            {tab.icon}{tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* BODY */}
+      <div className="flex-1 flex overflow-hidden">
+        {showReport ? <ReportView /> : (
+          <>
+            {activeTab === 'workspace' && (
+              <>
+                {/* LEFT PANEL */}
+                <div className={`shrink-0 border-r bg-white flex flex-col transition-all duration-200 ${panelCollapsed ? 'w-10' : 'w-96'}`}>
+                  {panelCollapsed ? (
+                    <div className="flex flex-col items-center py-2 gap-2">
+                      <button onClick={() => setPanelCollapsed(false)} className="text-gray-400 hover:text-blue-600"><PanelLeftOpen size={16} /></button>
+                      <div className="text-xs text-gray-400 mt-2" style={{ writingMode: 'vertical-rl' }}>{t.entitiesPanel} & {t.relationshipsPanel}</div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex border-b shrink-0">
+                        <button onClick={() => setLeftPanelTab('entities')} className={`flex-1 text-xs py-1.5 font-medium border-b-2 flex items-center justify-center gap-1 ${leftPanelTab === 'entities' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500'}`}><Users size={12} />{t.entitiesPanel}</button>
+                        <button onClick={() => setLeftPanelTab('relationships')} className={`flex-1 text-xs py-1.5 font-medium border-b-2 flex items-center justify-center gap-1 ${leftPanelTab === 'relationships' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500'}`}><Link2 size={12} />{t.relationshipsPanel}</button>
+                        <button onClick={() => setPanelCollapsed(true)} className="px-2 text-gray-400 hover:text-gray-600"><PanelLeftClose size={14} /></button>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+                        {leftPanelTab === 'entities' && (
+                          <>
+                            <div className="flex items-center gap-1">
+                              <div className="relative flex-1"><Search size={12} className="absolute left-2 top-2 text-gray-400" /><input className="w-full border rounded pl-7 pr-2 py-1.5 text-xs" placeholder={t.search} value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
+                              <button onClick={() => { setShowAddEntity(true); setEditingEntity(null); }} className="bg-blue-600 text-white px-2 py-1.5 rounded text-xs hover:bg-blue-700 flex items-center gap-0.5 whitespace-nowrap shrink-0"><Plus size={12} />{t.addEntity}</button>
+                            </div>
+                            {showAddEntity && <EntityForm entity={newEntity} setEntity={setNewEntity} onSubmit={addEntity} onCancel={() => setShowAddEntity(false)} title={t.addEntity} />}
+                            {editingEntity && <EntityForm entity={editingEntity} setEntity={setEditingEntity} onSubmit={() => { updateEntity(editingEntity.id, editingEntity); setEditingEntity(null); }} onCancel={() => setEditingEntity(null)} title={t.editEntity} />}
+                            {filteredEntities.map(entity => {
+                              const crr = calcCRR(entity);
+                              return (
+                                <div key={entity.id}
+                                  className={`border rounded-lg p-2 hover:shadow-sm transition cursor-pointer text-xs ${selectedEntity === entity.id ? 'ring-2 ring-blue-400 bg-blue-50' : 'bg-white'} ${entity.sanctionStatus === 'Confirmed Hit' ? 'border-red-400 bg-red-50' : crr.forced ? 'border-red-300 border-dashed bg-red-50/50' : ''}`}
+                                  onClick={() => handleSelectEntity(entity.id)}>
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-1 flex-wrap min-w-0">
+                                      {entity.type === 'company' ? <Building2 size={13} className="text-blue-600 shrink-0" /> : <User size={13} className="text-green-600 shrink-0" />}
+                                      <span className="font-semibold truncate">{entity.name}</span>
+                                      {crr.forced && <span className="bg-red-700 text-white text-xs px-1 rounded flex items-center gap-0.5 shrink-0"><Lock size={8} />{t.autoTag}</span>}
+                                      {entity.pepType !== 'None' && <span className="bg-amber-100 text-amber-800 text-xs px-1 rounded shrink-0">PEP</span>}
+                                      {entity.sanctionStatus === 'Confirmed Hit' && <span className="bg-red-600 text-white text-xs px-1 rounded animate-pulse shrink-0">⛔</span>}
+                                    </div>
+                                    <div className="flex items-center gap-1 shrink-0 ml-1">
+                                      {riskBadge(crr.level, t)}
+                                      <button onClick={(e) => { e.stopPropagation(); setEditingEntity({ ...entity }); setShowAddEntity(false); }} className="text-gray-400 hover:text-blue-600"><FileText size={11} /></button>
+                                      <button onClick={(e) => { e.stopPropagation(); removeEntity(entity.id); }} className="text-gray-400 hover:text-red-600"><Trash2 size={11} /></button>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 mt-0.5 text-gray-500">
+                                    <span className="flex items-center gap-0.5"><Globe size={9} />{entity.jurisdiction}</span>
+                                    <span className={crr.forced ? 'text-red-600 font-semibold' : ''}>CRR: {crr.score}</span>
+                                    {crr.forced && <span className="text-red-600 flex items-center gap-0.5"><Clock size={9} />{t.annual}</span>}
+                                    {entity.type === 'company' && entity.totalShares && <span className="flex items-center gap-0.5"><Hash size={9} />{Number(entity.totalShares).toLocaleString()}</span>}
+                                  </div>
+                                  {crr.forced && <div className="text-red-600 mt-0.5 text-xs flex items-center gap-0.5"><Lock size={8} />{entity.subtype} → {t.forcedHighRisk} + {t.forcedAnnualReview}</div>}
+                                </div>
+                              );
+                            })}
+                            {entities.length === 0 && <div className="text-center text-gray-400 py-8 text-xs">{t.noEntities}</div>}
+                          </>
+                        )}
+                        {leftPanelTab === 'relationships' && (
+                          <>
+                            <button onClick={() => setShowRelForm(true)} className="bg-blue-600 text-white px-3 py-1.5 rounded text-xs hover:bg-blue-700 flex items-center gap-1 w-full justify-center"><Plus size={12} />{t.addRelationship}</button>
+                            {companyEntities.length === 0 && <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-800 flex items-center gap-1"><Info size={12} />{t.noCompanyTarget}</div>}
+                            {showRelForm && (
+                              <div className="bg-white border rounded-lg p-2.5 space-y-2 text-xs shadow-sm">
+                                <div className="grid grid-cols-2 gap-1.5">
+                                  <div>
+                                    <label className="text-gray-500">{t.from}</label>
+                                    <select className="w-full border rounded px-1.5 py-1 text-xs" value={newRel.fromId} onChange={e => setNewRel({ ...newRel, fromId: e.target.value })}>
+                                      <option value="">{t.select}</option>
+                                      {entities.map(e => <option key={e.id} value={e.id}>{e.type === 'company' ? '🏢' : '👤'} {e.name}</option>)}
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="text-gray-500 flex items-center gap-1">{t.to}</label>
+                                    <select className="w-full border rounded px-1.5 py-1 text-xs" value={newRel.toId} onChange={e => setNewRel({ ...newRel, toId: e.target.value, sharesHeld: '', percentage: 0 })}>
+                                      <option value="">{t.select}</option>
+                                      {companyEntities.map(e => (
+                                        <option key={e.id} value={e.id}>🏢 {e.name}{e.totalShares ? ` (${Number(e.totalShares).toLocaleString()} ${t.shares})` : ''}</option>
+                                      ))}
+                                    </select>
+                                    <div className="text-gray-400 mt-0.5 flex items-center gap-0.5"><Info size={8} />{t.onlyCompaniesAsTarget}</div>
+                                  </div>
+                                </div>
+
+                                {/* Input Mode Toggle */}
+                                <div className="bg-slate-50 rounded-lg p-2 space-y-1.5">
+                                  <label className="text-gray-500 font-semibold">{t.inputMode}</label>
+                                  <div className="flex rounded-lg overflow-hidden border">
+                                    <button
+                                      onClick={() => setNewRel({ ...newRel, inputMode: 'percentage', sharesHeld: '' })}
+                                      className={`flex-1 py-1.5 text-xs font-medium flex items-center justify-center gap-1 transition ${newRel.inputMode === 'percentage' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                                      <Percent size={11} />{t.byPercentage}
+                                    </button>
+                                    <button
+                                      onClick={() => setNewRel({ ...newRel, inputMode: 'shares', percentage: 0 })}
+                                      className={`flex-1 py-1.5 text-xs font-medium flex items-center justify-center gap-1 transition ${newRel.inputMode === 'shares' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'} ${!toHasShares ? 'opacity-50' : ''}`}
+                                      disabled={!toHasShares}>
+                                      <Hash size={11} />{t.byShares}
+                                    </button>
+                                  </div>
+
+                                  {newRel.inputMode === 'percentage' ? (
+                                    <div>
+                                      <label className="text-gray-500">{t.ownershipPct}</label>
+                                      <div className="flex items-center gap-1">
+                                        <input type="number" min="0" max="100" step="0.01" className="w-full border rounded px-1.5 py-1.5 text-xs"
+                                          value={newRel.percentage} onChange={e => setNewRel({ ...newRel, percentage: parseFloat(e.target.value) || 0 })} />
+                                        <span className="text-gray-400 font-bold">%</span>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-1">
+                                      {!toHasShares && newRel.toId && (
+                                        <div className="bg-amber-50 border border-amber-200 rounded p-1.5 text-amber-700 flex items-center gap-1">
+                                          <AlertCircle size={11} />{t.shareInfo}
+                                        </div>
+                                      )}
+                                      {toHasShares && (
+                                        <>
+                                          <div className="flex items-center gap-1 text-gray-500">
+                                            <Building2 size={10} />
+                                            <span>{selectedToEntity.name} {t.totalShares}: <strong className="text-gray-800">{Number(selectedToEntity.totalShares).toLocaleString()}</strong></span>
+                                          </div>
+                                          <div>
+                                            <label className="text-gray-500">{t.sharesHeld}</label>
+                                            <div className="flex items-center gap-1">
+                                              <input type="number" min="0" max={selectedToEntity.totalShares} className="w-full border rounded px-1.5 py-1.5 text-xs"
+                                                placeholder={`0 — ${Number(selectedToEntity.totalShares).toLocaleString()}`}
+                                                value={newRel.sharesHeld} onChange={e => setNewRel({ ...newRel, sharesHeld: e.target.value })} />
+                                              <span className="text-gray-400 text-xs shrink-0">{t.shares}</span>
+                                            </div>
+                                          </div>
+                                          {calcSharesPreview !== null && (
+                                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 flex items-center justify-between">
+                                              <span className="text-blue-700 flex items-center gap-1"><Percent size={11} />{t.autoCalc}:</span>
+                                              <span className="text-blue-900 font-bold text-sm">{calcSharesPreview}%</span>
+                                            </div>
+                                          )}
+                                        </>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div className="flex items-end"><label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={newRel.isNominee} onChange={e => setNewRel({ ...newRel, isNominee: e.target.checked })} />{t.nomineeArrangement}</label></div>
+                                <div><label className="text-gray-500">{t.controlTypes}</label><div className="flex flex-wrap gap-1 mt-0.5">{CONTROL_TYPES.map(ct => <label key={ct} className="flex items-center gap-0.5 text-xs bg-gray-50 rounded px-1 py-0.5"><input type="checkbox" checked={newRel.controlTypes?.includes(ct)} onChange={e => { const types = e.target.checked ? [...(newRel.controlTypes || []), ct] : (newRel.controlTypes || []).filter(tt => tt !== ct); setNewRel({ ...newRel, controlTypes: types }); }} />{ct}</label>)}</div></div>
+                                <div className="flex gap-2"><button onClick={addRelationship} className="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700">{t.add}</button><button onClick={() => setShowRelForm(false)} className="bg-gray-200 px-3 py-1 rounded text-xs hover:bg-gray-300">{t.cancel}</button></div>
+                              </div>
+                            )}
+                            {relationships.map(rel => {
+                              const from = entities.find(e => e.id === rel.fromId); const to2 = entities.find(e => e.id === rel.toId);
+                              return (
+                                <div key={rel.id} className={`bg-white border rounded-lg p-2 text-xs ${rel.isNominee ? 'border-red-300 bg-red-50' : ''}`}>
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      <span className="font-medium">{from?.name || '?'}</span><span className="text-gray-400">→</span><span className="font-medium">{to2?.name || '?'}</span>
+                                      <span className="bg-blue-100 text-blue-800 px-1.5 rounded font-semibold">{rel.percentage}%</span>
+                                      {rel.sharesHeld && <span className="bg-slate-100 text-slate-600 px-1.5 rounded">{Number(rel.sharesHeld).toLocaleString()} {t.shares}</span>}
+                                      {rel.isNominee && <span className="bg-red-100 text-red-800 px-1.5 rounded">{t.nominee}</span>}
+                                    </div>
+                                    <button onClick={() => removeRelationship(rel.id)} className="text-gray-400 hover:text-red-600 shrink-0"><Trash2 size={11} /></button>
+                                  </div>
+                                  <div className="text-gray-500 mt-0.5">{rel.controlTypes?.join(', ')}</div>
+                                </div>
+                              );
+                            })}
+                            {relationships.length === 0 && !showRelForm && <div className="text-center text-gray-400 py-8 text-xs">{t.noRelationships}</div>}
+                          </>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+                {/* DAG */}
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <DAGCanvas entities={entities} relationships={relationships} t={t} selectedEntity={selectedEntity} onSelectEntity={handleSelectEntity} />
+                </div>
+              </>
+            )}
+
+            {activeTab === 'ubos' && (
+              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                <h2 className="font-bold text-sm flex items-center gap-2"><Eye size={16} />{t.uboAnalysis}</h2>
+                <div className="bg-blue-50 border border-blue-200 rounded p-2 text-xs">{t.uboThreshold}</div>
+                {findUBOs.length > 0 ? findUBOs.map((ubo, i) => {
+                  const person = entities.find(e => e.id === ubo.personId);
+                  const crr = person ? calcCRR(person) : { level: 'Low', score: 0, flags: [], forced: false };
+                  return (
+                    <div key={i} className={`bg-white border rounded-lg p-2.5 ${crr.level === 'High' ? 'border-red-300' : ''} ${crr.forced ? 'border-dashed border-red-400' : ''}`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <User size={15} className="text-purple-600" /><span className="font-bold text-sm">{ubo.personName}</span>
+                          {riskBadge(crr.level, t)}
+                          {crr.forced && <span className="bg-red-700 text-white text-xs px-1.5 rounded flex items-center gap-0.5"><Lock size={8} />{t.autoTag}</span>}
+                          {person?.pepType !== 'None' && <span className="bg-amber-100 text-amber-800 text-xs px-1.5 rounded">PEP: {person.pepType}</span>}
+                          {ubo.hasNominee && <span className="bg-red-100 text-red-800 text-xs px-1.5 rounded">{t.viaNominee}</span>}
+                        </div>
+                        <span className="text-lg font-bold text-purple-700">{ubo.effectivePct}%</span>
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">→ {ubo.companyName} | {t.depth}: {ubo.depth} {t.layers} | {t.control}: {ubo.controlTypes.join(', ')}</div>
+                      {crr.forced && <div className="text-xs mt-1 text-red-700 flex items-center gap-1"><Lock size={9} />{person?.subtype} → {t.forcedHighRisk} + {t.forcedAnnualReview}</div>}
+                      {person?.sanctionStatus === 'Confirmed Hit' && <div className="text-xs mt-1 text-red-600 font-bold">⛔ {t.blockTransaction}</div>}
+                      {crr.flags.length > 0 && <div className="text-xs mt-1 text-gray-600">{t.flags}: {crr.flags.map(f => t[f] || f).join(' | ')}</div>}
+                    </div>
+                  );
+                }) : <div className="text-center text-gray-400 py-12 text-sm">{t.noUBOs}</div>}
+              </div>
+            )}
+
+            {activeTab === 'warnings' && (
+              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                <h2 className="font-bold text-sm flex items-center gap-2"><AlertTriangle size={16} />{t.warnings}</h2>
+                {entities.filter(e => e.sanctionStatus === 'Confirmed Hit').length > 0 && (
+                  <div className="bg-red-100 border-2 border-red-400 rounded-lg p-3"><div className="font-bold text-red-800 flex items-center gap-2"><Ban size={16} />{t.criticalSanctions}</div>{entities.filter(e => e.sanctionStatus === 'Confirmed Hit').map(e => <div key={e.id} className="text-sm mt-1 text-red-700">• {e.name} — {t.escalateMLRO}</div>)}</div>
+                )}
+                {complexityWarnings.map((w, i) => (
+                  <div key={i} className={`border rounded-lg p-2.5 flex items-start gap-2 ${w.severity === 'high' ? 'bg-red-50 border-red-200' : 'bg-yellow-50 border-yellow-200'}`}>
+                    {w.warning.includes('AUTO') || w.warning.includes('自動') ? <Lock size={14} className="mt-0.5 text-red-600" /> : <AlertTriangle size={14} className={`mt-0.5 ${w.severity === 'high' ? 'text-red-500' : 'text-yellow-500'}`} />}
+                    <div><div className="text-sm font-semibold">{w.entityName}</div><div className="text-xs text-gray-600">{w.warning}</div></div>
+                  </div>
+                ))}
+                {entities.filter(e => isBearerShareRisk(e.jurisdiction)).map(e => (
+                  <div key={e.id} className="bg-orange-50 border border-orange-200 rounded-lg p-2.5 flex items-start gap-2"><AlertCircle size={14} className="text-orange-500 mt-0.5" /><div><div className="text-sm font-semibold">{e.name}</div><div className="text-xs">{t.bearerShareWarning} ({e.jurisdiction})</div></div></div>
+                ))}
+                {entities.filter(e => { if (!e.incorporationDate) return false; return (new Date() - new Date(e.incorporationDate)) / (365.25 * 24 * 60 * 60 * 1000) < 1; }).map(e => (
+                  <div key={e.id} className="bg-yellow-50 border border-yellow-200 rounded-lg p-2.5 flex items-start gap-2"><Clock size={14} className="text-yellow-600 mt-0.5" /><div><div className="text-sm font-semibold">{e.name}</div><div className="text-xs">{t.shellCompanyWarning}</div></div></div>
+                ))}
+                {complexityWarnings.length === 0 && entities.filter(e => e.sanctionStatus === 'Confirmed Hit').length === 0 && <div className="text-center text-gray-400 py-12 text-sm flex flex-col items-center gap-2"><ShieldCheck size={28} />{t.noWarnings}</div>}
+              </div>
+            )}
+
+            {activeTab === 'audit' && (
+              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                <h2 className="font-bold text-sm flex items-center gap-2"><History size={16} />{t.auditTrail}</h2>
+                <div className="bg-blue-50 border border-blue-200 rounded p-2 text-xs">{t.allChangesLogged}</div>
+                {auditLog.length > 0 ? auditLog.map(log => (
+                  <div key={log.id} className="bg-white border rounded p-2 text-xs flex items-start gap-2"><Clock size={11} className="mt-0.5 text-gray-400 shrink-0" /><div><div className="font-semibold">{log.action}</div><div className="text-gray-500">{log.detail}</div><div className="text-gray-400 mt-0.5">{new Date(log.timestamp).toLocaleString()}</div></div></div>
+                )) : <div className="text-center text-gray-400 py-12 text-sm">{t.noAudit}</div>}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      <DetailModal />
     </div>
   );
 }
