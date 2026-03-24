@@ -116,7 +116,7 @@ const i18n = {
     bearerShareWarning: '允許不記名股份——請確認未發行。',
     shellCompanyWarning: '成立不到 1 年——潛在空殼公司。',
     reviewOverdue: 'CDD 審查已逾期！',
-    due: '到期', annual: '每年（12月）', biennial: '兩年（24月）', triennial: '三年（36月）',
+    due: '到期', annual: '每年（12月）', biennial: '三年（36月）', triennial: '三年（36月）',
     shareholders: '股東/控制人', identifiedUBOs: '已識別 UBO',
     regulatedNote: '受監管實體——可簡化盡調',
     reportTitle: 'CDD 分析報告', generated: '生成日期',
