@@ -78,6 +78,10 @@ const i18n = {
     trustNomineePolicy: 'Per policy: Trusts, Foundations & Nominee Shareholders are automatically classified as High Risk with mandatory Annual (12m) EDD review cycle.',
     lockedHighRisk: 'LOCKED: High Risk (Policy)',
     autoTag: 'AUTO',
+    loadSample: '📋 Load Complex Example',
+    loadSampleConfirm: 'Loading the sample will overwrite all current data. Continue?',
+    sampleLoaded: 'Sample data loaded',
+    sampleDescription: 'Click "Load Complex Example" to see a multi-layer structure with Trust, Foundation, Nominee Shareholder, PEP, sanctions hits and more.',
   },
   zh: {
     appTitle: 'CDD 盡職調查分析平台', appSubtitle: '客戶盡職調查 • UBO 識別 • 風險評估',
@@ -155,6 +159,10 @@ const i18n = {
     trustNomineePolicy: '根據政策：信託、基金會及代名人股東自動歸為高風險，並強制執行每年（12個月）EDD 審查週期。',
     lockedHighRisk: '鎖定：高風險（政策）',
     autoTag: '自動',
+    loadSample: '📋 載入複雜範例',
+    loadSampleConfirm: '載入範例將覆蓋目前所有數據，確定要繼續嗎？',
+    sampleLoaded: '已載入範例數據',
+    sampleDescription: '點擊「載入複雜範例」可查看包含多層架構、信託、基金會、代名人股東、PEP、制裁命中等複雜股權結構範本。',
   }
 };
 
@@ -177,6 +185,123 @@ const isOffshore = (j) => OFFSHORE_JURISDICTIONS.includes(j);
 const isBearerShareRisk = (j) => BEARER_SHARE_JURISDICTIONS.includes(j);
 const isForcedHighRisk = (entity) => FORCED_HIGH_RISK_SUBTYPES.includes(entity.subtype);
 
+function generateSampleData() {
+  const ts = Date.now();
+  const sid = (n) => `sample_${n}_${ts}`;
+
+  const sampleEntities = [
+    {
+      id: sid(1), name: 'Global Tech Holdings Ltd', type: 'company', jurisdiction: 'BVI',
+      subtype: 'Standard Company', pepType: 'None', sanctionStatus: 'No Hit',
+      adverseMedia: 'No Findings', industry: 'Technology', controlTypes: ['Ownership'],
+      isRegulated: false, incorporationDate: '2019-03-15', lastReviewDate: '2025-06-01',
+      sof: 'Business Profits', sow: 'Business Profits', sofDetail: 'Tech licensing revenue',
+      sowDetail: 'Accumulated business profits', notes: 'Main holding company — BVI incorporated. 5 shareholders including Trust, Foundation and Nominee arrangements.',
+      totalShares: '10000',
+    },
+    {
+      id: sid(2), name: 'ABC Investment Ltd', type: 'company', jurisdiction: 'Cayman Islands',
+      subtype: 'Standard Company', pepType: 'None', sanctionStatus: 'No Hit',
+      adverseMedia: 'No Findings', industry: 'Other', controlTypes: ['Ownership'],
+      isRegulated: false, incorporationDate: '2020-08-20', lastReviewDate: '2025-03-10',
+      sof: 'Investment Returns', sow: 'Investment Returns', sofDetail: 'Portfolio returns',
+      sowDetail: 'Initial capital injection', notes: 'Intermediate holding — Cayman Islands',
+      totalShares: '1000',
+    },
+    {
+      id: sid(3), name: 'XYZ Fund LP', type: 'company', jurisdiction: 'Luxembourg',
+      subtype: 'Fund', pepType: 'None', sanctionStatus: 'No Hit',
+      adverseMedia: 'No Findings', industry: 'Banking', controlTypes: ['Ownership'],
+      isRegulated: true, incorporationDate: '2018-01-10', lastReviewDate: '2025-01-15',
+      sof: 'Investment Returns', sow: 'Investment Returns', sofDetail: 'Fund subscriptions',
+      sowDetail: 'Institutional investors', notes: 'CSSF-regulated fund in Luxembourg. SDD eligible.',
+      totalShares: '5000',
+    },
+    {
+      id: sid(4), name: 'Smith Family Trust', type: 'company', jurisdiction: 'Jersey',
+      subtype: 'Trust', pepType: 'None', sanctionStatus: 'No Hit',
+      adverseMedia: 'No Findings', industry: 'Trust & Company Services', controlTypes: ['Ownership'],
+      isRegulated: false, incorporationDate: '2015-06-01', lastReviewDate: '2024-12-01',
+      sof: 'Inheritance', sow: 'Inheritance', sofDetail: 'Family wealth transfer',
+      sowDetail: 'Smith family accumulated assets',
+      notes: 'Settlor: John Smith | Trustee: Jersey Trust Co Ltd | Beneficiaries: Smith family members | Protector: Sarah Smith',
+      totalShares: '',
+    },
+    {
+      id: sid(5), name: 'Pacific Foundation', type: 'company', jurisdiction: 'Panama',
+      subtype: 'Foundation', pepType: 'None', sanctionStatus: 'Potential Hit',
+      adverseMedia: 'Findings - Medium', industry: 'Non-Profit / Charity', controlTypes: ['Ownership'],
+      isRegulated: false, incorporationDate: '2021-11-30', lastReviewDate: '2024-09-15',
+      sof: 'Gift/Donation', sow: 'Other', sofDetail: 'Charitable donations received',
+      sowDetail: 'Founder personal wealth',
+      notes: 'Founder: Roberto Garcia | Council: Roberto Garcia, Maria Lopez | Beneficiary: Garcia Family | ⚠️ Potential sanctions match on foundation name',
+      totalShares: '',
+    },
+    {
+      id: sid(6), name: 'John Smith', type: 'person', jurisdiction: 'Hong Kong',
+      subtype: 'Individual', pepType: 'Foreign PEP', sanctionStatus: 'No Hit',
+      adverseMedia: 'Findings - Low', industry: '', controlTypes: ['Ownership'],
+      isRegulated: false, incorporationDate: '', lastReviewDate: '2025-04-01',
+      sof: 'Employment Income', sow: 'Business Profits', sofDetail: 'Director fees from multiple companies',
+      sowDetail: 'Founded tech business in 2010',
+      notes: 'Passport: H12345678 | Foreign PEP: Advisory Board Member, Country X | Also settlor of Smith Family Trust',
+      totalShares: '',
+    },
+    {
+      id: sid(7), name: 'Mary Johnson', type: 'person', jurisdiction: 'USA',
+      subtype: 'Individual', pepType: 'None', sanctionStatus: 'No Hit',
+      adverseMedia: 'No Findings', industry: '', controlTypes: ['Ownership'],
+      isRegulated: false, incorporationDate: '', lastReviewDate: '2025-02-20',
+      sof: 'Business Profits', sow: 'Business Profits', sofDetail: 'Tech consulting firm revenue',
+      sowDetail: 'Self-made entrepreneur since 2008', notes: 'US citizen, based in New York. Clean screening.',
+      totalShares: '',
+    },
+    {
+      id: sid(8), name: 'David Lee', type: 'person', jurisdiction: 'Singapore',
+      subtype: 'Individual', pepType: 'None', sanctionStatus: 'No Hit',
+      adverseMedia: 'No Findings', industry: '', controlTypes: ['Ownership'],
+      isRegulated: false, incorporationDate: '', lastReviewDate: '2025-05-01',
+      sof: 'Investment Returns', sow: 'Investment Returns', sofDetail: 'Fund management fees',
+      sowDetail: 'Investment portfolio built over 15 years', notes: 'GP / Fund manager at XYZ Fund LP. Singapore PR.',
+      totalShares: '',
+    },
+    {
+      id: sid(9), name: 'Chen Wei', type: 'person', jurisdiction: 'China',
+      subtype: 'Nominee Shareholder', pepType: 'None', sanctionStatus: 'No Hit',
+      adverseMedia: 'Findings - Low', industry: '', controlTypes: ['Ownership', 'Nominee Arrangement'],
+      isRegulated: false, incorporationDate: '', lastReviewDate: '2025-01-10',
+      sof: 'Business Profits', sow: 'Business Profits', sofDetail: 'Import/export trading business',
+      sowDetail: 'Trading business established 2005',
+      notes: '⚠️ NOMINEE ARRANGEMENT: Holds 25% of Global Tech on behalf of undisclosed principal | Nominee agreement dated 2022-01-15 | ID: G87654321',
+      totalShares: '',
+    },
+    {
+      id: sid(10), name: 'Roberto Garcia', type: 'person', jurisdiction: 'Panama',
+      subtype: 'Individual', pepType: 'RCA (Relative/Close Associate)', sanctionStatus: 'Potential Hit',
+      adverseMedia: 'Findings - High', industry: '', controlTypes: ['Ownership'],
+      isRegulated: false, incorporationDate: '', lastReviewDate: '2024-08-01',
+      sof: 'Business Profits', sow: 'Inheritance', sofDetail: 'Family conglomerate dividends',
+      sowDetail: 'Inherited multi-sector family empire',
+      notes: '⚠️ HIGH RISK INDIVIDUAL | RCA: Brother is government minister of Country Y | Multiple adverse media: tax evasion allegations, offshore holdings | Founder & controller of Pacific Foundation',
+      totalShares: '',
+    },
+  ];
+
+  const sampleRelationships = [
+    { id: `rel_1_${ts}`, fromId: sid(6), toId: sid(1), percentage: 15, sharesHeld: '1500', controlTypes: ['Ownership', 'Board Appointment'], isNominee: false, inputMode: 'shares' },
+    { id: `rel_2_${ts}`, fromId: sid(2), toId: sid(1), percentage: 25, sharesHeld: '2500', controlTypes: ['Ownership'], isNominee: false, inputMode: 'shares' },
+    { id: `rel_3_${ts}`, fromId: sid(4), toId: sid(1), percentage: 20, sharesHeld: '2000', controlTypes: ['Ownership', 'Trust Beneficiary'], isNominee: false, inputMode: 'shares' },
+    { id: `rel_4_${ts}`, fromId: sid(5), toId: sid(1), percentage: 15, sharesHeld: '1500', controlTypes: ['Ownership'], isNominee: false, inputMode: 'shares' },
+    { id: `rel_5_${ts}`, fromId: sid(9), toId: sid(1), percentage: 25, sharesHeld: '2500', controlTypes: ['Ownership', 'Nominee Arrangement'], isNominee: true, inputMode: 'shares' },
+    { id: `rel_6_${ts}`, fromId: sid(7), toId: sid(2), percentage: 60, sharesHeld: '600', controlTypes: ['Ownership', 'Voting Rights'], isNominee: false, inputMode: 'shares' },
+    { id: `rel_7_${ts}`, fromId: sid(3), toId: sid(2), percentage: 40, sharesHeld: '400', controlTypes: ['Ownership'], isNominee: false, inputMode: 'shares' },
+    { id: `rel_8_${ts}`, fromId: sid(8), toId: sid(3), percentage: 100, sharesHeld: '5000', controlTypes: ['Ownership', 'Board Appointment', 'Voting Rights'], isNominee: false, inputMode: 'shares' },
+    { id: `rel_9_${ts}`, fromId: sid(10), toId: sid(5), percentage: 100, sharesHeld: '', controlTypes: ['Ownership', 'Contractual Control'], isNominee: false, inputMode: 'percentage' },
+  ];
+
+  return { entities: sampleEntities, relationships: sampleRelationships };
+}
+
 function calcCRR(entity) {
   let score = 0; const flags = [];
   const forced = isForcedHighRisk(entity);
@@ -198,14 +323,11 @@ function calcCRR(entity) {
     if (age < 1) { score += 10; flags.push('shellRisk'); }
   }
   if (entity.isRegulated) { score -= 15; flags.push('regulatedReduction'); }
-
-  // ★ POLICY: Trust, Foundation, Nominee Shareholder → forced High Risk, annual EDD
   if (forced) {
     score = Math.max(score, 50);
     if (entity.subtype === 'Nominee Shareholder') { flags.push('autoHighRiskNominee'); }
     else { flags.push('autoHighRiskTrust'); }
   }
-
   return {
     score: Math.max(0, Math.min(100, score)),
     level: score >= 50 ? 'High' : score >= 25 ? 'Medium' : 'Low',
@@ -368,7 +490,6 @@ function DAGCanvas({ entities, relationships, t, selectedEntity, onSelectEntity 
       const bColor = crr.level === 'High' ? '#EF4444' : crr.level === 'Medium' ? '#F59E0B' : node.type === 'company' ? '#3B82F6' : '#10B981';
       ctx.strokeStyle = isSel ? '#2563EB' : bColor;
       ctx.lineWidth = isSel ? 2.5 : crr.forced ? 2.5 : isHov ? 2 : 1.2; ctx.stroke();
-      // Forced high risk: double border indicator
       if (crr.forced) {
         ctx.strokeStyle = '#B91C1C'; ctx.lineWidth = 1;
         ctx.beginPath();
@@ -447,7 +568,6 @@ function DAGCanvas({ entities, relationships, t, selectedEntity, onSelectEntity 
     </div>
   );
 }
-
 export default function CDDApp() {
   const [lang, setLang] = useState('zh');
   const t = i18n[lang];
@@ -470,6 +590,21 @@ export default function CDDApp() {
   const addAudit = useCallback((action, detail) => {
     setAuditLog(prev => [{ id: auditIdCounter++, timestamp: new Date().toISOString(), action, detail }, ...prev]);
   }, []);
+
+  const loadSampleData = () => {
+    if (window.confirm(t.loadSampleConfirm)) {
+      const sample = generateSampleData();
+      setEntities(sample.entities);
+      setRelationships(sample.relationships);
+      setSelectedEntity(null);
+      setDetailOpen(false);
+      setShowAddEntity(false);
+      setEditingEntity(null);
+      setActiveTab('workspace');
+      setShowReport(false);
+      addAudit(t.sampleLoaded, '10 entities + 9 relationships loaded');
+    }
+  };
 
   const addEntity = () => {
     if (!newEntity.name) return;
@@ -673,8 +808,6 @@ export default function CDDApp() {
             </h3>
             <button onClick={() => setDetailOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
           </div>
-
-          {/* Forced High Risk Banner */}
           {crr.forced && (
             <div className="bg-red-100 border-2 border-red-400 border-dashed rounded-lg p-2.5">
               <div className="flex items-center gap-2 text-red-800 font-bold text-xs">
@@ -685,7 +818,6 @@ export default function CDDApp() {
               <div className="text-red-600 text-xs mt-1 flex items-center gap-1"><Clock size={10} />{t.forcedAnnualReview}: {t.annual} | EDD</div>
             </div>
           )}
-
           <div className="grid grid-cols-2 gap-1.5 text-xs">
             <div className="bg-gray-50 rounded p-1.5"><span className="text-gray-500">{t.type}:</span> <span className="font-medium">{entity.type === 'company' ? t.company : t.person}</span></div>
             <div className={`rounded p-1.5 ${crr.forced ? 'bg-red-50 border border-red-200' : 'bg-gray-50'}`}>
@@ -745,7 +877,6 @@ export default function CDDApp() {
           <div className="bg-purple-50 rounded p-2"><div className="text-xl font-bold text-purple-700">{findUBOs.length}</div><div className="text-xs">{t.ubosIdentified}</div></div>
           <div className="bg-orange-50 rounded p-2"><div className="text-xl font-bold text-orange-700">{complexityWarnings.length}</div><div className="text-xs">{t.warningsCount}</div></div>
         </div>
-        {/* Policy: Forced High Risk entities */}
         {forcedEntities.length > 0 && (
           <div className="bg-red-50 border-2 border-red-300 border-dashed rounded-lg p-3">
             <div className="font-bold text-red-800 text-sm flex items-center gap-1"><Lock size={14} />{t.forcedHighRisk}</div>
@@ -782,6 +913,7 @@ export default function CDDApp() {
             <div><h1 className="text-sm font-bold leading-tight">{t.appTitle}</h1><p className="text-xs text-slate-400">{t.appSubtitle}</p></div>
           </div>
           <div className="flex items-center gap-2">
+            <button onClick={loadSampleData} className="bg-purple-500/80 hover:bg-purple-500 px-2.5 py-1 rounded text-xs flex items-center gap-1 transition"><Layers size={13} />{t.loadSample}</button>
             <button onClick={() => setLang(lang === 'en' ? 'zh' : 'en')} className="bg-white/10 hover:bg-white/20 px-2.5 py-1 rounded text-xs flex items-center gap-1"><Languages size={13} />{lang === 'en' ? '中文' : 'EN'}</button>
             <button onClick={() => { setShowReport(true); setActiveTab('report'); }} className="bg-white/10 hover:bg-white/20 px-2.5 py-1 rounded text-xs flex items-center gap-1"><FileText size={13} />{t.report}</button>
           </div>
@@ -863,7 +995,16 @@ export default function CDDApp() {
                                 </div>
                               );
                             })}
-                            {entities.length === 0 && <div className="text-center text-gray-400 py-8 text-xs">{t.noEntities}</div>}
+                            {entities.length === 0 && (
+                              <div className="text-center py-8 space-y-3">
+                                <div className="text-gray-400 text-xs">{t.noEntities}</div>
+                                <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 text-xs text-purple-700">
+                                  <div className="font-semibold mb-1">💡 {t.loadSample}</div>
+                                  <div>{t.sampleDescription}</div>
+                                  <button onClick={loadSampleData} className="mt-2 bg-purple-600 text-white px-4 py-1.5 rounded-lg text-xs hover:bg-purple-700 transition font-medium">{t.loadSample}</button>
+                                </div>
+                              </div>
+                            )}
                           </>
                         )}
                         {leftPanelTab === 'relationships' && (
@@ -1055,3 +1196,4 @@ export default function CDDApp() {
     </div>
   );
 }
+
