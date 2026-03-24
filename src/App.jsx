@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { AlertTriangle, Shield, ShieldAlert, ShieldCheck, Users, Building2, User, Plus, Trash2, ChevronDown, ChevronRight, Eye, EyeOff, FileText, Clock, Search, AlertCircle, Flag, Globe, Briefcase, Scale, Star, Download, History, X, Check, Info, Layers, Link2, Crown, Ban, Landmark, Languages, GitBranch, PanelLeftClose, PanelLeftOpen, Maximize2, Minimize2, MousePointer, Hash, Percent, ShieldOff, Lock } from 'lucide-react';
+import { AlertTriangle, Shield, ShieldCheck, Users, Building2, User, Plus, Trash2, Eye, FileText, Clock, Search, AlertCircle, Globe, Scale, Download, History, X, Check, Info, Layers, Link2, Crown, Ban, Languages, GitBranch, PanelLeftClose, PanelLeftOpen, Hash, Percent, Lock, Edit3 } from 'lucide-react';
 
 const i18n = {
   en: {
@@ -14,9 +14,10 @@ const i18n = {
     sow: 'Source of Wealth', sowDetail: 'SOW Detail', incorporationDate: 'Incorporation Date',
     lastReviewDate: 'Last Review Date', regulated: 'Regulated Entity (holds licence)',
     notes: 'Notes', save: 'Save', cancel: 'Cancel', select: '— Select —',
-    addRelationship: 'Add Relationship', from: 'From (Shareholder/Controller)',
+    addRelationship: 'Add Relationship', editRelationship: 'Edit Relationship',
+    from: 'From (Shareholder/Controller)',
     to: 'To (Company/Entity)', ownershipPct: 'Ownership %', controlTypes: 'Control Types',
-    nomineeArrangement: 'Nominee arrangement', add: 'Add',
+    nomineeArrangement: 'Nominee arrangement', add: 'Add', update: 'Update',
     crr: 'Comprehensive Risk Rating (CRR)', score: 'Score', reviewCycle: 'Review Cycle',
     ddLevel: 'DD Level', edd: 'EDD Required', cdd: 'Standard CDD', sdd: 'SDD Eligible',
     highRisk: 'High', mediumRisk: 'Medium', lowRisk: 'Low',
@@ -41,6 +42,7 @@ const i18n = {
     uboSummary: 'UBO Summary', complexityWarnings: 'Complexity & Red Flag Warnings',
     entityAdded: 'Entity Added', entityRemoved: 'Entity Removed', entityUpdated: 'Entity Updated',
     relationshipAdded: 'Relationship Added', relationshipRemoved: 'Relationship Removed',
+    relationshipUpdated: 'Relationship Updated',
     added: 'Added', removed: 'Removed', updated: 'Updated',
     allChangesLogged: 'All changes logged for compliance audit.',
     dagTitle: 'Ownership & Control Structure (DAG)',
@@ -82,6 +84,7 @@ const i18n = {
     loadSampleConfirm: 'Loading the sample will overwrite all current data. Continue?',
     sampleLoaded: 'Sample data loaded',
     sampleDescription: 'Click "Load Complex Example" to see a multi-layer structure with Trust, Foundation, Nominee Shareholder, PEP, sanctions hits and more.',
+    editHint: 'Click ✏️ to edit',
   },
   zh: {
     appTitle: 'CDD 盡職調查分析平台', appSubtitle: '客戶盡職調查 • UBO 識別 • 風險評估',
@@ -95,9 +98,10 @@ const i18n = {
     sow: '財富來源', sowDetail: '財富來源詳情', incorporationDate: '成立日期',
     lastReviewDate: '上次審查日期', regulated: '受監管實體（持牌照）',
     notes: '備註', save: '儲存', cancel: '取消', select: '— 請選擇 —',
-    addRelationship: '新增關係', from: '從（股東/控制人）',
+    addRelationship: '新增關係', editRelationship: '編輯關係',
+    from: '從（股東/控制人）',
     to: '至（被持有公司）', ownershipPct: '持股 %', controlTypes: '控制類型',
-    nomineeArrangement: '代名人安排', add: '新增',
+    nomineeArrangement: '代名人安排', add: '新增', update: '更新',
     crr: '綜合風險評級 (CRR)', score: '分數', reviewCycle: '審查週期',
     ddLevel: '盡調等級', edd: '加強盡調 (EDD)', cdd: '標準盡調 (CDD)', sdd: '簡化盡調 (SDD)',
     highRisk: '高風險', mediumRisk: '中風險', lowRisk: '低風險',
@@ -122,6 +126,7 @@ const i18n = {
     uboSummary: 'UBO 摘要', complexityWarnings: '複雜性與紅旗警示',
     entityAdded: '新增實體', entityRemoved: '刪除實體', entityUpdated: '更新實體',
     relationshipAdded: '新增關係', relationshipRemoved: '刪除關係',
+    relationshipUpdated: '更新關係',
     added: '已新增', removed: '已刪除', updated: '已更新',
     allChangesLogged: '所有變更均記錄以供審計。',
     dagTitle: '持股與控制架構圖（DAG）',
@@ -163,6 +168,7 @@ const i18n = {
     loadSampleConfirm: '載入範例將覆蓋目前所有數據，確定要繼續嗎？',
     sampleLoaded: '已載入範例數據',
     sampleDescription: '點擊「載入複雜範例」可查看包含多層架構、信託、基金會、代名人股東、PEP、制裁命中等複雜股權結構範本。',
+    editHint: '點擊 ✏️ 編輯',
   }
 };
 
@@ -188,105 +194,18 @@ const isForcedHighRisk = (entity) => FORCED_HIGH_RISK_SUBTYPES.includes(entity.s
 function generateSampleData() {
   const ts = Date.now();
   const sid = (n) => `sample_${n}_${ts}`;
-
   const sampleEntities = [
-    {
-      id: sid(1), name: 'Global Tech Holdings Ltd', type: 'company', jurisdiction: 'BVI',
-      subtype: 'Standard Company', pepType: 'None', sanctionStatus: 'No Hit',
-      adverseMedia: 'No Findings', industry: 'Technology', controlTypes: ['Ownership'],
-      isRegulated: false, incorporationDate: '2019-03-15', lastReviewDate: '2025-06-01',
-      sof: 'Business Profits', sow: 'Business Profits', sofDetail: 'Tech licensing revenue',
-      sowDetail: 'Accumulated business profits', notes: 'Main holding company — BVI incorporated. 5 shareholders including Trust, Foundation and Nominee arrangements.',
-      totalShares: '10000',
-    },
-    {
-      id: sid(2), name: 'ABC Investment Ltd', type: 'company', jurisdiction: 'Cayman Islands',
-      subtype: 'Standard Company', pepType: 'None', sanctionStatus: 'No Hit',
-      adverseMedia: 'No Findings', industry: 'Other', controlTypes: ['Ownership'],
-      isRegulated: false, incorporationDate: '2020-08-20', lastReviewDate: '2025-03-10',
-      sof: 'Investment Returns', sow: 'Investment Returns', sofDetail: 'Portfolio returns',
-      sowDetail: 'Initial capital injection', notes: 'Intermediate holding — Cayman Islands',
-      totalShares: '1000',
-    },
-    {
-      id: sid(3), name: 'XYZ Fund LP', type: 'company', jurisdiction: 'Luxembourg',
-      subtype: 'Fund', pepType: 'None', sanctionStatus: 'No Hit',
-      adverseMedia: 'No Findings', industry: 'Banking', controlTypes: ['Ownership'],
-      isRegulated: true, incorporationDate: '2018-01-10', lastReviewDate: '2025-01-15',
-      sof: 'Investment Returns', sow: 'Investment Returns', sofDetail: 'Fund subscriptions',
-      sowDetail: 'Institutional investors', notes: 'CSSF-regulated fund in Luxembourg. SDD eligible.',
-      totalShares: '5000',
-    },
-    {
-      id: sid(4), name: 'Smith Family Trust', type: 'company', jurisdiction: 'Jersey',
-      subtype: 'Trust', pepType: 'None', sanctionStatus: 'No Hit',
-      adverseMedia: 'No Findings', industry: 'Trust & Company Services', controlTypes: ['Ownership'],
-      isRegulated: false, incorporationDate: '2015-06-01', lastReviewDate: '2024-12-01',
-      sof: 'Inheritance', sow: 'Inheritance', sofDetail: 'Family wealth transfer',
-      sowDetail: 'Smith family accumulated assets',
-      notes: 'Settlor: John Smith | Trustee: Jersey Trust Co Ltd | Beneficiaries: Smith family members | Protector: Sarah Smith',
-      totalShares: '',
-    },
-    {
-      id: sid(5), name: 'Pacific Foundation', type: 'company', jurisdiction: 'Panama',
-      subtype: 'Foundation', pepType: 'None', sanctionStatus: 'Potential Hit',
-      adverseMedia: 'Findings - Medium', industry: 'Non-Profit / Charity', controlTypes: ['Ownership'],
-      isRegulated: false, incorporationDate: '2021-11-30', lastReviewDate: '2024-09-15',
-      sof: 'Gift/Donation', sow: 'Other', sofDetail: 'Charitable donations received',
-      sowDetail: 'Founder personal wealth',
-      notes: 'Founder: Roberto Garcia | Council: Roberto Garcia, Maria Lopez | Beneficiary: Garcia Family | ⚠️ Potential sanctions match on foundation name',
-      totalShares: '',
-    },
-    {
-      id: sid(6), name: 'John Smith', type: 'person', jurisdiction: 'Hong Kong',
-      subtype: 'Individual', pepType: 'Foreign PEP', sanctionStatus: 'No Hit',
-      adverseMedia: 'Findings - Low', industry: '', controlTypes: ['Ownership'],
-      isRegulated: false, incorporationDate: '', lastReviewDate: '2025-04-01',
-      sof: 'Employment Income', sow: 'Business Profits', sofDetail: 'Director fees from multiple companies',
-      sowDetail: 'Founded tech business in 2010',
-      notes: 'Passport: H12345678 | Foreign PEP: Advisory Board Member, Country X | Also settlor of Smith Family Trust',
-      totalShares: '',
-    },
-    {
-      id: sid(7), name: 'Mary Johnson', type: 'person', jurisdiction: 'USA',
-      subtype: 'Individual', pepType: 'None', sanctionStatus: 'No Hit',
-      adverseMedia: 'No Findings', industry: '', controlTypes: ['Ownership'],
-      isRegulated: false, incorporationDate: '', lastReviewDate: '2025-02-20',
-      sof: 'Business Profits', sow: 'Business Profits', sofDetail: 'Tech consulting firm revenue',
-      sowDetail: 'Self-made entrepreneur since 2008', notes: 'US citizen, based in New York. Clean screening.',
-      totalShares: '',
-    },
-    {
-      id: sid(8), name: 'David Lee', type: 'person', jurisdiction: 'Singapore',
-      subtype: 'Individual', pepType: 'None', sanctionStatus: 'No Hit',
-      adverseMedia: 'No Findings', industry: '', controlTypes: ['Ownership'],
-      isRegulated: false, incorporationDate: '', lastReviewDate: '2025-05-01',
-      sof: 'Investment Returns', sow: 'Investment Returns', sofDetail: 'Fund management fees',
-      sowDetail: 'Investment portfolio built over 15 years', notes: 'GP / Fund manager at XYZ Fund LP. Singapore PR.',
-      totalShares: '',
-    },
-    {
-      id: sid(9), name: 'Chen Wei', type: 'person', jurisdiction: 'China',
-      subtype: 'Nominee Shareholder', pepType: 'None', sanctionStatus: 'No Hit',
-      adverseMedia: 'Findings - Low', industry: '', controlTypes: ['Ownership', 'Nominee Arrangement'],
-      isRegulated: false, incorporationDate: '', lastReviewDate: '2025-01-10',
-      sof: 'Business Profits', sow: 'Business Profits', sofDetail: 'Import/export trading business',
-      sowDetail: 'Trading business established 2005',
-      notes: '⚠️ NOMINEE ARRANGEMENT: Holds 25% of Global Tech on behalf of undisclosed principal | Nominee agreement dated 2022-01-15 | ID: G87654321',
-      totalShares: '',
-    },
-    {
-      id: sid(10), name: 'Roberto Garcia', type: 'person', jurisdiction: 'Panama',
-      subtype: 'Individual', pepType: 'RCA (Relative/Close Associate)', sanctionStatus: 'Potential Hit',
-      adverseMedia: 'Findings - High', industry: '', controlTypes: ['Ownership'],
-      isRegulated: false, incorporationDate: '', lastReviewDate: '2024-08-01',
-      sof: 'Business Profits', sow: 'Inheritance', sofDetail: 'Family conglomerate dividends',
-      sowDetail: 'Inherited multi-sector family empire',
-      notes: '⚠️ HIGH RISK INDIVIDUAL | RCA: Brother is government minister of Country Y | Multiple adverse media: tax evasion allegations, offshore holdings | Founder & controller of Pacific Foundation',
-      totalShares: '',
-    },
+    { id: sid(1), name: 'Global Tech Holdings Ltd', type: 'company', jurisdiction: 'BVI', subtype: 'Standard Company', pepType: 'None', sanctionStatus: 'No Hit', adverseMedia: 'No Findings', industry: 'Technology', controlTypes: ['Ownership'], isRegulated: false, incorporationDate: '2019-03-15', lastReviewDate: '2025-06-01', sof: 'Business Profits', sow: 'Business Profits', sofDetail: 'Tech licensing revenue', sowDetail: 'Accumulated business profits', notes: 'Main holding company — BVI incorporated.', totalShares: '10000' },
+    { id: sid(2), name: 'ABC Investment Ltd', type: 'company', jurisdiction: 'Cayman Islands', subtype: 'Standard Company', pepType: 'None', sanctionStatus: 'No Hit', adverseMedia: 'No Findings', industry: 'Other', controlTypes: ['Ownership'], isRegulated: false, incorporationDate: '2020-08-20', lastReviewDate: '2025-03-10', sof: 'Investment Returns', sow: 'Investment Returns', sofDetail: 'Portfolio returns', sowDetail: 'Initial capital injection', notes: 'Intermediate holding — Cayman Islands', totalShares: '1000' },
+    { id: sid(3), name: 'XYZ Fund LP', type: 'company', jurisdiction: 'Luxembourg', subtype: 'Fund', pepType: 'None', sanctionStatus: 'No Hit', adverseMedia: 'No Findings', industry: 'Banking', controlTypes: ['Ownership'], isRegulated: true, incorporationDate: '2018-01-10', lastReviewDate: '2025-01-15', sof: 'Investment Returns', sow: 'Investment Returns', sofDetail: 'Fund subscriptions', sowDetail: 'Institutional investors', notes: 'CSSF-regulated fund. SDD eligible.', totalShares: '5000' },
+    { id: sid(4), name: 'Smith Family Trust', type: 'company', jurisdiction: 'Jersey', subtype: 'Trust', pepType: 'None', sanctionStatus: 'No Hit', adverseMedia: 'No Findings', industry: 'Trust & Company Services', controlTypes: ['Ownership'], isRegulated: false, incorporationDate: '2015-06-01', lastReviewDate: '2024-12-01', sof: 'Inheritance', sow: 'Inheritance', sofDetail: 'Family wealth transfer', sowDetail: 'Smith family accumulated assets', notes: 'Settlor: John Smith | Trustee: Jersey Trust Co Ltd', totalShares: '' },
+    { id: sid(5), name: 'Pacific Foundation', type: 'company', jurisdiction: 'Panama', subtype: 'Foundation', pepType: 'None', sanctionStatus: 'Potential Hit', adverseMedia: 'Findings - Medium', industry: 'Non-Profit / Charity', controlTypes: ['Ownership'], isRegulated: false, incorporationDate: '2021-11-30', lastReviewDate: '2024-09-15', sof: 'Gift/Donation', sow: 'Other', sofDetail: 'Charitable donations received', sowDetail: 'Founder personal wealth', notes: 'Founder: Roberto Garcia | ⚠️ Potential sanctions match', totalShares: '' },
+    { id: sid(6), name: 'John Smith', type: 'person', jurisdiction: 'Hong Kong', subtype: 'Individual', pepType: 'Foreign PEP', sanctionStatus: 'No Hit', adverseMedia: 'Findings - Low', industry: '', controlTypes: ['Ownership'], isRegulated: false, incorporationDate: '', lastReviewDate: '2025-04-01', sof: 'Employment Income', sow: 'Business Profits', sofDetail: 'Director fees', sowDetail: 'Founded tech business in 2010', notes: 'Foreign PEP: Advisory Board Member, Country X', totalShares: '' },
+    { id: sid(7), name: 'Mary Johnson', type: 'person', jurisdiction: 'USA', subtype: 'Individual', pepType: 'None', sanctionStatus: 'No Hit', adverseMedia: 'No Findings', industry: '', controlTypes: ['Ownership'], isRegulated: false, incorporationDate: '', lastReviewDate: '2025-02-20', sof: 'Business Profits', sow: 'Business Profits', sofDetail: 'Tech consulting firm revenue', sowDetail: 'Self-made entrepreneur since 2008', notes: 'US citizen, based in New York.', totalShares: '' },
+    { id: sid(8), name: 'David Lee', type: 'person', jurisdiction: 'Singapore', subtype: 'Individual', pepType: 'None', sanctionStatus: 'No Hit', adverseMedia: 'No Findings', industry: '', controlTypes: ['Ownership'], isRegulated: false, incorporationDate: '', lastReviewDate: '2025-05-01', sof: 'Investment Returns', sow: 'Investment Returns', sofDetail: 'Fund management fees', sowDetail: 'Investment portfolio built over 15 years', notes: 'GP / Fund manager at XYZ Fund LP.', totalShares: '' },
+    { id: sid(9), name: 'Chen Wei', type: 'person', jurisdiction: 'China', subtype: 'Nominee Shareholder', pepType: 'None', sanctionStatus: 'No Hit', adverseMedia: 'Findings - Low', industry: '', controlTypes: ['Ownership', 'Nominee Arrangement'], isRegulated: false, incorporationDate: '', lastReviewDate: '2025-01-10', sof: 'Business Profits', sow: 'Business Profits', sofDetail: 'Import/export trading business', sowDetail: 'Trading business established 2005', notes: '⚠️ NOMINEE: Holds 25% of Global Tech on behalf of undisclosed principal', totalShares: '' },
+    { id: sid(10), name: 'Roberto Garcia', type: 'person', jurisdiction: 'Panama', subtype: 'Individual', pepType: 'RCA (Relative/Close Associate)', sanctionStatus: 'Potential Hit', adverseMedia: 'Findings - High', industry: '', controlTypes: ['Ownership'], isRegulated: false, incorporationDate: '', lastReviewDate: '2024-08-01', sof: 'Business Profits', sow: 'Inheritance', sofDetail: 'Family conglomerate dividends', sowDetail: 'Inherited multi-sector family empire', notes: '⚠️ HIGH RISK | RCA: Brother is government minister of Country Y', totalShares: '' },
   ];
-
   const sampleRelationships = [
     { id: `rel_1_${ts}`, fromId: sid(6), toId: sid(1), percentage: 15, sharesHeld: '1500', controlTypes: ['Ownership', 'Board Appointment'], isNominee: false, inputMode: 'shares' },
     { id: `rel_2_${ts}`, fromId: sid(2), toId: sid(1), percentage: 25, sharesHeld: '2500', controlTypes: ['Ownership'], isNominee: false, inputMode: 'shares' },
@@ -298,7 +217,6 @@ function generateSampleData() {
     { id: `rel_8_${ts}`, fromId: sid(8), toId: sid(3), percentage: 100, sharesHeld: '5000', controlTypes: ['Ownership', 'Board Appointment', 'Voting Rights'], isNominee: false, inputMode: 'shares' },
     { id: `rel_9_${ts}`, fromId: sid(10), toId: sid(5), percentage: 100, sharesHeld: '', controlTypes: ['Ownership', 'Contractual Control'], isNominee: false, inputMode: 'percentage' },
   ];
-
   return { entities: sampleEntities, relationships: sampleRelationships };
 }
 
@@ -323,17 +241,8 @@ function calcCRR(entity) {
     if (age < 1) { score += 10; flags.push('shellRisk'); }
   }
   if (entity.isRegulated) { score -= 15; flags.push('regulatedReduction'); }
-  if (forced) {
-    score = Math.max(score, 50);
-    if (entity.subtype === 'Nominee Shareholder') { flags.push('autoHighRiskNominee'); }
-    else { flags.push('autoHighRiskTrust'); }
-  }
-  return {
-    score: Math.max(0, Math.min(100, score)),
-    level: score >= 50 ? 'High' : score >= 25 ? 'Medium' : 'Low',
-    flags,
-    forced,
-  };
+  if (forced) { score = Math.max(score, 50); }
+  return { score: Math.max(0, Math.min(100, score)), level: score >= 50 ? 'High' : score >= 25 ? 'Medium' : 'Low', flags, forced };
 }
 
 const riskBadge = (level, t) => {
@@ -342,13 +251,8 @@ const riskBadge = (level, t) => {
   return <span className={`px-1.5 py-0.5 rounded-full text-xs font-semibold border ${c}`}>{label}</span>;
 };
 
-const defaultEntity = () => ({
-  id: '', name: '', type: 'company', jurisdiction: 'Hong Kong', subtype: 'Standard Company',
-  pepType: 'None', sanctionStatus: 'Not Screened', adverseMedia: 'Not Checked',
-  industry: '', controlTypes: ['Ownership'], isRegulated: false,
-  incorporationDate: '', lastReviewDate: '', sof: '', sow: '', sofDetail: '', sowDetail: '', notes: '',
-  totalShares: '',
-});
+const defaultEntity = () => ({ id: '', name: '', type: 'company', jurisdiction: 'Hong Kong', subtype: 'Standard Company', pepType: 'None', sanctionStatus: 'Not Screened', adverseMedia: 'Not Checked', industry: '', controlTypes: ['Ownership'], isRegulated: false, incorporationDate: '', lastReviewDate: '', sof: '', sow: '', sofDetail: '', sowDetail: '', notes: '', totalShares: '' });
+const defaultRel = () => ({ fromId: '', toId: '', percentage: 0, sharesHeld: '', controlTypes: ['Ownership'], isNominee: false, inputMode: 'percentage' });
 
 let auditIdCounter = 1;
 
@@ -356,29 +260,16 @@ function computeDAGLayout(entities, relationships) {
   if (entities.length === 0) return { nodes: [], edges: [] };
   const adj = {}; const inDeg = {};
   entities.forEach(e => { adj[e.id] = []; inDeg[e.id] = 0; });
-  relationships.forEach(r => {
-    if (adj[r.fromId]) { adj[r.fromId].push(r.toId); inDeg[r.toId] = (inDeg[r.toId] || 0) + 1; }
-  });
+  relationships.forEach(r => { if (adj[r.fromId]) { adj[r.fromId].push(r.toId); inDeg[r.toId] = (inDeg[r.toId] || 0) + 1; } });
   const layers = {}; const queue = [];
   entities.forEach(e => { if ((inDeg[e.id] || 0) === 0) { queue.push(e.id); layers[e.id] = 0; } });
-  while (queue.length > 0) {
-    const cur = queue.shift();
-    (adj[cur] || []).forEach(nb => {
-      layers[nb] = Math.max(layers[nb] || 0, (layers[cur] || 0) + 1);
-      inDeg[nb]--; if (inDeg[nb] === 0) queue.push(nb);
-    });
-  }
+  while (queue.length > 0) { const cur = queue.shift(); (adj[cur] || []).forEach(nb => { layers[nb] = Math.max(layers[nb] || 0, (layers[cur] || 0) + 1); inDeg[nb]--; if (inDeg[nb] === 0) queue.push(nb); }); }
   entities.forEach(e => { if (layers[e.id] === undefined) layers[e.id] = 0; });
   const layerGroups = {};
   entities.forEach(e => { const l = layers[e.id]; if (!layerGroups[l]) layerGroups[l] = []; layerGroups[l].push(e); });
-  const nodeW = 170; const nodeH = 64; const hGap = 32; const vGap = 90;
+  const nodeW = 170, nodeH = 64, hGap = 32, vGap = 90;
   const nodes = [];
-  Object.keys(layerGroups).forEach(l => {
-    const group = layerGroups[l]; const totalW = group.length * nodeW + (group.length - 1) * hGap;
-    group.forEach((e, idx) => {
-      nodes.push({ ...e, x: idx * (nodeW + hGap) - totalW / 2 + nodeW / 2, y: Number(l) * (nodeH + vGap), w: nodeW, h: nodeH, layer: Number(l) });
-    });
-  });
+  Object.keys(layerGroups).forEach(l => { const group = layerGroups[l]; const totalW = group.length * nodeW + (group.length - 1) * hGap; group.forEach((e, idx) => { nodes.push({ ...e, x: idx * (nodeW + hGap) - totalW / 2 + nodeW / 2, y: Number(l) * (nodeH + vGap), w: nodeW, h: nodeH, layer: Number(l) }); }); });
   const nodeMap = {}; nodes.forEach(n => nodeMap[n.id] = n);
   const edges = relationships.map(r => ({ ...r, from: nodeMap[r.fromId], to: nodeMap[r.toId] })).filter(e => e.from && e.to);
   return { nodes, edges };
@@ -396,48 +287,28 @@ function DAGCanvas({ entities, relationships, t, selectedEntity, onSelectEntity 
   const layout = useMemo(() => computeDAGLayout(entities, relationships), [entities, relationships]);
 
   useEffect(() => {
-    const obs = new ResizeObserver(entries => {
-      for (const entry of entries) {
-        setCanvasSize({ w: entry.contentRect.width, h: entry.contentRect.height });
-      }
-    });
+    const obs = new ResizeObserver(entries => { for (const entry of entries) setCanvasSize({ w: entry.contentRect.width, h: entry.contentRect.height }); });
     if (containerRef.current) obs.observe(containerRef.current);
     return () => obs.disconnect();
   }, []);
 
   const fitView = useCallback(() => {
     if (layout.nodes.length === 0) return;
-    const xs = layout.nodes.map(n => n.x); const ys = layout.nodes.map(n => n.y);
-    const minX = Math.min(...xs) - 100; const maxX = Math.max(...xs) + 100;
-    const minY = Math.min(...ys) - 50; const maxY = Math.max(...ys) + 50;
-    const w = maxX - minX; const h = maxY - minY;
-    const scaleX = canvasSize.w / (w + 40); const scaleY = (canvasSize.h - 20) / (h + 40);
-    const newZoom = Math.min(scaleX, scaleY, 1.5);
+    const xs = layout.nodes.map(n => n.x), ys = layout.nodes.map(n => n.y);
+    const minX = Math.min(...xs) - 100, maxX = Math.max(...xs) + 100, minY = Math.min(...ys) - 50, maxY = Math.max(...ys) + 50;
+    const w = maxX - minX, h = maxY - minY;
+    const newZoom = Math.min(canvasSize.w / (w + 40), (canvasSize.h - 20) / (h + 40), 1.5);
     setZoom(newZoom);
     setPan({ x: -(minX + maxX) / 2 * newZoom, y: -(minY + maxY) / 2 * newZoom + 20 });
   }, [layout, canvasSize]);
 
   useEffect(() => { if (layout.nodes.length > 0) fitView(); }, [layout.nodes.length]);
 
-  const getMousePos = (e) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return { mx: 0, my: 0 };
-    return { mx: (e.clientX - rect.left - canvasSize.w / 2 - pan.x) / zoom, my: (e.clientY - rect.top - canvasSize.h / 2 - pan.y) / zoom };
-  };
+  const getMousePos = (e) => { const rect = canvasRef.current?.getBoundingClientRect(); if (!rect) return { mx: 0, my: 0 }; return { mx: (e.clientX - rect.left - canvasSize.w / 2 - pan.x) / zoom, my: (e.clientY - rect.top - canvasSize.h / 2 - pan.y) / zoom }; };
 
   const handleWheel = (e) => { e.preventDefault(); setZoom(z => Math.max(0.2, Math.min(3, z + (e.deltaY > 0 ? -0.08 : 0.08)))); };
-  const handleMouseDown = (e) => {
-    const { mx, my } = getMousePos(e);
-    const clickedNode = layout.nodes.find(n => mx >= n.x - n.w / 2 && mx <= n.x + n.w / 2 && my >= n.y - n.h / 2 && my <= n.y + n.h / 2);
-    if (clickedNode) { onSelectEntity(clickedNode.id); return; }
-    setDragging(true); setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-  };
-  const handleMouseMove = (e) => {
-    if (dragging) { setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y }); return; }
-    const { mx, my } = getMousePos(e);
-    const found = layout.nodes.find(n => mx >= n.x - n.w / 2 && mx <= n.x + n.w / 2 && my >= n.y - n.h / 2 && my <= n.y + n.h / 2);
-    setHovered(found?.id || null);
-  };
+  const handleMouseDown = (e) => { const { mx, my } = getMousePos(e); const clickedNode = layout.nodes.find(n => mx >= n.x - n.w / 2 && mx <= n.x + n.w / 2 && my >= n.y - n.h / 2 && my <= n.y + n.h / 2); if (clickedNode) { onSelectEntity(clickedNode.id); return; } setDragging(true); setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y }); };
+  const handleMouseMove = (e) => { if (dragging) { setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y }); return; } const { mx, my } = getMousePos(e); const found = layout.nodes.find(n => mx >= n.x - n.w / 2 && mx <= n.x + n.w / 2 && my >= n.y - n.h / 2 && my <= n.y + n.h / 2); setHovered(found?.id || null); };
   const handleMouseUp = () => setDragging(false);
 
   useEffect(() => {
@@ -453,11 +324,9 @@ function DAGCanvas({ entities, relationships, t, selectedEntity, onSelectEntity 
     ctx.scale(zoom, zoom);
 
     layout.edges.forEach(edge => {
-      const fx = edge.from.x, fy = edge.from.y + edge.from.h / 2;
-      const tx = edge.to.x, ty = edge.to.y - edge.to.h / 2;
+      const fx = edge.from.x, fy = edge.from.y + edge.from.h / 2, tx = edge.to.x, ty = edge.to.y - edge.to.h / 2;
       ctx.beginPath();
-      const cy1 = fy + (ty - fy) * 0.35, cy2 = fy + (ty - fy) * 0.65;
-      ctx.moveTo(fx, fy); ctx.bezierCurveTo(fx, cy1, tx, cy2, tx, ty);
+      ctx.moveTo(fx, fy); ctx.bezierCurveTo(fx, fy + (ty - fy) * 0.35, tx, fy + (ty - fy) * 0.65, tx, ty);
       const isHL = selectedEntity && (edge.fromId === selectedEntity || edge.toId === selectedEntity);
       ctx.strokeStyle = edge.isNominee ? '#EF4444' : isHL ? '#3B82F6' : '#94A3B8';
       ctx.lineWidth = edge.isNominee ? 2.5 : isHL ? 2 : 1.2;
@@ -473,10 +342,8 @@ function DAGCanvas({ entities, relationships, t, selectedEntity, onSelectEntity 
 
     layout.nodes.forEach(node => {
       const crr = calcCRR(node);
-      const isHov = hovered === node.id;
-      const isSel = selectedEntity === node.id;
-      const x = node.x - node.w / 2, y = node.y - node.h / 2;
-      const r = 8;
+      const isHov = hovered === node.id, isSel = selectedEntity === node.id;
+      const x = node.x - node.w / 2, y = node.y - node.h / 2, r = 8;
       ctx.shadowColor = isSel ? 'rgba(59,130,246,0.5)' : isHov ? 'rgba(59,130,246,0.3)' : 'rgba(0,0,0,0.08)';
       ctx.shadowBlur = isSel ? 14 : isHov ? 10 : 5; ctx.shadowOffsetY = 2;
       ctx.beginPath();
@@ -490,46 +357,16 @@ function DAGCanvas({ entities, relationships, t, selectedEntity, onSelectEntity 
       const bColor = crr.level === 'High' ? '#EF4444' : crr.level === 'Medium' ? '#F59E0B' : node.type === 'company' ? '#3B82F6' : '#10B981';
       ctx.strokeStyle = isSel ? '#2563EB' : bColor;
       ctx.lineWidth = isSel ? 2.5 : crr.forced ? 2.5 : isHov ? 2 : 1.2; ctx.stroke();
-      if (crr.forced) {
-        ctx.strokeStyle = '#B91C1C'; ctx.lineWidth = 1;
-        ctx.beginPath();
-        const inset = 3;
-        ctx.moveTo(x + r + inset, y + inset); ctx.lineTo(x + node.w - r - inset, y + inset);
-        ctx.quadraticCurveTo(x + node.w - inset, y + inset, x + node.w - inset, y + r + inset);
-        ctx.lineTo(x + node.w - inset, y + node.h - r - inset);
-        ctx.quadraticCurveTo(x + node.w - inset, y + node.h - inset, x + node.w - r - inset, y + node.h - inset);
-        ctx.lineTo(x + r + inset, y + node.h - inset);
-        ctx.quadraticCurveTo(x + inset, y + node.h - inset, x + inset, y + node.h - r - inset);
-        ctx.lineTo(x + inset, y + r + inset);
-        ctx.quadraticCurveTo(x + inset, y + inset, x + r + inset, y + inset);
-        ctx.closePath();
-        ctx.setLineDash([3, 2]); ctx.stroke(); ctx.setLineDash([]);
-      }
+      if (crr.forced) { ctx.strokeStyle = '#B91C1C'; ctx.lineWidth = 1; const inset = 3; ctx.beginPath(); ctx.moveTo(x + r + inset, y + inset); ctx.lineTo(x + node.w - r - inset, y + inset); ctx.quadraticCurveTo(x + node.w - inset, y + inset, x + node.w - inset, y + r + inset); ctx.lineTo(x + node.w - inset, y + node.h - r - inset); ctx.quadraticCurveTo(x + node.w - inset, y + node.h - inset, x + node.w - r - inset, y + node.h - inset); ctx.lineTo(x + r + inset, y + node.h - inset); ctx.quadraticCurveTo(x + inset, y + node.h - inset, x + inset, y + node.h - r - inset); ctx.lineTo(x + inset, y + r + inset); ctx.quadraticCurveTo(x + inset, y + inset, x + r + inset, y + inset); ctx.closePath(); ctx.setLineDash([3, 2]); ctx.stroke(); ctx.setLineDash([]); }
       ctx.fillStyle = bColor;
-      ctx.beginPath();
-      ctx.moveTo(x + r, y); ctx.lineTo(x + node.w - r, y); ctx.quadraticCurveTo(x + node.w, y, x + node.w, y + r);
-      ctx.lineTo(x + node.w, y + 5); ctx.lineTo(x, y + 5); ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y);
-      ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x + r, y); ctx.lineTo(x + node.w - r, y); ctx.quadraticCurveTo(x + node.w, y, x + node.w, y + r); ctx.lineTo(x + node.w, y + 5); ctx.lineTo(x, y + 5); ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath(); ctx.fill();
       ctx.font = '13px system-ui'; ctx.fillText(node.type === 'company' ? '🏢' : '👤', x + 8, y + 24);
       ctx.font = 'bold 11px system-ui'; ctx.fillStyle = '#1E293B'; ctx.textAlign = 'left';
-      const dn = node.name.length > 14 ? node.name.substring(0, 13) + '…' : node.name;
-      ctx.fillText(dn, x + 26, y + 24);
+      ctx.fillText(node.name.length > 14 ? node.name.substring(0, 13) + '…' : node.name, x + 26, y + 24);
       ctx.font = '9px system-ui'; ctx.fillStyle = '#64748B'; ctx.fillText(node.jurisdiction, x + 26, y + 37);
-      if (node.type === 'company' && node.totalShares) {
-        ctx.font = '8px system-ui'; ctx.fillStyle = '#94A3B8';
-        ctx.fillText(`${Number(node.totalShares).toLocaleString()} shares`, x + 26, y + 47);
-      }
-      ctx.font = 'bold 9px system-ui';
-      ctx.fillStyle = crr.level === 'High' ? '#DC2626' : crr.level === 'Medium' ? '#D97706' : '#16A34A';
-      ctx.fillText(`CRR ${crr.score}`, x + 8, y + 58);
-      if (crr.forced) {
-        ctx.font = 'bold 7px system-ui'; ctx.fillStyle = '#FFFFFF';
-        const lockX = x + node.w - 32; const lockY = y + 50;
-        ctx.fillStyle = '#B91C1C';
-        ctx.beginPath(); ctx.roundRect(lockX, lockY, 26, 12, 2); ctx.fill();
-        ctx.fillStyle = '#FFFFFF'; ctx.textAlign = 'center';
-        ctx.fillText('🔒 AUTO', lockX + 13, lockY + 9);
-      }
+      if (node.type === 'company' && node.totalShares) { ctx.font = '8px system-ui'; ctx.fillStyle = '#94A3B8'; ctx.fillText(`${Number(node.totalShares).toLocaleString()} shares`, x + 26, y + 47); }
+      ctx.font = 'bold 9px system-ui'; ctx.fillStyle = crr.level === 'High' ? '#DC2626' : crr.level === 'Medium' ? '#D97706' : '#16A34A'; ctx.fillText(`CRR ${crr.score}`, x + 8, y + 58);
+      if (crr.forced) { const lockX = x + node.w - 32, lockY = y + 50; ctx.fillStyle = '#B91C1C'; ctx.beginPath(); ctx.roundRect(lockX, lockY, 26, 12, 2); ctx.fill(); ctx.fillStyle = '#FFFFFF'; ctx.textAlign = 'center'; ctx.font = 'bold 7px system-ui'; ctx.fillText('🔒 AUTO', lockX + 13, lockY + 9); }
       ctx.textAlign = 'left';
       if (node.pepType !== 'None') { ctx.fillStyle = '#D97706'; ctx.font = 'bold 8px system-ui'; ctx.fillText('PEP', x + node.w - 28, y + 24); }
       if (node.sanctionStatus === 'Confirmed Hit') { ctx.font = '12px system-ui'; ctx.fillText('⛔', x + node.w - 18, y + 38); }
@@ -562,12 +399,108 @@ function DAGCanvas({ entities, relationships, t, selectedEntity, onSelectEntity 
         <span className="font-semibold">{t.legend}:</span>
         <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-blue-100 border border-blue-500 inline-block"></span>{t.companyNode}</span>
         <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-green-100 border border-green-500 inline-block"></span>{t.personNode}</span>
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-red-100 border-2 border-red-500 inline-block"></span>{t.highRiskNode} / {t.autoTag}</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-red-100 border-2 border-red-500 inline-block"></span>{t.highRiskNode}</span>
         <span className="flex items-center gap-1"><span className="w-5 border-t-2 border-dashed border-red-500 inline-block"></span>{t.nomineeLink}</span>
       </div>
     </div>
   );
 }
+
+/* ═══════════════════════════ RELATIONSHIP FORM (Shared for Add / Edit) ═══════════════════════════ */
+function RelationshipForm({ relData, setRelData, entities, companyEntities, onSubmit, onCancel, isEditing, t }) {
+  const selectedToEntity = entities.find(e => e.id === relData.toId);
+  const toHasShares = selectedToEntity && selectedToEntity.totalShares && parseFloat(selectedToEntity.totalShares) > 0;
+
+  const calcSharesPreview = useMemo(() => {
+    if (relData.inputMode !== 'shares' || !relData.toId) return null;
+    const toEnt = entities.find(e => e.id === relData.toId);
+    if (!toEnt || !toEnt.totalShares) return null;
+    const total = parseFloat(toEnt.totalShares);
+    const held = parseFloat(relData.sharesHeld);
+    if (!total || total <= 0 || isNaN(held)) return null;
+    return Math.round((held / total) * 10000) / 100;
+  }, [relData.inputMode, relData.toId, relData.sharesHeld, entities]);
+
+  return (
+    <div className="bg-white border-2 border-blue-200 rounded-lg p-2.5 space-y-2 text-xs shadow-md">
+      <div className="flex items-center gap-2 text-sm font-bold text-blue-700">
+        {isEditing ? <Edit3 size={14} /> : <Plus size={14} />}
+        {isEditing ? t.editRelationship : t.addRelationship}
+      </div>
+      <div className="grid grid-cols-2 gap-1.5">
+        <div>
+          <label className="text-gray-500">{t.from}</label>
+          <select className="w-full border rounded px-1.5 py-1 text-xs" value={relData.fromId} onChange={e => setRelData({ ...relData, fromId: e.target.value })} disabled={isEditing}>
+            <option value="">{t.select}</option>
+            {entities.map(e => <option key={e.id} value={e.id}>{e.type === 'company' ? '🏢' : '👤'} {e.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-gray-500">{t.to}</label>
+          <select className="w-full border rounded px-1.5 py-1 text-xs" value={relData.toId} onChange={e => setRelData({ ...relData, toId: e.target.value, sharesHeld: '', percentage: relData.inputMode === 'shares' ? 0 : relData.percentage })} disabled={isEditing}>
+            <option value="">{t.select}</option>
+            {companyEntities.map(e => (<option key={e.id} value={e.id}>🏢 {e.name}{e.totalShares ? ` (${Number(e.totalShares).toLocaleString()} ${t.shares})` : ''}</option>))}
+          </select>
+          {!isEditing && <div className="text-gray-400 mt-0.5 flex items-center gap-0.5"><Info size={8} />{t.onlyCompaniesAsTarget}</div>}
+        </div>
+      </div>
+
+      {/* Input Mode Toggle */}
+      <div className="bg-slate-50 rounded-lg p-2 space-y-1.5">
+        <label className="text-gray-500 font-semibold">{t.inputMode}</label>
+        <div className="flex rounded-lg overflow-hidden border">
+          <button onClick={() => setRelData({ ...relData, inputMode: 'percentage', sharesHeld: '' })}
+            className={`flex-1 py-1.5 text-xs font-medium flex items-center justify-center gap-1 transition ${relData.inputMode === 'percentage' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+            <Percent size={11} />{t.byPercentage}
+          </button>
+          <button onClick={() => setRelData({ ...relData, inputMode: 'shares', percentage: 0 })}
+            className={`flex-1 py-1.5 text-xs font-medium flex items-center justify-center gap-1 transition ${relData.inputMode === 'shares' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'} ${!toHasShares ? 'opacity-50' : ''}`}
+            disabled={!toHasShares}>
+            <Hash size={11} />{t.byShares}
+          </button>
+        </div>
+        {relData.inputMode === 'percentage' ? (
+          <div>
+            <label className="text-gray-500">{t.ownershipPct}</label>
+            <div className="flex items-center gap-1">
+              <input type="number" min="0" max="100" step="0.01" className="w-full border rounded px-1.5 py-1.5 text-xs" value={relData.percentage} onChange={e => setRelData({ ...relData, percentage: parseFloat(e.target.value) || 0 })} />
+              <span className="text-gray-400 font-bold">%</span>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {!toHasShares && relData.toId && <div className="bg-amber-50 border border-amber-200 rounded p-1.5 text-amber-700 flex items-center gap-1"><AlertCircle size={11} />{t.shareInfo}</div>}
+            {toHasShares && (<>
+              <div className="flex items-center gap-1 text-gray-500"><Building2 size={10} /><span>{selectedToEntity.name} {t.totalShares}: <strong className="text-gray-800">{Number(selectedToEntity.totalShares).toLocaleString()}</strong></span></div>
+              <div>
+                <label className="text-gray-500">{t.sharesHeld}</label>
+                <div className="flex items-center gap-1">
+                  <input type="number" min="0" max={selectedToEntity.totalShares} className="w-full border rounded px-1.5 py-1.5 text-xs" placeholder={`0 — ${Number(selectedToEntity.totalShares).toLocaleString()}`} value={relData.sharesHeld} onChange={e => setRelData({ ...relData, sharesHeld: e.target.value })} />
+                  <span className="text-gray-400 text-xs shrink-0">{t.shares}</span>
+                </div>
+              </div>
+              {calcSharesPreview !== null && <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 flex items-center justify-between"><span className="text-blue-700 flex items-center gap-1"><Percent size={11} />{t.autoCalc}:</span><span className="text-blue-900 font-bold text-sm">{calcSharesPreview}%</span></div>}
+            </>)}
+          </div>
+        )}
+      </div>
+
+      <div><label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={relData.isNominee} onChange={e => setRelData({ ...relData, isNominee: e.target.checked })} />{t.nomineeArrangement}</label></div>
+      <div>
+        <label className="text-gray-500">{t.controlTypes}</label>
+        <div className="flex flex-wrap gap-1 mt-0.5">{CONTROL_TYPES.map(ct => <label key={ct} className="flex items-center gap-0.5 text-xs bg-gray-50 rounded px-1 py-0.5"><input type="checkbox" checked={relData.controlTypes?.includes(ct)} onChange={e => { const types = e.target.checked ? [...(relData.controlTypes || []), ct] : (relData.controlTypes || []).filter(tt => tt !== ct); setRelData({ ...relData, controlTypes: types }); }} />{ct}</label>)}</div>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={onSubmit} className={`${isEditing ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'} text-white px-4 py-1.5 rounded text-xs font-medium flex items-center gap-1`}>
+          {isEditing ? <><Check size={12} />{t.update}</> : <><Plus size={12} />{t.add}</>}
+        </button>
+        <button onClick={onCancel} className="bg-gray-200 px-3 py-1.5 rounded text-xs hover:bg-gray-300">{t.cancel}</button>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════ MAIN APP ═══════════════════════════ */
 export default function CDDApp() {
   const [lang, setLang] = useState('zh');
   const t = i18n[lang];
@@ -582,30 +515,50 @@ export default function CDDApp() {
   const [showReport, setShowReport] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [showRelForm, setShowRelForm] = useState(false);
-  const [newRel, setNewRel] = useState({ fromId: '', toId: '', percentage: 0, sharesHeld: '', controlTypes: ['Ownership'], isNominee: false, inputMode: 'percentage' });
+  const [newRel, setNewRel] = useState(defaultRel());
+  const [editingRel, setEditingRel] = useState(null); // ← NEW: editing relationship state
   const [leftPanelTab, setLeftPanelTab] = useState('entities');
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(null);
 
   const addAudit = useCallback((action, detail) => {
     setAuditLog(prev => [{ id: auditIdCounter++, timestamp: new Date().toISOString(), action, detail }, ...prev]);
   }, []);
 
-  const loadSampleData = () => {
-    if (window.confirm(t.loadSampleConfirm)) {
-      const sample = generateSampleData();
-      setEntities(sample.entities);
-      setRelationships(sample.relationships);
-      setSelectedEntity(null);
-      setDetailOpen(false);
-      setShowAddEntity(false);
-      setEditingEntity(null);
-      setActiveTab('workspace');
-      setShowReport(false);
-      addAudit(t.sampleLoaded, '10 entities + 9 relationships loaded');
-    }
+  /* ── Custom Confirm Dialog (replaces window.confirm) ── */
+  const CustomConfirm = () => {
+    if (!showConfirm) return null;
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowConfirm(null)}>
+        <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full m-4 p-5 space-y-4" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center gap-2 text-amber-600"><AlertTriangle size={20} /><span className="font-bold text-sm">{showConfirm.title || ''}</span></div>
+          <p className="text-sm text-gray-700">{showConfirm.message}</p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setShowConfirm(null)} className="px-4 py-1.5 rounded text-xs bg-gray-200 hover:bg-gray-300">{t.cancel}</button>
+            <button onClick={() => { showConfirm.onConfirm(); setShowConfirm(null); }} className="px-4 py-1.5 rounded text-xs bg-red-600 text-white hover:bg-red-700 font-medium">{t.save}</button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
+  const loadSampleData = () => {
+    setShowConfirm({
+      title: t.loadSample,
+      message: t.loadSampleConfirm,
+      onConfirm: () => {
+        const sample = generateSampleData();
+        setEntities(sample.entities); setRelationships(sample.relationships);
+        setSelectedEntity(null); setDetailOpen(false); setShowAddEntity(false);
+        setEditingEntity(null); setEditingRel(null); setShowRelForm(false);
+        setActiveTab('workspace'); setShowReport(false);
+        addAudit(t.sampleLoaded, '10 entities + 9 relationships loaded');
+      }
+    });
+  };
+
+  /* ── Entity CRUD ── */
   const addEntity = () => {
     if (!newEntity.name) return;
     const ne = { ...newEntity, id: Date.now().toString() + Math.random().toString(36).substr(2, 5) };
@@ -613,56 +566,76 @@ export default function CDDApp() {
     addAudit(t.entityAdded, `${t.added} ${newEntity.type === 'company' ? t.company : t.person}: ${newEntity.name}`);
     setNewEntity(defaultEntity()); setShowAddEntity(false);
   };
-
   const removeEntity = (id) => {
     const ent = entities.find(e => e.id === id);
     setEntities(prev => prev.filter(e => e.id !== id));
     setRelationships(prev => prev.filter(r => r.fromId !== id && r.toId !== id));
     if (selectedEntity === id) { setSelectedEntity(null); setDetailOpen(false); }
+    if (editingRel?.fromId === id || editingRel?.toId === id) { setEditingRel(null); }
     if (ent) addAudit(t.entityRemoved, `${t.removed}: ${ent.name}`);
   };
-
   const updateEntity = (id, updates) => {
     setEntities(prev => prev.map(e => e.id === id ? { ...e, ...updates } : e));
     const ent = entities.find(e => e.id === id);
     if (ent) addAudit(t.entityUpdated, `${t.updated} ${ent.name}`);
   };
 
+  /* ── Relationship CRUD ── */
+  const computeRelPercentage = (relData) => {
+    const toEntity = entities.find(e => e.id === relData.toId);
+    let finalPct = relData.percentage;
+    let sharesHeld = relData.sharesHeld || '';
+    if (relData.inputMode === 'shares' && toEntity) {
+      const total = parseFloat(toEntity.totalShares);
+      const held = parseFloat(relData.sharesHeld);
+      if (total > 0 && held >= 0) {
+        finalPct = Math.round((held / total) * 10000) / 100;
+        sharesHeld = relData.sharesHeld;
+      }
+    }
+    return { finalPct, sharesHeld };
+  };
+
   const addRelationship = () => {
     if (!newRel.fromId || !newRel.toId || newRel.fromId === newRel.toId) return;
     const toEntity = entities.find(e => e.id === newRel.toId);
     if (toEntity && toEntity.type === 'person') return;
-    let finalPct = newRel.percentage;
-    let sharesHeld = '';
-    if (newRel.inputMode === 'shares' && toEntity) {
-      const total = parseFloat(toEntity.totalShares);
-      const held = parseFloat(newRel.sharesHeld);
-      if (total > 0 && held >= 0) {
-        finalPct = Math.round((held / total) * 10000) / 100;
-        sharesHeld = newRel.sharesHeld;
-      }
-    }
+    const { finalPct, sharesHeld } = computeRelPercentage(newRel);
     const relToAdd = { ...newRel, id: Date.now().toString(), percentage: finalPct, sharesHeld };
     setRelationships(prev => [...prev, relToAdd]);
     const from = entities.find(e => e.id === newRel.fromId);
     addAudit(t.relationshipAdded, `${from?.name} → ${toEntity?.name}: ${finalPct}%${sharesHeld ? ` (${sharesHeld} ${t.shares})` : ''}`);
-    setNewRel({ fromId: '', toId: '', percentage: 0, sharesHeld: '', controlTypes: ['Ownership'], isNominee: false, inputMode: 'percentage' }); setShowRelForm(false);
+    setNewRel(defaultRel()); setShowRelForm(false);
   };
 
-  const removeRelationship = (id) => { setRelationships(prev => prev.filter(r => r.id !== id)); addAudit(t.relationshipRemoved, t.removed); };
+  const updateRelationship = () => {
+    if (!editingRel) return;
+    const { finalPct, sharesHeld } = computeRelPercentage(editingRel);
+    const updated = { ...editingRel, percentage: finalPct, sharesHeld };
+    setRelationships(prev => prev.map(r => r.id === updated.id ? updated : r));
+    const from = entities.find(e => e.id === updated.fromId);
+    const to2 = entities.find(e => e.id === updated.toId);
+    addAudit(t.relationshipUpdated, `${t.updated}: ${from?.name} → ${to2?.name}: ${finalPct}%${sharesHeld ? ` (${sharesHeld} ${t.shares})` : ''}`);
+    setEditingRel(null);
+  };
 
-  const calcSharesPreview = useMemo(() => {
-    if (newRel.inputMode !== 'shares' || !newRel.toId) return null;
-    const toEntity = entities.find(e => e.id === newRel.toId);
-    if (!toEntity || !toEntity.totalShares) return null;
-    const total = parseFloat(toEntity.totalShares);
-    const held = parseFloat(newRel.sharesHeld);
-    if (!total || total <= 0 || isNaN(held)) return null;
-    return Math.round((held / total) * 10000) / 100;
-  }, [newRel.inputMode, newRel.toId, newRel.sharesHeld, entities]);
+  const removeRelationship = (id) => {
+    const rel = relationships.find(r => r.id === id);
+    const from = entities.find(e => e.id === rel?.fromId);
+    const to2 = entities.find(e => e.id === rel?.toId);
+    setRelationships(prev => prev.filter(r => r.id !== id));
+    if (editingRel?.id === id) setEditingRel(null);
+    addAudit(t.relationshipRemoved, `${t.removed}: ${from?.name || '?'} → ${to2?.name || '?'}`);
+  };
+
+  const startEditRelationship = (rel) => {
+    setEditingRel({ ...rel });
+    setShowRelForm(false); // close add form if open
+  };
 
   const companyEntities = useMemo(() => entities.filter(e => e.type === 'company'), [entities]);
 
+  /* ── UBO Calculation ── */
   const findUBOs = useMemo(() => {
     const ubos = [];
     const persons = entities.filter(e => e.type === 'person');
@@ -687,26 +660,22 @@ export default function CDDApp() {
           const effectivePct = chain.reduce((acc, step) => acc * step.percentage / 100, 1) * 100;
           const allControlTypes = [...new Set(chain.flatMap(s => s.controlTypes))];
           const hasNominee = chain.some(s => s.isNominee);
-          if (effectivePct >= 25 || allControlTypes.some(ct => ct !== 'Ownership')) {
+          if (effectivePct >= 25 || allControlTypes.some(ct => ct !== 'Ownership'))
             ubos.push({ personId: person.id, personName: person.name, companyId: company.id, companyName: company.name, effectivePct: Math.round(effectivePct * 100) / 100, chain, depth: chain.length, controlTypes: allControlTypes, hasNominee });
-          }
         });
       });
     });
     return ubos;
   }, [entities, relationships]);
 
+  /* ── Complexity Warnings ── */
   const complexityWarnings = useMemo(() => {
     const warnings = [];
     entities.forEach(entity => {
       const crr = calcCRR(entity);
       crr.flags.forEach(f => {
-        if (['nomineeStructure', 'bearerShareJurisdiction', 'shellRisk'].includes(f))
-          warnings.push({ entityId: entity.id, entityName: entity.name, warning: t[f] || f, severity: 'high' });
-        if (f === 'autoHighRiskTrust')
-          warnings.push({ entityId: entity.id, entityName: entity.name, warning: t.autoHighRiskTrust, severity: 'high' });
-        if (f === 'autoHighRiskNominee')
-          warnings.push({ entityId: entity.id, entityName: entity.name, warning: t.autoHighRiskNominee, severity: 'high' });
+        if (['nomineeStructure', 'bearerShareJurisdiction', 'shellRisk'].includes(f)) warnings.push({ entityId: entity.id, entityName: entity.name, warning: t[f] || f, severity: 'high' });
+        if (f === 'trustFoundation') warnings.push({ entityId: entity.id, entityName: entity.name, warning: t.autoHighRiskTrust, severity: 'high' });
       });
     });
     const maxDepth = findUBOs.reduce((max, u) => Math.max(max, u.depth), 0);
@@ -725,15 +694,12 @@ export default function CDDApp() {
 
   const handleSelectEntity = (id) => { setSelectedEntity(id); setDetailOpen(true); };
 
+  /* ── Entity Form ── */
   const ForcedHighRiskBanner = ({ entity }) => {
     if (!isForcedHighRisk(entity)) return null;
     return (
       <div className="bg-red-100 border-2 border-red-400 border-dashed rounded-lg p-2 text-xs">
-        <div className="flex items-center gap-1.5 text-red-800 font-bold">
-          <Lock size={12} />
-          <span>{t.lockedHighRisk}</span>
-          <span className="bg-red-600 text-white px-1.5 py-0.5 rounded text-xs ml-auto">{t.autoTag}</span>
-        </div>
+        <div className="flex items-center gap-1.5 text-red-800 font-bold"><Lock size={12} /><span>{t.lockedHighRisk}</span><span className="bg-red-600 text-white px-1.5 py-0.5 rounded text-xs ml-auto">{t.autoTag}</span></div>
         <div className="text-red-700 mt-1">{entity.subtype === 'Nominee Shareholder' ? t.autoHighRiskNominee : t.autoHighRiskTrust}</div>
       </div>
     );
@@ -743,34 +709,15 @@ export default function CDDApp() {
     const subtypes = entity.type === 'company' ? ENTITY_SUBTYPES_COMPANY : ENTITY_SUBTYPES_PERSON;
     const forced = isForcedHighRisk(entity);
     return (
-      <div className="bg-white border rounded-lg p-2.5 space-y-1.5 text-xs shadow-sm">
-        <h3 className="font-bold text-sm">{title}</h3>
+      <div className="bg-white border-2 border-blue-200 rounded-lg p-2.5 space-y-1.5 text-xs shadow-md">
+        <h3 className="font-bold text-sm flex items-center gap-2 text-blue-700">{title === t.editEntity ? <Edit3 size={14} /> : <Plus size={14} />}{title}</h3>
         {forced && <ForcedHighRiskBanner entity={entity} />}
         <div className="grid grid-cols-2 gap-1.5">
           <div><label className="text-gray-500">{t.name} *</label><input className="w-full border rounded px-1.5 py-1 text-xs" value={entity.name} onChange={e => setEntity({ ...entity, name: e.target.value })} /></div>
-          <div><label className="text-gray-500">{t.type}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.type} onChange={e => {
-            const newType = e.target.value;
-            const newSubtype = newType === 'company' ? 'Standard Company' : 'Individual';
-            setEntity({ ...entity, type: newType, subtype: newSubtype, totalShares: newType === 'person' ? '' : entity.totalShares });
-          }}><option value="company">{t.company}</option><option value="person">{t.person}</option></select></div>
+          <div><label className="text-gray-500">{t.type}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.type} onChange={e => { const nT = e.target.value; setEntity({ ...entity, type: nT, subtype: nT === 'company' ? 'Standard Company' : 'Individual', totalShares: nT === 'person' ? '' : entity.totalShares }); }}><option value="company">{t.company}</option><option value="person">{t.person}</option></select></div>
           <div><label className="text-gray-500">{t.jurisdiction}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.jurisdiction} onChange={e => setEntity({ ...entity, jurisdiction: e.target.value })}>{ALL_JURISDICTIONS.map(j => <option key={j} value={j}>{j}{FATF_HIGH_RISK.includes(j) ? ' ⚠️' : isOffshore(j) ? ' 🏝️' : ''}</option>)}</select></div>
-          <div>
-            <label className="text-gray-500 flex items-center gap-1">
-              {t.subtype}
-              {FORCED_HIGH_RISK_SUBTYPES.includes(entity.subtype) && <Lock size={9} className="text-red-500" />}
-            </label>
-            <select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.subtype} onChange={e => setEntity({ ...entity, subtype: e.target.value })}>
-              {subtypes.map(s => <option key={s} value={s}>{s}{FORCED_HIGH_RISK_SUBTYPES.includes(s) ? ' 🔒' : ''}</option>)}
-            </select>
-          </div>
-          {entity.type === 'company' && (
-            <div className="col-span-2">
-              <label className="text-gray-500 flex items-center gap-1"><Hash size={10} />{t.totalShares}</label>
-              <input type="number" min="0" className="w-full border rounded px-1.5 py-1 text-xs" placeholder="e.g. 10000"
-                value={entity.totalShares} onChange={e => setEntity({ ...entity, totalShares: e.target.value })} />
-              <div className="text-gray-400 mt-0.5 text-xs flex items-center gap-1"><Info size={9} />{t.shareInfo}</div>
-            </div>
-          )}
+          <div><label className="text-gray-500 flex items-center gap-1">{t.subtype}{FORCED_HIGH_RISK_SUBTYPES.includes(entity.subtype) && <Lock size={9} className="text-red-500" />}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.subtype} onChange={e => setEntity({ ...entity, subtype: e.target.value })}>{subtypes.map(s => <option key={s} value={s}>{s}{FORCED_HIGH_RISK_SUBTYPES.includes(s) ? ' 🔒' : ''}</option>)}</select></div>
+          {entity.type === 'company' && (<div className="col-span-2"><label className="text-gray-500 flex items-center gap-1"><Hash size={10} />{t.totalShares}</label><input type="number" min="0" className="w-full border rounded px-1.5 py-1 text-xs" placeholder="e.g. 10000" value={entity.totalShares} onChange={e => setEntity({ ...entity, totalShares: e.target.value })} /><div className="text-gray-400 mt-0.5 text-xs flex items-center gap-1"><Info size={9} />{t.shareInfo}</div></div>)}
           <div><label className="text-gray-500">{t.pepStatus}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.pepType} onChange={e => setEntity({ ...entity, pepType: e.target.value })}>{PEP_TYPES.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
           <div><label className="text-gray-500">{t.sanctions}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.sanctionStatus} onChange={e => setEntity({ ...entity, sanctionStatus: e.target.value })}>{SANCTION_STATUS.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
           <div><label className="text-gray-500">{t.adverseMedia}</label><select className="w-full border rounded px-1.5 py-1 text-xs" value={entity.adverseMedia} onChange={e => setEntity({ ...entity, adverseMedia: e.target.value })}>{ADVERSE_MEDIA_STATUS.map(a => <option key={a} value={a}>{a}</option>)}</select></div>
@@ -784,11 +731,17 @@ export default function CDDApp() {
           <div className="col-span-2"><label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={entity.isRegulated} onChange={e => setEntity({ ...entity, isRegulated: e.target.checked })} /> {t.regulated}</label></div>
           <div className="col-span-2"><label className="text-gray-500">{t.notes}</label><textarea className="w-full border rounded px-1.5 py-1 text-xs" rows={2} value={entity.notes} onChange={e => setEntity({ ...entity, notes: e.target.value })} /></div>
         </div>
-        <div className="flex gap-2"><button onClick={onSubmit} className="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700">{t.save}</button><button onClick={onCancel} className="bg-gray-200 px-3 py-1 rounded text-xs hover:bg-gray-300">{t.cancel}</button></div>
+        <div className="flex gap-2">
+          <button onClick={onSubmit} className={`${title === t.editEntity ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'} text-white px-4 py-1.5 rounded text-xs font-medium flex items-center gap-1`}>
+            {title === t.editEntity ? <><Check size={12} />{t.save}</> : <><Plus size={12} />{t.save}</>}
+          </button>
+          <button onClick={onCancel} className="bg-gray-200 px-3 py-1.5 rounded text-xs hover:bg-gray-300">{t.cancel}</button>
+        </div>
       </div>
     );
   };
 
+  /* ── Detail Modal ── */
   const DetailModal = () => {
     const entity = entities.find(e => e.id === selectedEntity);
     if (!entity || !detailOpen) return null;
@@ -806,48 +759,24 @@ export default function CDDApp() {
               {entity.sanctionStatus === 'Confirmed Hit' && <span className="bg-red-600 text-white text-xs px-2 py-0.5 rounded animate-pulse">{t.sanctioned}</span>}
               {crr.forced && <span className="bg-red-700 text-white text-xs px-2 py-0.5 rounded flex items-center gap-0.5"><Lock size={9} />{t.autoTag}</span>}
             </h3>
-            <button onClick={() => setDetailOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
-          </div>
-          {crr.forced && (
-            <div className="bg-red-100 border-2 border-red-400 border-dashed rounded-lg p-2.5">
-              <div className="flex items-center gap-2 text-red-800 font-bold text-xs">
-                <Lock size={14} />
-                <span>{t.lockedHighRisk}</span>
-              </div>
-              <div className="text-red-700 text-xs mt-1">{entity.subtype === 'Nominee Shareholder' ? t.autoHighRiskNominee : t.autoHighRiskTrust}</div>
-              <div className="text-red-600 text-xs mt-1 flex items-center gap-1"><Clock size={10} />{t.forcedAnnualReview}: {t.annual} | EDD</div>
+            <div className="flex items-center gap-1">
+              <button onClick={() => { setEditingEntity({ ...entity }); setShowAddEntity(false); setDetailOpen(false); setLeftPanelTab('entities'); }} className="text-blue-500 hover:text-blue-700 flex items-center gap-0.5 text-xs border border-blue-200 rounded px-2 py-1 hover:bg-blue-50"><Edit3 size={12} />{t.editEntity}</button>
+              <button onClick={() => setDetailOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
             </div>
-          )}
+          </div>
+          {crr.forced && <div className="bg-red-100 border-2 border-red-400 border-dashed rounded-lg p-2.5"><div className="flex items-center gap-2 text-red-800 font-bold text-xs"><Lock size={14} /><span>{t.lockedHighRisk}</span></div><div className="text-red-700 text-xs mt-1">{entity.subtype === 'Nominee Shareholder' ? t.autoHighRiskNominee : t.autoHighRiskTrust}</div><div className="text-red-600 text-xs mt-1 flex items-center gap-1"><Clock size={10} />{t.forcedAnnualReview}: {t.annual} | EDD</div></div>}
           <div className="grid grid-cols-2 gap-1.5 text-xs">
             <div className="bg-gray-50 rounded p-1.5"><span className="text-gray-500">{t.type}:</span> <span className="font-medium">{entity.type === 'company' ? t.company : t.person}</span></div>
-            <div className={`rounded p-1.5 ${crr.forced ? 'bg-red-50 border border-red-200' : 'bg-gray-50'}`}>
-              <span className="text-gray-500">{t.subtype}:</span> <span className="font-medium">{entity.subtype}</span>
-              {crr.forced && <Lock size={9} className="inline ml-1 text-red-500" />}
-            </div>
+            <div className={`rounded p-1.5 ${crr.forced ? 'bg-red-50 border border-red-200' : 'bg-gray-50'}`}><span className="text-gray-500">{t.subtype}:</span> <span className="font-medium">{entity.subtype}</span>{crr.forced && <Lock size={9} className="inline ml-1 text-red-500" />}</div>
             <div className="bg-gray-50 rounded p-1.5"><span className="text-gray-500">{t.jurisdiction}:</span> <span className="font-medium">{entity.jurisdiction}</span> {riskBadge(getJurisdictionRisk(entity.jurisdiction), t)}</div>
             <div className="bg-gray-50 rounded p-1.5"><span className="text-gray-500">{t.industry}:</span> <span className="font-medium">{entity.industry || 'N/A'}</span></div>
             {entity.type === 'company' && entity.totalShares && <div className="bg-gray-50 rounded p-1.5 col-span-2"><span className="text-gray-500">{t.totalShares}:</span> <span className="font-medium">{Number(entity.totalShares).toLocaleString()} {t.shares}</span></div>}
           </div>
           <div className={`rounded-lg p-2.5 border ${crr.level === 'High' ? 'bg-red-50 border-red-200' : crr.level === 'Medium' ? 'bg-yellow-50 border-yellow-200' : 'bg-green-50 border-green-200'}`}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="font-bold text-xs flex items-center gap-1">
-                {t.crr}
-                {crr.forced && <span className="bg-red-600 text-white px-1.5 py-0.5 rounded text-xs flex items-center gap-0.5"><Lock size={8} />{t.autoTag}</span>}
-              </span>
-              <div className="flex items-center gap-2">{riskBadge(crr.level, t)} <span className="text-xs font-mono">{crr.score}/100</span></div>
-            </div>
+            <div className="flex items-center justify-between mb-1"><span className="font-bold text-xs flex items-center gap-1">{t.crr}{crr.forced && <span className="bg-red-600 text-white px-1.5 py-0.5 rounded text-xs flex items-center gap-0.5"><Lock size={8} />{t.autoTag}</span>}</span><div className="flex items-center gap-2">{riskBadge(crr.level, t)} <span className="text-xs font-mono">{crr.score}/100</span></div></div>
             <div className="w-full bg-gray-200 rounded-full h-1.5 mb-1"><div className={`h-1.5 rounded-full ${crr.level === 'High' ? 'bg-red-500' : crr.level === 'Medium' ? 'bg-yellow-500' : 'bg-green-500'}`} style={{ width: `${crr.score}%` }}></div></div>
-            <div className="text-xs space-y-0.5">{crr.flags.map((f, i) => (
-              <div key={i} className={`flex items-center gap-1 ${(f === 'autoHighRiskTrust' || f === 'autoHighRiskNominee') ? 'text-red-700 font-semibold' : ''}`}>
-                {(f === 'autoHighRiskTrust' || f === 'autoHighRiskNominee') ? <Lock size={9} /> : <AlertCircle size={9} />}
-                {t[f] || f}
-              </div>
-            ))}</div>
-            <div className={`mt-1 text-xs flex items-center gap-1 ${crr.forced ? 'text-red-700 font-semibold' : ''}`}>
-              {crr.forced ? <Lock size={9} /> : <Clock size={9} />}
-              {t.reviewCycle}: {cycle.label} | {crr.level === 'High' ? t.edd : crr.level === 'Medium' ? t.cdd : t.sdd}
-              {crr.forced && ` (${t.forcedAnnualReview})`}
-            </div>
+            <div className="text-xs space-y-0.5">{crr.flags.map((f, i) => <div key={i} className="flex items-center gap-1"><AlertCircle size={9} />{t[f] || f}</div>)}</div>
+            <div className={`mt-1 text-xs flex items-center gap-1 ${crr.forced ? 'text-red-700 font-semibold' : ''}`}>{crr.forced ? <Lock size={9} /> : <Clock size={9} />}{t.reviewCycle}: {cycle.label} | {crr.level === 'High' ? t.edd : crr.level === 'Medium' ? t.cdd : t.sdd}</div>
           </div>
           <div className="grid grid-cols-3 gap-1.5 text-xs">
             <div className={`rounded p-1.5 border ${entity.pepType !== 'None' ? 'bg-amber-50 border-amber-200' : 'bg-gray-50'}`}><Crown size={10} /><div className="font-semibold">{t.pepStatus}</div><div>{entity.pepType}</div></div>
@@ -862,6 +791,7 @@ export default function CDDApp() {
     );
   };
 
+  /* ── Report View ── */
   const ReportView = () => {
     const highRiskEntities = entities.filter(e => calcCRR(e).level === 'High');
     const forcedEntities = entities.filter(e => isForcedHighRisk(e));
@@ -877,13 +807,7 @@ export default function CDDApp() {
           <div className="bg-purple-50 rounded p-2"><div className="text-xl font-bold text-purple-700">{findUBOs.length}</div><div className="text-xs">{t.ubosIdentified}</div></div>
           <div className="bg-orange-50 rounded p-2"><div className="text-xl font-bold text-orange-700">{complexityWarnings.length}</div><div className="text-xs">{t.warningsCount}</div></div>
         </div>
-        {forcedEntities.length > 0 && (
-          <div className="bg-red-50 border-2 border-red-300 border-dashed rounded-lg p-3">
-            <div className="font-bold text-red-800 text-sm flex items-center gap-1"><Lock size={14} />{t.forcedHighRisk}</div>
-            <div className="text-xs text-red-700 mt-1 mb-2">{t.trustNomineePolicy}</div>
-            {forcedEntities.map(e => <div key={e.id} className="text-xs mt-1 flex items-center gap-1">• <span className="font-semibold">{e.name}</span> <span className="text-red-500">({e.subtype})</span> — {t.annual} | EDD</div>)}
-          </div>
-        )}
+        {forcedEntities.length > 0 && <div className="bg-red-50 border-2 border-red-300 border-dashed rounded-lg p-3"><div className="font-bold text-red-800 text-sm flex items-center gap-1"><Lock size={14} />{t.forcedHighRisk}</div><div className="text-xs text-red-700 mt-1 mb-2">{t.trustNomineePolicy}</div>{forcedEntities.map(e => <div key={e.id} className="text-xs mt-1 flex items-center gap-1">• <span className="font-semibold">{e.name}</span> <span className="text-red-500">({e.subtype})</span> — {t.annual} | EDD</div>)}</div>}
         {sanctionHits.length > 0 && <div className="bg-red-50 border-2 border-red-300 rounded-lg p-3"><div className="font-bold text-red-800 text-sm flex items-center gap-1"><Ban size={14} />{t.sanctionsAlert}</div>{sanctionHits.map(e => <div key={e.id} className="text-xs mt-1">• {e.name}: {e.sanctionStatus}</div>)}</div>}
         {peps.length > 0 && <div className="bg-amber-50 border border-amber-300 rounded-lg p-3"><div className="font-bold text-amber-800 text-sm flex items-center gap-1"><Crown size={14} />{t.pepIdentified}</div>{peps.map(e => <div key={e.id} className="text-xs mt-1">• {e.name}: {e.pepType}</div>)}</div>}
         {findUBOs.length > 0 && <div className="bg-purple-50 border border-purple-200 rounded-lg p-3"><div className="font-bold text-sm mb-1">{t.uboSummary}</div>{findUBOs.map((u, i) => <div key={i} className="text-xs mt-1">• {u.personName} → {u.companyName}: {u.effectivePct}% {u.hasNominee && `⚠️ ${t.viaNominee}`}</div>)}</div>}
@@ -900,18 +824,12 @@ export default function CDDApp() {
     { key: 'audit', label: t.auditTrail, icon: <History size={13} /> },
   ];
 
-  const selectedToEntity = entities.find(e => e.id === newRel.toId);
-  const toHasShares = selectedToEntity && selectedToEntity.totalShares && parseFloat(selectedToEntity.totalShares) > 0;
-
   return (
     <div className="h-screen flex flex-col bg-gray-50 text-gray-900 overflow-hidden">
       {/* HEADER */}
       <div className="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-4 py-2 shrink-0">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Shield size={22} />
-            <div><h1 className="text-sm font-bold leading-tight">{t.appTitle}</h1><p className="text-xs text-slate-400">{t.appSubtitle}</p></div>
-          </div>
+          <div className="flex items-center gap-2"><Shield size={22} /><div><h1 className="text-sm font-bold leading-tight">{t.appTitle}</h1><p className="text-xs text-slate-400">{t.appSubtitle}</p></div></div>
           <div className="flex items-center gap-2">
             <button onClick={loadSampleData} className="bg-purple-500/80 hover:bg-purple-500 px-2.5 py-1 rounded text-xs flex items-center gap-1 transition"><Layers size={13} />{t.loadSample}</button>
             <button onClick={() => setLang(lang === 'en' ? 'zh' : 'en')} className="bg-white/10 hover:bg-white/20 px-2.5 py-1 rounded text-xs flex items-center gap-1"><Languages size={13} />{lang === 'en' ? '中文' : 'EN'}</button>
@@ -919,12 +837,7 @@ export default function CDDApp() {
           </div>
         </div>
       </div>
-
-      {/* Policy Banner */}
-      <div className="bg-red-50 border-b border-red-200 px-4 py-1 text-xs text-red-700 flex items-center gap-2 shrink-0">
-        <Lock size={11} className="shrink-0" />
-        <span className="font-medium">{t.trustNomineePolicy}</span>
-      </div>
+      <div className="bg-red-50 border-b border-red-200 px-4 py-1 text-xs text-red-700 flex items-center gap-2 shrink-0"><Lock size={11} className="shrink-0" /><span className="font-medium">{t.trustNomineePolicy}</span></div>
 
       {/* TABS */}
       <div className="flex border-b bg-white shrink-0 overflow-x-auto">
@@ -957,19 +870,21 @@ export default function CDDApp() {
                         <button onClick={() => setPanelCollapsed(true)} className="px-2 text-gray-400 hover:text-gray-600"><PanelLeftClose size={14} /></button>
                       </div>
                       <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+                        {/* ═══ ENTITIES TAB ═══ */}
                         {leftPanelTab === 'entities' && (
                           <>
                             <div className="flex items-center gap-1">
                               <div className="relative flex-1"><Search size={12} className="absolute left-2 top-2 text-gray-400" /><input className="w-full border rounded pl-7 pr-2 py-1.5 text-xs" placeholder={t.search} value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
                               <button onClick={() => { setShowAddEntity(true); setEditingEntity(null); }} className="bg-blue-600 text-white px-2 py-1.5 rounded text-xs hover:bg-blue-700 flex items-center gap-0.5 whitespace-nowrap shrink-0"><Plus size={12} />{t.addEntity}</button>
                             </div>
-                            {showAddEntity && <EntityForm entity={newEntity} setEntity={setNewEntity} onSubmit={addEntity} onCancel={() => setShowAddEntity(false)} title={t.addEntity} />}
+                            {showAddEntity && !editingEntity && <EntityForm entity={newEntity} setEntity={setNewEntity} onSubmit={addEntity} onCancel={() => setShowAddEntity(false)} title={t.addEntity} />}
                             {editingEntity && <EntityForm entity={editingEntity} setEntity={setEditingEntity} onSubmit={() => { updateEntity(editingEntity.id, editingEntity); setEditingEntity(null); }} onCancel={() => setEditingEntity(null)} title={t.editEntity} />}
                             {filteredEntities.map(entity => {
                               const crr = calcCRR(entity);
+                              const isBeingEdited = editingEntity?.id === entity.id;
                               return (
                                 <div key={entity.id}
-                                  className={`border rounded-lg p-2 hover:shadow-sm transition cursor-pointer text-xs ${selectedEntity === entity.id ? 'ring-2 ring-blue-400 bg-blue-50' : 'bg-white'} ${entity.sanctionStatus === 'Confirmed Hit' ? 'border-red-400 bg-red-50' : crr.forced ? 'border-red-300 border-dashed bg-red-50/50' : ''}`}
+                                  className={`border rounded-lg p-2 hover:shadow-sm transition cursor-pointer text-xs ${selectedEntity === entity.id ? 'ring-2 ring-blue-400 bg-blue-50' : 'bg-white'} ${isBeingEdited ? 'ring-2 ring-green-400' : ''} ${entity.sanctionStatus === 'Confirmed Hit' ? 'border-red-400 bg-red-50' : crr.forced ? 'border-red-300 border-dashed bg-red-50/50' : ''}`}
                                   onClick={() => handleSelectEntity(entity.id)}>
                                   <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-1 flex-wrap min-w-0">
@@ -981,17 +896,15 @@ export default function CDDApp() {
                                     </div>
                                     <div className="flex items-center gap-1 shrink-0 ml-1">
                                       {riskBadge(crr.level, t)}
-                                      <button onClick={(e) => { e.stopPropagation(); setEditingEntity({ ...entity }); setShowAddEntity(false); }} className="text-gray-400 hover:text-blue-600"><FileText size={11} /></button>
-                                      <button onClick={(e) => { e.stopPropagation(); removeEntity(entity.id); }} className="text-gray-400 hover:text-red-600"><Trash2 size={11} /></button>
+                                      <button onClick={(e) => { e.stopPropagation(); setEditingEntity({ ...entity }); setShowAddEntity(false); }} className="text-gray-400 hover:text-blue-600 p-0.5 rounded hover:bg-blue-50" title={t.editEntity}><Edit3 size={12} /></button>
+                                      <button onClick={(e) => { e.stopPropagation(); removeEntity(entity.id); }} className="text-gray-400 hover:text-red-600 p-0.5 rounded hover:bg-red-50"><Trash2 size={12} /></button>
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-2 mt-0.5 text-gray-500">
                                     <span className="flex items-center gap-0.5"><Globe size={9} />{entity.jurisdiction}</span>
                                     <span className={crr.forced ? 'text-red-600 font-semibold' : ''}>CRR: {crr.score}</span>
-                                    {crr.forced && <span className="text-red-600 flex items-center gap-0.5"><Clock size={9} />{t.annual}</span>}
                                     {entity.type === 'company' && entity.totalShares && <span className="flex items-center gap-0.5"><Hash size={9} />{Number(entity.totalShares).toLocaleString()}</span>}
                                   </div>
-                                  {crr.forced && <div className="text-red-600 mt-0.5 text-xs flex items-center gap-0.5"><Lock size={8} />{entity.subtype} → {t.forcedHighRisk} + {t.forcedAnnualReview}</div>}
                                 </div>
                               );
                             })}
@@ -1007,109 +920,53 @@ export default function CDDApp() {
                             )}
                           </>
                         )}
+
+                        {/* ═══ RELATIONSHIPS TAB ═══ */}
                         {leftPanelTab === 'relationships' && (
                           <>
-                            <button onClick={() => setShowRelForm(true)} className="bg-blue-600 text-white px-3 py-1.5 rounded text-xs hover:bg-blue-700 flex items-center gap-1 w-full justify-center"><Plus size={12} />{t.addRelationship}</button>
+                            <button onClick={() => { setShowRelForm(true); setEditingRel(null); }} className="bg-blue-600 text-white px-3 py-1.5 rounded text-xs hover:bg-blue-700 flex items-center gap-1 w-full justify-center"><Plus size={12} />{t.addRelationship}</button>
                             {companyEntities.length === 0 && <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-800 flex items-center gap-1"><Info size={12} />{t.noCompanyTarget}</div>}
-                            {showRelForm && (
-                              <div className="bg-white border rounded-lg p-2.5 space-y-2 text-xs shadow-sm">
-                                <div className="grid grid-cols-2 gap-1.5">
-                                  <div>
-                                    <label className="text-gray-500">{t.from}</label>
-                                    <select className="w-full border rounded px-1.5 py-1 text-xs" value={newRel.fromId} onChange={e => setNewRel({ ...newRel, fromId: e.target.value })}>
-                                      <option value="">{t.select}</option>
-                                      {entities.map(e => <option key={e.id} value={e.id}>{e.type === 'company' ? '🏢' : '👤'} {e.name}</option>)}
-                                    </select>
-                                  </div>
-                                  <div>
-                                    <label className="text-gray-500 flex items-center gap-1">{t.to}</label>
-                                    <select className="w-full border rounded px-1.5 py-1 text-xs" value={newRel.toId} onChange={e => setNewRel({ ...newRel, toId: e.target.value, sharesHeld: '', percentage: 0 })}>
-                                      <option value="">{t.select}</option>
-                                      {companyEntities.map(e => (
-                                        <option key={e.id} value={e.id}>🏢 {e.name}{e.totalShares ? ` (${Number(e.totalShares).toLocaleString()} ${t.shares})` : ''}</option>
-                                      ))}
-                                    </select>
-                                    <div className="text-gray-400 mt-0.5 flex items-center gap-0.5"><Info size={8} />{t.onlyCompaniesAsTarget}</div>
-                                  </div>
-                                </div>
 
-                                {/* Input Mode Toggle */}
-                                <div className="bg-slate-50 rounded-lg p-2 space-y-1.5">
-                                  <label className="text-gray-500 font-semibold">{t.inputMode}</label>
-                                  <div className="flex rounded-lg overflow-hidden border">
-                                    <button
-                                      onClick={() => setNewRel({ ...newRel, inputMode: 'percentage', sharesHeld: '' })}
-                                      className={`flex-1 py-1.5 text-xs font-medium flex items-center justify-center gap-1 transition ${newRel.inputMode === 'percentage' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
-                                      <Percent size={11} />{t.byPercentage}
-                                    </button>
-                                    <button
-                                      onClick={() => setNewRel({ ...newRel, inputMode: 'shares', percentage: 0 })}
-                                      className={`flex-1 py-1.5 text-xs font-medium flex items-center justify-center gap-1 transition ${newRel.inputMode === 'shares' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'} ${!toHasShares ? 'opacity-50' : ''}`}
-                                      disabled={!toHasShares}>
-                                      <Hash size={11} />{t.byShares}
-                                    </button>
-                                  </div>
-
-                                  {newRel.inputMode === 'percentage' ? (
-                                    <div>
-                                      <label className="text-gray-500">{t.ownershipPct}</label>
-                                      <div className="flex items-center gap-1">
-                                        <input type="number" min="0" max="100" step="0.01" className="w-full border rounded px-1.5 py-1.5 text-xs"
-                                          value={newRel.percentage} onChange={e => setNewRel({ ...newRel, percentage: parseFloat(e.target.value) || 0 })} />
-                                        <span className="text-gray-400 font-bold">%</span>
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <div className="space-y-1">
-                                      {!toHasShares && newRel.toId && (
-                                        <div className="bg-amber-50 border border-amber-200 rounded p-1.5 text-amber-700 flex items-center gap-1">
-                                          <AlertCircle size={11} />{t.shareInfo}
-                                        </div>
-                                      )}
-                                      {toHasShares && (
-                                        <>
-                                          <div className="flex items-center gap-1 text-gray-500">
-                                            <Building2 size={10} />
-                                            <span>{selectedToEntity.name} {t.totalShares}: <strong className="text-gray-800">{Number(selectedToEntity.totalShares).toLocaleString()}</strong></span>
-                                          </div>
-                                          <div>
-                                            <label className="text-gray-500">{t.sharesHeld}</label>
-                                            <div className="flex items-center gap-1">
-                                              <input type="number" min="0" max={selectedToEntity.totalShares} className="w-full border rounded px-1.5 py-1.5 text-xs"
-                                                placeholder={`0 — ${Number(selectedToEntity.totalShares).toLocaleString()}`}
-                                                value={newRel.sharesHeld} onChange={e => setNewRel({ ...newRel, sharesHeld: e.target.value })} />
-                                              <span className="text-gray-400 text-xs shrink-0">{t.shares}</span>
-                                            </div>
-                                          </div>
-                                          {calcSharesPreview !== null && (
-                                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 flex items-center justify-between">
-                                              <span className="text-blue-700 flex items-center gap-1"><Percent size={11} />{t.autoCalc}:</span>
-                                              <span className="text-blue-900 font-bold text-sm">{calcSharesPreview}%</span>
-                                            </div>
-                                          )}
-                                        </>
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-
-                                <div className="flex items-end"><label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={newRel.isNominee} onChange={e => setNewRel({ ...newRel, isNominee: e.target.checked })} />{t.nomineeArrangement}</label></div>
-                                <div><label className="text-gray-500">{t.controlTypes}</label><div className="flex flex-wrap gap-1 mt-0.5">{CONTROL_TYPES.map(ct => <label key={ct} className="flex items-center gap-0.5 text-xs bg-gray-50 rounded px-1 py-0.5"><input type="checkbox" checked={newRel.controlTypes?.includes(ct)} onChange={e => { const types = e.target.checked ? [...(newRel.controlTypes || []), ct] : (newRel.controlTypes || []).filter(tt => tt !== ct); setNewRel({ ...newRel, controlTypes: types }); }} />{ct}</label>)}</div></div>
-                                <div className="flex gap-2"><button onClick={addRelationship} className="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700">{t.add}</button><button onClick={() => setShowRelForm(false)} className="bg-gray-200 px-3 py-1 rounded text-xs hover:bg-gray-300">{t.cancel}</button></div>
-                              </div>
+                            {/* ADD form */}
+                            {showRelForm && !editingRel && (
+                              <RelationshipForm
+                                relData={newRel} setRelData={setNewRel}
+                                entities={entities} companyEntities={companyEntities}
+                                onSubmit={addRelationship} onCancel={() => { setShowRelForm(false); setNewRel(defaultRel()); }}
+                                isEditing={false} t={t}
+                              />
                             )}
+
+                            {/* EDIT form */}
+                            {editingRel && (
+                              <RelationshipForm
+                                relData={editingRel} setRelData={setEditingRel}
+                                entities={entities} companyEntities={companyEntities}
+                                onSubmit={updateRelationship} onCancel={() => setEditingRel(null)}
+                                isEditing={true} t={t}
+                              />
+                            )}
+
+                            {/* Relationship list */}
                             {relationships.map(rel => {
-                              const from = entities.find(e => e.id === rel.fromId); const to2 = entities.find(e => e.id === rel.toId);
+                              const from = entities.find(e => e.id === rel.fromId);
+                              const to2 = entities.find(e => e.id === rel.toId);
+                              const isBeingEdited = editingRel?.id === rel.id;
                               return (
-                                <div key={rel.id} className={`bg-white border rounded-lg p-2 text-xs ${rel.isNominee ? 'border-red-300 bg-red-50' : ''}`}>
+                                <div key={rel.id} className={`bg-white border rounded-lg p-2 text-xs transition ${rel.isNominee ? 'border-red-300 bg-red-50' : ''} ${isBeingEdited ? 'ring-2 ring-green-400 bg-green-50' : 'hover:shadow-sm'}`}>
                                   <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-1 flex-wrap">
-                                      <span className="font-medium">{from?.name || '?'}</span><span className="text-gray-400">→</span><span className="font-medium">{to2?.name || '?'}</span>
+                                    <div className="flex items-center gap-1 flex-wrap min-w-0">
+                                      <span className="font-medium">{from?.name || '?'}</span>
+                                      <span className="text-gray-400">→</span>
+                                      <span className="font-medium">{to2?.name || '?'}</span>
                                       <span className="bg-blue-100 text-blue-800 px-1.5 rounded font-semibold">{rel.percentage}%</span>
                                       {rel.sharesHeld && <span className="bg-slate-100 text-slate-600 px-1.5 rounded">{Number(rel.sharesHeld).toLocaleString()} {t.shares}</span>}
                                       {rel.isNominee && <span className="bg-red-100 text-red-800 px-1.5 rounded">{t.nominee}</span>}
                                     </div>
-                                    <button onClick={() => removeRelationship(rel.id)} className="text-gray-400 hover:text-red-600 shrink-0"><Trash2 size={11} /></button>
+                                    <div className="flex items-center gap-1 shrink-0 ml-1">
+                                      <button onClick={() => startEditRelationship(rel)} className="text-gray-400 hover:text-blue-600 p-0.5 rounded hover:bg-blue-50" title={t.editRelationship}><Edit3 size={12} /></button>
+                                      <button onClick={() => removeRelationship(rel.id)} className="text-gray-400 hover:text-red-600 p-0.5 rounded hover:bg-red-50"><Trash2 size={12} /></button>
+                                    </div>
                                   </div>
                                   <div className="text-gray-500 mt-0.5">{rel.controlTypes?.join(', ')}</div>
                                 </div>
@@ -1139,17 +996,10 @@ export default function CDDApp() {
                   return (
                     <div key={i} className={`bg-white border rounded-lg p-2.5 ${crr.level === 'High' ? 'border-red-300' : ''} ${crr.forced ? 'border-dashed border-red-400' : ''}`}>
                       <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <User size={15} className="text-purple-600" /><span className="font-bold text-sm">{ubo.personName}</span>
-                          {riskBadge(crr.level, t)}
-                          {crr.forced && <span className="bg-red-700 text-white text-xs px-1.5 rounded flex items-center gap-0.5"><Lock size={8} />{t.autoTag}</span>}
-                          {person?.pepType !== 'None' && <span className="bg-amber-100 text-amber-800 text-xs px-1.5 rounded">PEP: {person.pepType}</span>}
-                          {ubo.hasNominee && <span className="bg-red-100 text-red-800 text-xs px-1.5 rounded">{t.viaNominee}</span>}
-                        </div>
+                        <div className="flex items-center gap-2"><User size={15} className="text-purple-600" /><span className="font-bold text-sm">{ubo.personName}</span>{riskBadge(crr.level, t)}{crr.forced && <span className="bg-red-700 text-white text-xs px-1.5 rounded flex items-center gap-0.5"><Lock size={8} />{t.autoTag}</span>}{person?.pepType !== 'None' && <span className="bg-amber-100 text-amber-800 text-xs px-1.5 rounded">PEP: {person.pepType}</span>}{ubo.hasNominee && <span className="bg-red-100 text-red-800 text-xs px-1.5 rounded">{t.viaNominee}</span>}</div>
                         <span className="text-lg font-bold text-purple-700">{ubo.effectivePct}%</span>
                       </div>
                       <div className="text-xs text-gray-500 mt-1">→ {ubo.companyName} | {t.depth}: {ubo.depth} {t.layers} | {t.control}: {ubo.controlTypes.join(', ')}</div>
-                      {crr.forced && <div className="text-xs mt-1 text-red-700 flex items-center gap-1"><Lock size={9} />{person?.subtype} → {t.forcedHighRisk} + {t.forcedAnnualReview}</div>}
                       {person?.sanctionStatus === 'Confirmed Hit' && <div className="text-xs mt-1 text-red-600 font-bold">⛔ {t.blockTransaction}</div>}
                       {crr.flags.length > 0 && <div className="text-xs mt-1 text-gray-600">{t.flags}: {crr.flags.map(f => t[f] || f).join(' | ')}</div>}
                     </div>
@@ -1166,15 +1016,12 @@ export default function CDDApp() {
                 )}
                 {complexityWarnings.map((w, i) => (
                   <div key={i} className={`border rounded-lg p-2.5 flex items-start gap-2 ${w.severity === 'high' ? 'bg-red-50 border-red-200' : 'bg-yellow-50 border-yellow-200'}`}>
-                    {w.warning.includes('AUTO') || w.warning.includes('自動') ? <Lock size={14} className="mt-0.5 text-red-600" /> : <AlertTriangle size={14} className={`mt-0.5 ${w.severity === 'high' ? 'text-red-500' : 'text-yellow-500'}`} />}
+                    <AlertTriangle size={14} className={`mt-0.5 ${w.severity === 'high' ? 'text-red-500' : 'text-yellow-500'}`} />
                     <div><div className="text-sm font-semibold">{w.entityName}</div><div className="text-xs text-gray-600">{w.warning}</div></div>
                   </div>
                 ))}
                 {entities.filter(e => isBearerShareRisk(e.jurisdiction)).map(e => (
                   <div key={e.id} className="bg-orange-50 border border-orange-200 rounded-lg p-2.5 flex items-start gap-2"><AlertCircle size={14} className="text-orange-500 mt-0.5" /><div><div className="text-sm font-semibold">{e.name}</div><div className="text-xs">{t.bearerShareWarning} ({e.jurisdiction})</div></div></div>
-                ))}
-                {entities.filter(e => { if (!e.incorporationDate) return false; return (new Date() - new Date(e.incorporationDate)) / (365.25 * 24 * 60 * 60 * 1000) < 1; }).map(e => (
-                  <div key={e.id} className="bg-yellow-50 border border-yellow-200 rounded-lg p-2.5 flex items-start gap-2"><Clock size={14} className="text-yellow-600 mt-0.5" /><div><div className="text-sm font-semibold">{e.name}</div><div className="text-xs">{t.shellCompanyWarning}</div></div></div>
                 ))}
                 {complexityWarnings.length === 0 && entities.filter(e => e.sanctionStatus === 'Confirmed Hit').length === 0 && <div className="text-center text-gray-400 py-12 text-sm flex flex-col items-center gap-2"><ShieldCheck size={28} />{t.noWarnings}</div>}
               </div>
@@ -1193,7 +1040,7 @@ export default function CDDApp() {
         )}
       </div>
       <DetailModal />
+      <CustomConfirm />
     </div>
   );
 }
-
