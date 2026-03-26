@@ -1058,26 +1058,101 @@ export default function KYCSystem() {
 
     {modalType === 'confirmDeleteAllSnapshots' && (<ModalShell title={t.confirmDeleteSnapshotTitle} onClose={closeModal}><div className="space-y-3"><div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">{t.confirmDeleteAllSnapshotsMsg}</div><div className="flex gap-2 justify-end"><button onClick={closeModal} className="px-4 py-2 border rounded-lg text-sm text-gray-600">{t.cancel}</button><button onClick={() => { deleteAllSnapshots(); closeModal(); }} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium">{t.confirmDelete}</button></div></div></ModalShell>)}
 
-    {modalType === 'addRel' && (<ModalShell title={t.addRelTitle} onClose={closeModal}>
-      {renderRelForm(d, setD, false)} />
-      <button onClick={() => {
-        const errors = getRelValidationErrors(d.sourceId, d.targetId, d.type || 'ownership', (d.inputMode || 'shares') === 'shares' ? d.shares : null, d.inputMode === 'percentage' ? d.percentage : null, d.inputMode || 'shares');
-        if (!d.sourceId || !d.targetId || errors.length > 0) return;
-        setRelationships(prev => [...prev, { id: gid(), sourceId: d.sourceId, targetId: d.targetId, type: d.type || 'ownership', shares: (d.inputMode || 'shares') === 'shares' && d.shares ? parseInt(d.shares) : null, percentage: d.inputMode === 'percentage' && d.percentage ? parseFloat(d.percentage) : null, description: d.description || '' }]); closeModal();
-      }} disabled={!d.sourceId || !d.targetId || getRelValidationErrors(d.sourceId, d.targetId, d.type || 'ownership', (d.inputMode || 'shares') === 'shares' ? d.shares : null, d.inputMode === 'percentage' ? d.percentage : null, d.inputMode || 'shares').length > 0} className="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium mt-4 disabled:opacity-50">{t.addRelationship}</button>
-    </ModalShell>)}
+    {modalType === 'addRel' && (
+      <ModalShell title={t.addRelTitle} onClose={closeModal}>
+        {renderRelForm(d, setD, false)}
+        {d.type === 'control' && (
+          <div className="mt-3 space-y-1">
+            <FormField label={lang === 'zh' ? '控制權比例 (%)' : 'Control Percentage (%)'}>
+              <input
+                type="number" min="0" max="100"
+                value={d.controlPct ?? ''}
+                onChange={e => setD('controlPct', e.target.value)}
+                placeholder={lang === 'zh' ? '留空 = 100% 完全控制' : 'Leave blank = 100% full control'}
+                className="w-full border rounded px-3 py-2 text-sm"
+              />
+            </FormField>
+            <p className="text-xs text-gray-400">
+              {lang === 'zh'
+                ? '💡 未填寫視為完全控制（100%）。依 FATF R.25，控制人強制揭露。'
+                : '💡 Blank = full control (100%). Per FATF R.25, controllers are always disclosed.'}
+            </p>
+          </div>
+        )}
+        <button
+          onClick={() => {
+            const errors = getRelValidationErrors(d.sourceId, d.targetId, d.type || 'ownership', (d.inputMode || 'shares') === 'shares' ? d.shares : null, d.inputMode === 'percentage' ? d.percentage : null, d.inputMode || 'shares');
+            if (!d.sourceId || !d.targetId || errors.length > 0) return;
+            setRelationships(prev => [...prev, {
+              id: gid(),
+              sourceId: d.sourceId,
+              targetId: d.targetId,
+              type: d.type || 'ownership',
+              shares: (d.type !== 'control' && (d.inputMode || 'shares') === 'shares' && d.shares) ? parseInt(d.shares) : null,
+              percentage: d.type === 'control'
+                ? (d.controlPct != null && d.controlPct !== '' ? parseFloat(d.controlPct) : null)
+                : (d.inputMode === 'percentage' && d.percentage ? parseFloat(d.percentage) : null),
+              description: d.description || ''
+            }]);
+            closeModal();
+          }}
+          disabled={!d.sourceId || !d.targetId || getRelValidationErrors(d.sourceId, d.targetId, d.type || 'ownership', (d.inputMode || 'shares') === 'shares' ? d.shares : null, d.inputMode === 'percentage' ? d.percentage : null, d.inputMode || 'shares').length > 0}
+          className="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium mt-4 disabled:opacity-50">
+          {t.addRelationship}
+        </button>
+      </ModalShell>
+    )}
 
-    {modalType === 'editRel' && (<ModalShell title={t.editRelTitle} onClose={closeModal}>
-      {renderRelForm(d, setD, true)} />
-      <div className="flex gap-2 mt-4">
-        <button onClick={() => {
-          const errors = getRelValidationErrors(d.sourceId, d.targetId, d.type || 'ownership', (d.inputMode || 'shares') === 'shares' ? d.shares : null, d.inputMode === 'percentage' ? d.percentage : null, d.inputMode || 'shares', d.id);
-          if (!d.id || !d.sourceId || !d.targetId || errors.length > 0) return;
-          updateRel(d.id, { sourceId: d.sourceId, targetId: d.targetId, type: d.type || 'ownership', shares: (d.inputMode || 'shares') === 'shares' && d.shares ? parseInt(d.shares) : null, percentage: d.inputMode === 'percentage' && d.percentage ? parseFloat(d.percentage) : null, description: d.description || '' }); closeModal();
-        }} disabled={!d.sourceId || !d.targetId || getRelValidationErrors(d.sourceId, d.targetId, d.type || 'ownership', (d.inputMode || 'shares') === 'shares' ? d.shares : null, d.inputMode === 'percentage' ? d.percentage : null, d.inputMode || 'shares', d.id).length > 0} className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50">{t.saveRel}</button>
-        <button onClick={() => { if (d.id) deleteRel(d.id); closeModal(); }} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium">{t.delete}</button>
-      </div>
-    </ModalShell>)}
+   {modalType === 'editRel' && (
+      <ModalShell title={t.editRelTitle} onClose={closeModal}>
+        {renderRelForm(d, setD, true)}
+        {d.type === 'control' && (
+          <div className="mt-3 space-y-1">
+            <FormField label={lang === 'zh' ? '控制權比例 (%)' : 'Control Percentage (%)'}>
+              <input
+                type="number" min="0" max="100"
+                value={d.controlPct ?? (d.percentage != null ? d.percentage : '')}
+                onChange={e => setD('controlPct', e.target.value)}
+                placeholder={lang === 'zh' ? '留空 = 100% 完全控制' : 'Leave blank = 100% full control'}
+                className="w-full border rounded px-3 py-2 text-sm"
+              />
+            </FormField>
+            <p className="text-xs text-gray-400">
+              {lang === 'zh'
+                ? '💡 未填寫視為完全控制（100%）。依 FATF R.25，控制人強制揭露。'
+                : '💡 Blank = full control (100%). Per FATF R.25, controllers are always disclosed.'}
+            </p>
+          </div>
+        )}
+        <div className="flex gap-2 mt-4">
+          <button
+            onClick={() => {
+              const errors = getRelValidationErrors(d.sourceId, d.targetId, d.type || 'ownership', (d.inputMode || 'shares') === 'shares' ? d.shares : null, d.inputMode === 'percentage' ? d.percentage : null, d.inputMode || 'shares', d.id);
+              if (!d.id || !d.sourceId || !d.targetId || errors.length > 0) return;
+              updateRel(d.id, {
+                sourceId: d.sourceId,
+                targetId: d.targetId,
+                type: d.type || 'ownership',
+                shares: (d.type !== 'control' && (d.inputMode || 'shares') === 'shares' && d.shares) ? parseInt(d.shares) : null,
+                percentage: d.type === 'control'
+                  ? (d.controlPct != null && d.controlPct !== '' ? parseFloat(d.controlPct) : (d.percentage != null ? d.percentage : null))
+                  : (d.inputMode === 'percentage' && d.percentage ? parseFloat(d.percentage) : null),
+                description: d.description || ''
+              });
+              closeModal();
+            }}
+            disabled={!d.sourceId || !d.targetId || getRelValidationErrors(d.sourceId, d.targetId, d.type || 'ownership', (d.inputMode || 'shares') === 'shares' ? d.shares : null, d.inputMode === 'percentage' ? d.percentage : null, d.inputMode || 'shares', d.id).length > 0}
+            className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50">
+            {t.saveRel}
+          </button>
+          <button
+            onClick={() => { if (d.id) deleteRel(d.id); closeModal(); }}
+            className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium">
+            {t.delete}
+          </button>
+        </div>
+      </ModalShell>
+    )}
 
     {modalType === 'override' && (<ModalShell title={t.overrideTitle} onClose={closeModal}><div className="space-y-3">
       <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-xs text-amber-700">{t.overrideWarning}</div>
