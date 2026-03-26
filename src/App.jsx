@@ -140,12 +140,11 @@ const i18n = {
     deleteSnapshot: '🗑️ Delete', confirmDeleteSnapshotTitle: 'Delete Snapshot', confirmDeleteSnapshotMsg: 'Are you sure?',
     snapshotDeleted: 'Snapshot deleted.', deleteAllSnapshots: 'Delete All', confirmDeleteAllSnapshotsMsg: 'Delete all snapshots?',
     companyCategory: 'Company Category', catPrivate: 'Private Limited', catListed: 'Listed Company', catGovernment: 'Government Agency', catStateOwned: 'State-Owned Enterprise',
-    sddEligible: '💡 SDD Eligible: This entity is a {type}, simplified due diligence (SDD) may apply. Reduced documentation and review frequency may be considered.',
+    sddEligible: '💡 SDD Eligible: This entity is a {type}, simplified due diligence (SDD) may apply.',
     autoHighRiskNotice: '⚠️ Auto High Risk: {subType} entities are automatically classified as High Risk with mandatory annual review.',
-    editRel: '✏️', personCannotBeOwned: '⚠️ A person (individual) cannot be the target of an ownership relationship. Persons can only be owners/shareholders.',
+    editRel: '✏️', personCannotBeOwned: '⚠️ A person cannot be the target of an ownership relationship.',
     annualReview: 'Annual Review Required',
     saveRel: 'Save Relationship',
-    // BUG FIX: new keys
     duplicateRelWarning: '⚠️ A relationship already exists between these two entities with the same type.',
     circularRelWarning: '⚠️ This would create a circular ownership chain.',
     selfRelWarning: '⚠️ Source and target cannot be the same entity.',
@@ -155,24 +154,15 @@ const i18n = {
     docExpiringSoon: '⚠️ Document expiring within 30 days',
     exportCSV: '📥 Export CSV',
     lastUpdated: 'Last Updated',
-    createdDate: 'Created Date',
-    statusActive: 'Active',
-    statusArchived: 'Archived',
-    statusOnboarding: 'Onboarding',
     entityStatus: 'Status',
-    archiveEntity: '📦 Archive',
-    activateEntity: '✅ Activate',
     pendingDocsCount: 'Pending Docs',
     relCount: 'Relationships',
-    noRelWarning: '⚠️ This entity has no relationships. Consider linking it to the ownership structure.',
+    noRelWarning: '⚠️ This entity has no relationships.',
     percentageExceeds100: '⚠️ Total ownership of target exceeds 100%.',
     requiredField: 'This field is required.',
-    confirmLeave: 'You have unsaved changes. Are you sure?',
-    // EDD/SDD
     dueDiligenceLevel: 'Due Diligence Level',
     sdd: 'SDD', cdd: 'CDD', edd: 'EDD',
-    sddDesc: 'Simplified - Reduced checks', cddDesc: 'Standard - Normal checks', eddDesc: 'Enhanced - Extra scrutiny',
-    // review cycle
+    sddDesc: 'Simplified', cddDesc: 'Standard', eddDesc: 'Enhanced',
     reviewCycleHigh: 'High Risk: Review every 12 months',
     reviewCycleMedium: 'Medium Risk: Review every 24 months',
     reviewCycleLow: 'Low Risk: Review every 36 months',
@@ -256,37 +246,29 @@ const i18n = {
     deleteSnapshot: '🗑️ 刪除', confirmDeleteSnapshotTitle: '刪除快照', confirmDeleteSnapshotMsg: '確定要刪除此快照嗎？',
     snapshotDeleted: '快照已刪除。', deleteAllSnapshots: '全部刪除', confirmDeleteAllSnapshotsMsg: '確定要刪除所有快照嗎？',
     companyCategory: '公司分類', catPrivate: '私人有限公司', catListed: '上市公司', catGovernment: '政府機構', catStateOwned: '國有企業',
-    sddEligible: '💡 SDD 適用提示：此實體為{type}，可考慮適用簡化盡職調查 (Simplified Due Diligence)。可減少文件要求及降低審查頻率。',
+    sddEligible: '💡 SDD 適用提示：此實體為{type}，可考慮適用簡化盡職調查。',
     autoHighRiskNotice: '⚠️ 自動高風險：{subType} 類型實體依規自動歸類為高風險，須每年強制審查一次。',
-    editRel: '✏️', personCannotBeOwned: '⚠️ 自然人（個人）不能作為持股關係的目標。自然人只能擔任持有者/股東角色。',
+    editRel: '✏️', personCannotBeOwned: '⚠️ 自然人不能作為持股關係的目標。',
     annualReview: '強制年審',
     saveRel: '儲存關係',
-    // BUG FIX: new keys
     duplicateRelWarning: '⚠️ 這兩個實體之間已存在相同類型的關係。',
     circularRelWarning: '⚠️ 此操作將形成循環持股鏈。',
     selfRelWarning: '⚠️ 來源與目標不能為同一實體。',
     sharesExceedWarning: '⚠️ 分配股數總計（{allocated}）將超過已發行總股數（{total}）。',
     reviewCycleDays: '審查週期（天）',
-    eddRequired: '🔴 需要 EDD：高風險實體需進行加強盡職調查 (Enhanced Due Diligence)。',
+    eddRequired: '🔴 需要 EDD：高風險實體需進行加強盡職調查。',
     docExpiringSoon: '⚠️ 文件將於 30 天內到期',
     exportCSV: '📥 匯出 CSV',
     lastUpdated: '最後更新',
-    createdDate: '建立日期',
-    statusActive: '活躍',
-    statusArchived: '已歸檔',
-    statusOnboarding: '建檔中',
     entityStatus: '狀態',
-    archiveEntity: '📦 歸檔',
-    activateEntity: '✅ 啟用',
     pendingDocsCount: '待收文件',
     relCount: '關係數',
     noRelWarning: '⚠️ 此實體尚無任何關係。請考慮將其連結至持股結構。',
     percentageExceeds100: '⚠️ 目標公司的持股比例合計超過 100%。',
     requiredField: '此欄位為必填。',
-    confirmLeave: '您有尚未儲存的變更，確定離開嗎？',
     dueDiligenceLevel: '盡職調查等級',
     sdd: 'SDD 簡化', cdd: 'CDD 標準', edd: 'EDD 加強',
-    sddDesc: '簡化盡職調查 — 精簡檢查', cddDesc: '標準盡職調查 — 常規檢查', eddDesc: '加強盡職調查 — 嚴格審查',
+    sddDesc: '簡化盡職調查', cddDesc: '標準盡職調查', eddDesc: '加強盡職調查',
     reviewCycleHigh: '高風險：每 12 個月審查',
     reviewCycleMedium: '中風險：每 24 個月審查',
     reviewCycleLow: '低風險：每 36 個月審查',
@@ -343,13 +325,8 @@ export default function KYCSystem() {
 
   const isAutoHighRisk = (entity) => AUTO_HIGH_RISK_SUBTYPES.includes(entity.subType);
   const isSddEligible = (entity) => entity.type === 'company' && SDD_ELIGIBLE_CATEGORIES.includes(entity.companyCategory);
+  const getCategoryLabel = (cat) => { const map = { private: t.catPrivate, listed: t.catListed, government: t.catGovernment, stateOwned: t.catStateOwned }; return map[cat] || cat || ''; };
 
-  const getCategoryLabel = (cat) => {
-    const map = { private: t.catPrivate, listed: t.catListed, government: t.catGovernment, stateOwned: t.catStateOwned };
-    return map[cat] || cat || '';
-  };
-
-  // FIX: circular detection
   const wouldCreateCycle = useCallback((sourceId, targetId, excludeRelId = null) => {
     const visited = new Set();
     const queue = [targetId];
@@ -364,12 +341,10 @@ export default function KYCSystem() {
     return false;
   }, [relationships]);
 
-  // FIX: duplicate detection
   const hasDuplicateRel = useCallback((sourceId, targetId, type, excludeRelId = null) => {
     return relationships.some(r => r.id !== excludeRelId && r.sourceId === sourceId && r.targetId === targetId && r.type === type);
   }, [relationships]);
 
-  // FIX: shares exceed total check
   const wouldExceedShares = useCallback((targetId, newShares, excludeRelId = null) => {
     const target = entities.find(e => e.id === targetId);
     if (!target?.totalShares || !newShares) return false;
@@ -377,14 +352,12 @@ export default function KYCSystem() {
     return (existingShares + parseInt(newShares)) > target.totalShares;
   }, [entities, relationships]);
 
-  // FIX: percentage >100% check
   const wouldExceedPercentage = useCallback((targetId, newPct, excludeRelId = null) => {
     if (!newPct) return false;
     const existingPct = relationships.filter(r => r.targetId === targetId && r.type === 'ownership' && r.id !== excludeRelId).reduce((s, r) => s + (getRelPercentage(r) || 0), 0);
     return (existingPct + parseFloat(newPct)) > 100;
   }, [entities, relationships, getRelPercentage]);
 
-  // Due diligence level
   const getDDLevel = (entity) => {
     if (isSddEligible(entity)) return 'sdd';
     const eff = getEffectiveRating(entity);
@@ -392,7 +365,6 @@ export default function KYCSystem() {
     return 'cdd';
   };
 
-  // Auto review date based on risk
   const calcNextReviewDate = (rating, fromDate) => {
     const d = new Date(fromDate || today);
     if (rating === 'High') d.setFullYear(d.getFullYear() + 1);
@@ -401,7 +373,6 @@ export default function KYCSystem() {
     return d.toISOString().slice(0, 10);
   };
 
-  // Doc expiring within 30 days
   const isExpiringIn30 = (expiry) => {
     if (!expiry) return false;
     const diff = (new Date(expiry) - new Date(today)) / (1000 * 60 * 60 * 24);
@@ -423,14 +394,19 @@ export default function KYCSystem() {
 
   const getEffectiveRating = (entity) => { const crr = calcCRR(entity); if (crr.autoHighRisk) return { ...crr, overridden: false }; return entity.riskOverride ? { ...crr, rating: entity.riskOverride.rating, overridden: true } : { ...crr, overridden: false }; };
 
-    const findUBOs = useCallback((targetId, threshold) => {
+  /* ===== FIX: UBO multi-path aggregation ===== */
+  const findUBOs = useCallback((targetId, threshold) => {
     const po = {};
     const trace = (curId, mult, chain, vis) => {
-      if (vis.has(curId)) return; vis.add(curId);
+      if (vis.has(curId)) return;
+      vis.add(curId);
       relationships.filter(r => r.targetId === curId && r.type === 'ownership').forEach(rel => {
-        const owner = entities.find(e => e.id === rel.sourceId); if (!owner) return;
-        const pct = getRelPercentage(rel); if (pct == null || pct <= 0) return;
-        const em = mult * pct / 100, ep = em * 100;
+        const owner = entities.find(e => e.id === rel.sourceId);
+        if (!owner) return;
+        const pct = getRelPercentage(rel);
+        if (pct == null || pct <= 0) return;
+        const em = mult * pct / 100;
+        const ep = em * 100;
         if (owner.type === 'person') {
           if (!po[owner.id]) po[owner.id] = { entity: owner, totalPct: 0, paths: [] };
           po[owner.id].totalPct += ep;
@@ -441,10 +417,12 @@ export default function KYCSystem() {
       });
     };
     trace(targetId, 1, [], new Set());
-    return Object.values(po).filter(({ totalPct }) => Math.round(totalPct * 100) / 100 >= threshold).map(({ entity, totalPct, paths }) => {
-      const hd = paths.some(p => p.direct), hi = paths.some(p => !p.direct);
-      return { entity, percentage: Math.round(totalPct * 100) / 100, path: paths[0].chain, paths, direct: hd && !hi, mixed: hd && hi };
-    });
+    return Object.values(po)
+      .filter(({ totalPct }) => Math.round(totalPct * 100) / 100 >= threshold)
+      .map(({ entity, totalPct, paths }) => {
+        const hd = paths.some(p => p.direct), hi = paths.some(p => !p.direct);
+        return { entity, percentage: Math.round(totalPct * 100) / 100, path: paths[0].chain, paths, direct: hd && !hi, mixed: hd && hi };
+      });
   }, [entities, relationships, getRelPercentage]);
 
   const autoTodos = useMemo(() => {
@@ -453,25 +431,20 @@ export default function KYCSystem() {
       if (ent.nextReviewDate && ent.nextReviewDate < today) todos.push({ id: `t-r-${ent.id}`, entityId: ent.id, type: 'overdue', text: lang === 'zh' ? `${ent.name} 審查已逾期（${ent.nextReviewDate}）` : `Review overdue: ${ent.name} (${ent.nextReviewDate})`, priority: 'high' });
       const expD = (ent.documents || []).filter(d => d.status === 'expired' || (d.expiry && d.expiry < today));
       if (expD.length > 0) todos.push({ id: `t-d-${ent.id}`, entityId: ent.id, type: 'exp_doc', text: lang === 'zh' ? `${ent.name} ${expD.length} 份文件過期` : `${expD.length} expired doc(s): ${ent.name}`, priority: 'medium' });
-      // FIX: doc expiring in 30 days
       const soonExpDocs = (ent.documents || []).filter(d => d.status === 'received' && isExpiringIn30(d.expiry));
       if (soonExpDocs.length > 0) todos.push({ id: `t-de-${ent.id}`, entityId: ent.id, type: 'exp_soon', text: lang === 'zh' ? `${ent.name} ${soonExpDocs.length} 份文件即將到期（30天內）` : `${soonExpDocs.length} doc(s) expiring soon: ${ent.name}`, priority: 'medium' });
       if (ent.isSanctioned) todos.push({ id: `t-s-${ent.id}`, entityId: ent.id, type: 'sanction', text: lang === 'zh' ? `緊急：${ent.name} 命中制裁` : `URGENT: Sanctions hit ${ent.name}`, priority: 'critical' });
       if (getEffectiveRating(ent).rating === 'High' && !ent.str?.flagged) todos.push({ id: `t-st-${ent.id}`, entityId: ent.id, type: 'str', text: lang === 'zh' ? `高風險 ${ent.name}：考慮 STR` : `High-risk ${ent.name}: consider STR`, priority: 'high' });
       if (ent.screeningLogs.length === 0) todos.push({ id: `t-sc-${ent.id}`, entityId: ent.id, type: 'no_screen', text: lang === 'zh' ? `${ent.name} 無篩查記錄` : `No screening: ${ent.name}`, priority: 'medium' });
-      // FIX: no relationships warning
       const rels = relationships.filter(r => r.sourceId === ent.id || r.targetId === ent.id);
       if (rels.length === 0) todos.push({ id: `t-nr-${ent.id}`, entityId: ent.id, type: 'no_rel', text: lang === 'zh' ? `${ent.name} 尚無任何關係連結` : `${ent.name} has no relationships`, priority: 'low' });
-      // annual review
       if (isAutoHighRisk(ent)) {
         const oneYearFromLast = ent.lastReviewDate ? new Date(new Date(ent.lastReviewDate).getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) : today;
         if (oneYearFromLast <= today) todos.push({ id: `t-ar-${ent.id}`, entityId: ent.id, type: 'annual', text: lang === 'zh' ? `${ent.name}（${ent.subType}）強制年審已到期` : `Annual review due: ${ent.name} (${ent.subType})`, priority: 'critical' });
       }
-      // FIX: EDD reminder
       if (getEffectiveRating(ent).rating === 'High' && !isAutoHighRisk(ent) && (ent.cddRecords || []).length === 0) {
         todos.push({ id: `t-edd-${ent.id}`, entityId: ent.id, type: 'edd', text: lang === 'zh' ? `${ent.name} 高風險未有 CDD 記錄，需進行 EDD` : `EDD needed: ${ent.name} (High Risk, no CDD)`, priority: 'high' });
       }
-      // FIX: percentage > 100%
       if (ent.type === 'company' && ent.totalShares > 0) {
         const totalAllocPct = relationships.filter(r => r.targetId === ent.id && r.type === 'ownership').reduce((s, r) => s + (getRelPercentage(r) || 0), 0);
         if (totalAllocPct > 100) todos.push({ id: `t-pct-${ent.id}`, entityId: ent.id, type: 'pct_exceed', text: lang === 'zh' ? `${ent.name} 持股比例合計 ${Math.round(totalAllocPct)}% 超過 100%` : `${ent.name} ownership ${Math.round(totalAllocPct)}% exceeds 100%`, priority: 'critical' });
@@ -531,13 +504,6 @@ export default function KYCSystem() {
     setExpandedCDD(null);
   };
 
-  const validateOwnershipTarget = (type, targetId) => {
-    if (type !== 'ownership') return true;
-    const target = entities.find(e => e.id === targetId);
-    return !target || target.type !== 'person';
-  };
-
-  // FIX: Validate relationship (unified)
   const getRelValidationErrors = useCallback((sourceId, targetId, type, shares, percentage, inputMode, excludeRelId = null) => {
     const errors = [];
     if (!sourceId || !targetId) return errors;
@@ -558,7 +524,6 @@ export default function KYCSystem() {
     return errors;
   }, [entities, relationships, t, hasDuplicateRel, wouldCreateCycle, wouldExceedShares, wouldExceedPercentage]);
 
-  // Export CSV
   const exportCSV = () => {
     const headers = ['Name', 'Type', 'SubType', 'Category', 'Jurisdiction', 'Risk Rating', 'CRR Score', 'PEP', 'Sanctioned', 'Last Review', 'Next Review', 'DD Level'];
     const rows = entities.map(e => { const r = getEffectiveRating(e); return [e.name, e.type, e.subType, getCategoryLabel(e.companyCategory), e.jurisdiction, r.rating, r.score, e.isPEP, e.isSanctioned, e.lastReviewDate, e.nextReviewDate, getDDLevel(e).toUpperCase()]; });
@@ -601,23 +566,18 @@ export default function KYCSystem() {
     return <BadgeC color={config[level].color}>{config[level].label}</BadgeC>;
   };
 
-  // Relationship form (shared)
   const RelFormContent = ({ data, setField, isEdit }) => {
     const isOwnership = (data.type || 'ownership') === 'ownership';
     const validationErrors = getRelValidationErrors(data.sourceId, data.targetId, data.type || 'ownership', (data.inputMode || 'shares') === 'shares' ? data.shares : null, data.inputMode === 'percentage' ? data.percentage : null, data.inputMode || 'shares', isEdit ? data.id : null);
     return (<div className="space-y-3">
       <FormField label={t.sourceOwner}><select value={data.sourceId || ''} onChange={e => setField('sourceId', e.target.value)} className="w-full border rounded px-3 py-2 text-sm"><option value="">{t.selectType}</option>{entities.map(e => <option key={e.id} value={e.id}>{e.type === 'person' ? '👤' : '🏢'} {e.name}</option>)}</select></FormField>
-      <FormField label={t.targetOwned}><select value={data.targetId || ''} onChange={e => setField('targetId', e.target.value)} className="w-full border rounded px-3 py-2 text-sm"><option value="">{t.selectType}</option>{entities.filter(e => {
-        if (isOwnership) return e.type === 'company';
-        return true;
-      }).map(e => <option key={e.id} value={e.id}>{e.type === 'person' ? '👤' : '🏢'} {e.name}{e.totalShares ? ` (${fmtShares(e.totalShares)} ${t.sharesUnit})` : ''}</option>)}</select></FormField>
+      <FormField label={t.targetOwned}><select value={data.targetId || ''} onChange={e => setField('targetId', e.target.value)} className="w-full border rounded px-3 py-2 text-sm"><option value="">{t.selectType}</option>{entities.filter(e => { if (isOwnership) return e.type === 'company'; return true; }).map(e => <option key={e.id} value={e.id}>{e.type === 'person' ? '👤' : '🏢'} {e.name}{e.totalShares ? ` (${fmtShares(e.totalShares)} ${t.sharesUnit})` : ''}</option>)}</select></FormField>
       <FormField label={t.type}><select value={data.type || 'ownership'} onChange={e => setField('type', e.target.value)} className="w-full border rounded px-3 py-2 text-sm">{relTypes.map(r => <option key={r.v} value={r.v}>{r.l}</option>)}</select></FormField>
       {isOwnership && !validationErrors.some(e => e.includes(t.personCannotBeOwned)) && (<div className="bg-blue-50 rounded-lg p-3">
         <div className="flex gap-4 mb-3"><label className="flex items-center gap-1.5 cursor-pointer"><input type="radio" name={`relMode-${isEdit ? 'edit' : 'add'}`} checked={(data.inputMode || 'shares') === 'shares'} onChange={() => setField('inputMode', 'shares')} /><span className="text-xs font-medium">{t.inputByShares}</span></label><label className="flex items-center gap-1.5 cursor-pointer"><input type="radio" name={`relMode-${isEdit ? 'edit' : 'add'}`} checked={data.inputMode === 'percentage'} onChange={() => setField('inputMode', 'percentage')} /><span className="text-xs font-medium">{t.inputByPercentage}</span></label></div>
         {(data.inputMode || 'shares') === 'shares' ? (<div><FormField label={t.sharesLabel}><input type="number" value={data.shares || ''} onChange={e => setField('shares', e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></FormField>{(() => { const tgt = entities.find(e => e.id === data.targetId); const autoP = tgt?.totalShares > 0 && data.shares ? Math.round((parseInt(data.shares) / tgt.totalShares) * 10000) / 100 : null; return tgt?.totalShares > 0 ? <div className="mt-2 text-xs"><span className="text-gray-500">{t.totalSharesLabel}: {fmtShares(tgt.totalShares)} → </span>{autoP != null && <span className="font-bold text-green-600">{t.autoCalcPercentage}: {autoP}%</span>}</div> : data.targetId ? <div className="mt-2 text-xs text-amber-600">⚠️ {t.noTotalSharesWarning}</div> : null; })()}</div>) : (<FormField label={t.percentage}><input type="number" min="0" max="100" value={data.percentage || ''} onChange={e => setField('percentage', e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="%" /></FormField>)}
       </div>)}
       <FormField label={t.description}><input value={data.description || ''} onChange={e => setField('description', e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></FormField>
-      {/* FIX: show validation errors */}
       {validationErrors.length > 0 && <div className="space-y-1">{validationErrors.map((err, i) => <div key={i} className="bg-red-50 border border-red-200 rounded-lg p-2 text-xs text-red-700">{err}</div>)}</div>}
     </div>);
   };
@@ -638,22 +598,17 @@ export default function KYCSystem() {
 
   const SDDBanner = ({ entity }) => {
     if (!isSddEligible(entity)) return null;
-    const catLabel = getCategoryLabel(entity.companyCategory);
-    const msg = t.sddEligible.replace('{type}', catLabel);
-    return (<div className="bg-cyan-50 border border-cyan-300 rounded-lg p-3 flex items-start gap-2"><span className="text-lg shrink-0">🔵</span><div><div className="text-xs font-bold text-cyan-800">Simplified Due Diligence (SDD)</div><div className="text-xs text-cyan-700 mt-0.5">{msg}</div></div></div>);
+    return (<div className="bg-cyan-50 border border-cyan-300 rounded-lg p-3 flex items-start gap-2"><span className="text-lg shrink-0">🔵</span><div><div className="text-xs font-bold text-cyan-800">SDD</div><div className="text-xs text-cyan-700 mt-0.5">{t.sddEligible.replace('{type}', getCategoryLabel(entity.companyCategory))}</div></div></div>);
   };
-
   const AutoHighRiskBanner = ({ entity }) => {
     if (!isAutoHighRisk(entity)) return null;
-    const msg = t.autoHighRiskNotice.replace('{subType}', entity.subType);
-    return (<div className="bg-red-50 border border-red-300 rounded-lg p-3 flex items-start gap-2"><span className="text-lg shrink-0">🔴</span><div><div className="text-xs font-bold text-red-800">{t.annualReview}</div><div className="text-xs text-red-700 mt-0.5">{msg}</div></div></div>);
+    return (<div className="bg-red-50 border border-red-300 rounded-lg p-3 flex items-start gap-2"><span className="text-lg shrink-0">🔴</span><div><div className="text-xs font-bold text-red-800">{t.annualReview}</div><div className="text-xs text-red-700 mt-0.5">{t.autoHighRiskNotice.replace('{subType}', entity.subType)}</div></div></div>);
   };
-
   const EDDBanner = ({ entity }) => {
     if (isSddEligible(entity) || isAutoHighRisk(entity)) return null;
     const eff = getEffectiveRating(entity);
     if (eff.rating !== 'High') return null;
-    return (<div className="bg-orange-50 border border-orange-300 rounded-lg p-3 flex items-start gap-2"><span className="text-lg shrink-0">🟠</span><div><div className="text-xs font-bold text-orange-800">Enhanced Due Diligence (EDD)</div><div className="text-xs text-orange-700 mt-0.5">{t.eddRequired}</div></div></div>);
+    return (<div className="bg-orange-50 border border-orange-300 rounded-lg p-3 flex items-start gap-2"><span className="text-lg shrink-0">🟠</span><div><div className="text-xs font-bold text-orange-800">EDD</div><div className="text-xs text-orange-700 mt-0.5">{t.eddRequired}</div></div></div>);
   };
 
   // ====== DASHBOARD ======
@@ -718,7 +673,6 @@ export default function KYCSystem() {
               const r = getEffectiveRating(ent); const isActive = dagSelected === ent.id; const isChecked = batchSelected.has(ent.id);
               const cddCount = (ent.cddRecords || []).length;
               const autoHR = isAutoHighRisk(ent);
-              const ddLevel = getDDLevel(ent);
               return (<div key={ent.id} className={`flex items-center gap-1.5 px-2 py-2 border-b border-gray-50 cursor-pointer hover:bg-blue-50 transition-colors ${isActive ? 'bg-blue-50 border-l-2 border-l-blue-500' : ''} ${isChecked ? 'bg-blue-50/50' : ''}`} onClick={() => setDagSelected(ent.id === dagSelected ? null : ent.id)} onDoubleClick={() => { setSelectedId(ent.id); setDetailTab('overview'); }}>
                 <input type="checkbox" checked={isChecked} onChange={() => toggleBatch(ent.id)} onClick={e => e.stopPropagation()} className="shrink-0" />
                 <span className="text-sm shrink-0">{ent.type === 'person' ? '👤' : '🏢'}</span>
@@ -821,7 +775,6 @@ export default function KYCSystem() {
     const totalAllocShares = ownerRels.reduce((s, r) => s + (r.shares || 0), 0);
     const totalAllocPct = ownerRels.reduce((s, r) => s + (getRelPercentage(r) || 0), 0);
     const cddRecords = ent.cddRecords || [];
-    const ddLevel = getDDLevel(ent);
 
     return (
       <ModalShell title={`${ent.type === 'person' ? '👤' : '🏢'} ${ent.name}`} onClose={() => { setSelectedId(null); setExpandedCDD(null); }} wide>
@@ -858,23 +811,21 @@ export default function KYCSystem() {
             <div className="w-full bg-gray-200 rounded-full h-2 mb-2"><div className="h-2 rounded-full" style={{ width: `${crr.score}%`, backgroundColor: RISK_COLORS[crr.rating] }} /></div>
             {!crr.autoHighRisk && <div className="grid grid-cols-3 gap-2 text-xs">{Object.entries(crr.breakdown).map(([k, v]) => (<div key={k} className="flex justify-between"><span className="text-gray-500">{t[WK[k]] || k}</span><span className="font-medium">{v}</span></div>))}</div>}
           </div>
-          {/* FIX: warning if total > 100% */}
           {ent.type === 'company' && totalAllocPct > 100 && (<div className="bg-red-50 border border-red-200 rounded-lg p-2 text-xs text-red-700">🚨 {t.percentageExceeds100} ({Math.round(totalAllocPct * 100) / 100}%)</div>)}
           {ent.type === 'company' && ent.totalShares > 0 && ownerRels.length > 0 && (<div className="bg-blue-50 rounded-lg p-3"><div className="text-sm font-semibold text-blue-700 mb-2">📊 {t.shareholdingSummary}</div><table className="w-full text-xs"><thead><tr className="border-b border-blue-200"><th className="text-left py-1 text-gray-600">{t.shareholder}</th><th className="text-right py-1 text-gray-600">{t.sharesLabel}</th><th className="text-right py-1 text-gray-600">%</th></tr></thead><tbody>{ownerRels.map(r => { const owner = entities.find(e => e.id === r.sourceId); const pct = getRelPercentage(r); return (<tr key={r.id} className="border-b border-blue-100"><td className="py-1 font-medium">{owner?.name || '?'}</td><td className="py-1 text-right">{r.shares ? fmtShares(r.shares) : '—'}</td><td className="py-1 text-right">{pct != null ? `${pct}%` : '—'}</td></tr>); })}<tr className="font-bold border-t border-blue-300"><td className="py-1">{t.totalLabel}</td><td className="py-1 text-right">{fmtShares(totalAllocShares)} / {fmtShares(ent.totalShares)}</td><td className={`py-1 text-right ${totalAllocPct > 100 ? 'text-red-600' : ''}`}>{Math.round(totalAllocPct * 100) / 100}%</td></tr></tbody></table></div>)}
-          {/* FIX: no rels warning */}
           {rels.length === 0 && <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-xs text-amber-700">{t.noRelWarning}</div>}
           <div><div className="text-sm font-semibold text-gray-700 mb-2">{t.relationships} ({rels.length})</div>{rels.map(r => { const other = entities.find(e => e.id === (r.sourceId === ent.id ? r.targetId : r.sourceId)); return (<div key={r.id} className="flex items-center gap-2 text-xs py-1.5 border-b border-gray-100 hover:bg-gray-50 rounded px-1"><span>{r.sourceId === ent.id ? '→' : '←'}</span><span className="font-medium">{other?.name}</span><BadgeC color="blue">{r.type}</BadgeC><span className="text-gray-500">{fmtRelLabel(r)}</span><div className="ml-auto flex gap-1"><button onClick={() => openModal('editRel', { id: r.id, sourceId: r.sourceId, targetId: r.targetId, type: r.type, shares: r.shares ? String(r.shares) : '', percentage: r.percentage ? String(r.percentage) : '', description: r.description || '', inputMode: r.shares ? 'shares' : 'percentage' })} className="text-blue-400 hover:text-blue-600" title={t.editRel}>✏️</button><button onClick={() => deleteRel(r.id)} className="text-red-400 hover:text-red-600">✕</button></div></div>); })}</div>
         </div>)}
 
         {detailTab === 'ubo' && (<div className="space-y-4">
           <div className="flex items-center justify-between"><h3 className="text-sm font-bold text-gray-700">🔍 {t.uboAnalysis}</h3><div className="flex items-center gap-2"><span className="text-xs text-gray-500">{t.threshold}:</span><span className="text-sm font-bold text-blue-600">{settings.uboThreshold}%</span></div></div>
-          {ent.type === 'company' ? (<>{ubos.length > 0 ? (<div className="bg-amber-50 rounded-lg p-3 border border-amber-200"><div className="text-xs font-semibold text-amber-700 mb-2">{t.detectedUBOs}: {ubos.length}</div>{ubos.map((u, i) => (<div key={i} className="bg-white rounded-lg p-3 border mb-2 last:mb-0"><div className="flex items-center gap-2 mb-1.5 flex-wrap"><span className="text-sm">👤</span><span className="font-bold text-sm">{u.entity.name}</span><BadgeC color="blue">{u.percentage}%</BadgeC>{u.entity.isPEP && <BadgeC color="purple">PEP</BadgeC>}<BadgeC color={u.direct ? 'green' : 'amber'}>{u.direct ? t.directOwnership : t.indirectOwnership}</BadgeC></div><div className="text-xs text-gray-500">{t.uboChain}: {u.path.join(' → ')} → {ent.name}</div></div>))}</div>) : (<div className="text-center py-10 text-gray-400"><div className="text-4xl mb-2">✅</div><div className="text-sm">{t.noUBOs}</div></div>)}</>) : (<div className="text-center py-8 text-gray-400 text-sm">{lang === 'zh' ? 'UBO 偵測僅適用於公司實體。' : 'UBO detection only for company entities.'}</div>)}
+          {ent.type === 'company' ? (<>{ubos.length > 0 ? (<div className="bg-amber-50 rounded-lg p-3 border border-amber-200"><div className="text-xs font-semibold text-amber-700 mb-2">{t.detectedUBOs}: {ubos.length}</div>{ubos.map((u, i) => (<div key={i} className="bg-white rounded-lg p-3 border mb-2 last:mb-0"><div className="flex items-center gap-2 mb-1.5 flex-wrap"><span className="text-sm">👤</span><span className="font-bold text-sm">{u.entity.name}</span><BadgeC color="blue">{u.percentage}%</BadgeC>{u.entity.isPEP && <BadgeC color="purple">PEP</BadgeC>}<BadgeC color={u.direct ? 'green' : u.mixed ? 'indigo' : 'amber'}>{u.direct ? t.directOwnership : u.mixed ? t.mixedOwnership : t.indirectOwnership}</BadgeC></div>{u.paths.map((p, j) => (<div key={j} className="text-xs text-gray-500 ml-5">{p.direct ? '📍' : '🔗'} {p.chain.join(' → ')} → {ent.name} <span className="text-gray-400">({p.percentage}%)</span></div>))}</div>))}</div>) : (<div className="text-center py-10 text-gray-400"><div className="text-4xl mb-2">✅</div><div className="text-sm">{t.noUBOs}</div></div>)}</>) : (<div className="text-center py-8 text-gray-400 text-sm">{lang === 'zh' ? 'UBO 偵測僅適用於公司實體。' : 'UBO detection only for company entities.'}</div>)}
         </div>)}
 
         {detailTab === 'documents' && (<div>
           <div className="flex items-center justify-between mb-2"><div className="text-xs text-gray-500">{t.completion}: <span className={`font-bold ${docComp === 100 ? 'text-green-600' : 'text-amber-600'}`}>{docComp}%</span></div><button onClick={() => openModal('addDoc', { name: '', expiry: '' })} className="bg-blue-600 text-white px-2 py-1 rounded text-xs">{t.addDocument}</button></div>
           <div className="w-full bg-gray-200 rounded-full h-1.5 mb-3"><div className="h-1.5 rounded-full bg-green-500" style={{ width: `${docComp}%` }} /></div>
-          {isSddEligible(ent) && <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-2 mb-3 text-xs text-cyan-700">🔵 SDD: {lang === 'zh' ? '此實體可適用簡化盡職調查，文件要求可酌減。' : 'This entity is SDD-eligible, reduced documentation may apply.'}</div>}
+          {isSddEligible(ent) && <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-2 mb-3 text-xs text-cyan-700">🔵 SDD</div>}
           <div className="space-y-1.5">{ent.documents.map(d => (<div key={d.id} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg"><span>{d.status === 'received' ? '✅' : d.status === 'expired' ? '❌' : '⏳'}</span><div className="flex-1"><div className="text-xs font-medium text-gray-700">{d.name}</div>{d.expiry && <div className={`text-xs ${d.expiry < today ? 'text-red-500' : isExpiringIn30(d.expiry) ? 'text-amber-500 font-medium' : 'text-gray-400'}`}>{t.expiry}: {d.expiry} {isExpiringIn30(d.expiry) ? ` ⚠️` : ''}</div>}</div><select value={d.status} onChange={e => { updateEntity(ent.id, { documents: ent.documents.map(dd => dd.id === d.id ? { ...dd, status: e.target.value } : dd) }); }} className="text-xs border rounded px-1.5 py-0.5"><option value="pending">{t.pending}</option><option value="received">{t.received}</option><option value="expired">{t.expired}</option><option value="not_applicable">{t.notApplicable}</option></select><button onClick={() => updateEntity(ent.id, { documents: ent.documents.filter(dd => dd.id !== d.id) })} className="text-red-400 hover:text-red-600 text-xs">✕</button></div>))}{ent.documents.length === 0 && <div className="text-xs text-gray-400 text-center py-4">{t.noDocsYet}</div>}</div>
         </div>)}
 
@@ -899,7 +850,7 @@ export default function KYCSystem() {
         {detailTab === 'risk' && (<div className="space-y-4">
           <AutoHighRiskBanner entity={ent} /><EDDBanner entity={ent} />
           <div className="flex items-center justify-between"><span className="text-xs font-semibold text-gray-700">{t.riskManagement}</span><div className="flex gap-2">{!crr.autoHighRisk && <button onClick={() => openModal('override', { rating: 'High', reason: '' })} className="bg-amber-500 text-white px-2 py-1 rounded text-xs">{t.overrideRating}</button>}{ent.riskOverride && !crr.autoHighRisk && <button onClick={() => { const c = calcCRR(ent); updateEntity(ent.id, { riskOverride: null, riskHistory: [...ent.riskHistory, { date: today, score: c.score, rating: c.rating, override: false, reason: 'Override cleared' }] }); }} className="bg-gray-500 text-white px-2 py-1 rounded text-xs">{t.clearOverride}</button>}</div></div>
-          {crr.autoHighRisk && <div className="text-xs text-red-600 bg-red-50 rounded-lg p-2 border border-red-200">{lang === 'zh' ? '此實體為自動高風險類型，無法覆寫風險評級。' : 'This entity is auto-classified as High Risk. Risk override is not available.'}</div>}
+          {crr.autoHighRisk && <div className="text-xs text-red-600 bg-red-50 rounded-lg p-2 border border-red-200">{lang === 'zh' ? '此實體為自動高風險類型，無法覆寫風險評級。' : 'Auto High Risk — override not available.'}</div>}
           {ent.riskOverride && !crr.autoHighRisk && (<div className="bg-purple-50 border border-purple-200 rounded-lg p-2"><div className="flex items-center gap-2 mb-1"><BadgeC color="purple">{t.overrideActive}</BadgeC><RiskBadge rating={ent.riskOverride.rating} label={tR(ent.riskOverride.rating)} /></div><div className="text-xs text-gray-700">{t.reason}: {ent.riskOverride.reason}</div><div className="text-xs text-gray-400">{t.by} {ent.riskOverride.by} {t.on} {ent.riskOverride.date}</div></div>)}
           <div><div className="text-xs font-semibold text-gray-600 mb-1">{t.riskScoreTrend}</div>{ent.riskHistory.length > 1 ? (<ResponsiveContainer width="100%" height={150}><LineChart data={ent.riskHistory}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" tick={{ fontSize: 9 }} /><YAxis domain={[0, 100]} /><RTooltip /><Line type="monotone" dataKey="score" stroke="#ef4444" strokeWidth={2} /></LineChart></ResponsiveContainer>) : <div className="text-xs text-gray-400 text-center py-3">{t.insufficientHistory}</div>}</div>
           <div><div className="text-xs font-semibold text-gray-600 mb-1">{t.auditTrail}</div><div className="space-y-1 max-h-40 overflow-y-auto">{[...ent.riskHistory].reverse().map((h, i) => (<div key={i} className="flex items-center gap-2 text-xs p-1.5 bg-gray-50 rounded"><span className="text-gray-400">{h.date}</span><span className="font-medium">{t.score}: {h.score}</span><RiskBadge rating={h.rating} label={tR(h.rating)} />{h.override && <BadgeC color="purple">{t.override}</BadgeC>}{h.reason && <span className="text-gray-500 truncate">— {h.reason}</span>}</div>))}</div></div>
@@ -938,9 +889,16 @@ export default function KYCSystem() {
     </div></div>);
   };
 
-  // ====== ALL MODALS ======
+  /* ====================================================================
+     FIX: renderModals — Entity Detail FIRST, action modals AFTER
+     so sub-modals (addDoc, addNote, etc.) appear ON TOP of detail
+   ==================================================================== */
   const d = modalData;
   const renderModals = () => (<>
+    {/* 1️⃣ Entity Detail renders FIRST (base layer) */}
+    {selectedEntity && renderEntityDetail()}
+
+    {/* 2️⃣ All action modals render AFTER (top layer — visible above detail) */}
     {modalType === 'addEntity' && (<ModalShell title={t.addEntityTitle} onClose={closeModal}><div className="space-y-3">
       <FormField label={`${t.name} *`}><input value={d.name || ''} onChange={e => setD('name', e.target.value)} className={`w-full border rounded px-3 py-2 text-sm ${!d.name ? 'border-red-300' : ''}`} placeholder={t.entityName} /></FormField>
       {!d.name && d._touched && <div className="text-xs text-red-500">{t.requiredField}</div>}
@@ -1042,8 +1000,6 @@ export default function KYCSystem() {
     </div></ModalShell>)}
 
     {modalType === 'confirmRestoreCDD' && (<ModalShell title={t.cddRestore} onClose={closeModal}><div className="space-y-3"><div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">{t.cddRestoreConfirm}</div><div className="flex gap-2 justify-end"><button onClick={closeModal} className="px-4 py-2 border rounded-lg text-sm text-gray-600">{t.cancel}</button><button onClick={() => { if (selectedId && d.recordId) restoreCDDRecord(selectedId, d.recordId); closeModal(); }} className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium">{t.cddRestore}</button></div></div></ModalShell>)}
-
-    {selectedEntity && renderEntityDetail()}
   </>);
 
   const navItems = [
