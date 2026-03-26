@@ -380,32 +380,52 @@ export default function KYCSystem() {
   };
 
   const calcCRR = useCallback((entity) => {
-  if (isAutoHighRisk(entity)) return { ... }; // 保持不變
+  const calcCRR = useCallback((entity) => {
+  if (isAutoHighRisk(entity)) return {
+    score: 100,
+    rating: 'High',
+    breakdown: { jurisdiction: 100, pep: 0, sanctions: 0, negativeNews: 0, entityType: 100, ownership: 100 },
+    autoHighRisk: true,
+    jurisdictionForced: false
+  };
 
   const w = settings.weights;
-  // ... 所有現有計算保持不變 ...
-  const score = ...; // 加權平均分數
+  let jScore = settings.highRisk.includes(entity.jurisdiction) ? 100
+    : settings.offshore.includes(entity.jurisdiction) ? 80
+    : settings.monitored.includes(entity.jurisdiction) ? 50 : 15;
+  const pepScore = entity.isPEP ? 100 : 0;
+  const sanctScore = entity.isSanctioned ? 100 : 0;
+  const newsScore = entity.negativeNews ? 85 : 0;
+  let typeScore = ['Trust', 'Foundation', 'SPV'].includes(entity.subType) ? 85
+    : ['Holding Company', 'Shell Company'].includes(entity.subType) ? 60
+    : entity.subType === 'Trading Company' ? 35 : 20;
+  const depth = getOwnershipDepth(entity.id);
+  let ownScore = Math.min(100, depth * 30);
 
-  // ✅ 新增：管轄地強制最低評級
+  const total = w.jurisdiction + w.pep + w.sanctions + w.negativeNews + w.entityType + w.ownership;
+  const score = total > 0
+    ? Math.round((jScore * w.jurisdiction + pepScore * w.pep + sanctScore * w.sanctions
+        + newsScore * w.negativeNews + typeScore * w.entityType + ownScore * w.ownership) / total)
+    : 0;
+
+  // ✅ 管轄地強制最低評級
   const rOrder = { Low: 0, Medium: 1, High: 2 };
   let minRating = 'Low';
-  if (settings.highRisk.includes(entity.jurisdiction))    minRating = 'High';
-  else if (settings.offshore.includes(entity.jurisdiction))  minRating = 'Medium';
+  if (settings.highRisk.includes(entity.jurisdiction))     minRating = 'High';
+  else if (settings.offshore.includes(entity.jurisdiction)) minRating = 'Medium';
   else if (settings.monitored.includes(entity.jurisdiction)) minRating = 'Medium';
 
-  // 取加權分數評級與管轄地最低評級兩者中較高的
   let rating = score >= 70 ? 'High' : score >= 40 ? 'Medium' : 'Low';
+  const rawRating = rating;
   if (rOrder[minRating] > rOrder[rating]) rating = minRating;
 
   return {
     score,
-    rating,        // ← 已套用管轄地底線
+    rating,
     breakdown: { jurisdiction: jScore, pep: pepScore, sanctions: sanctScore,
                  negativeNews: newsScore, entityType: typeScore, ownership: ownScore },
     autoHighRisk: false,
-    jurisdictionForced: rOrder[minRating] > rOrder[          // 可選：記錄是否被強制提升
-      score >= 70 ? 'High' : score >= 40 ? 'Medium' : 'Low'
-    ]
+    jurisdictionForced: rOrder[minRating] > rOrder[rawRating]
   };
 }, [entities, relationships, settings]);
   
