@@ -380,7 +380,6 @@ export default function KYCSystem() {
   };
 
   const calcCRR = useCallback((entity) => {
-  const calcCRR = useCallback((entity) => {
   if (isAutoHighRisk(entity)) return {
     score: 100,
     rating: 'High',
