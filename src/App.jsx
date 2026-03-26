@@ -119,7 +119,7 @@ const i18n = {
     loadSample: '📦 Load Sample Data', loadSampleDesc: 'Load 8 sample entities with relationships for demo purposes.',
     clearAll: '🗑️ Clear All Data', clearAllConfirm: 'Clear all entities and relationships? This cannot be undone.',
     sampleLoaded: 'Sample data loaded successfully.',
-    uboTab: 'UBO', noUBOs: 'No UBOs detected at current threshold.', uboChain: 'Chain', directOwnership: 'Direct Ownership', indirectOwnership: 'Indirect Ownership',
+    uboTab: 'UBO', noUBOs: 'No UBOs detected at current threshold.', uboChain: 'Chain', directOwnership: 'Direct Ownership', indirectOwnership: 'Indirect Ownership', mixedOwnership: 'Direct + Indirect',
     uboAnalysis: 'UBO Analysis', threshold: 'Threshold', detectedUBOs: 'Detected UBOs', selectAll: 'Select All',
     cddTab: 'CDD Records', saveCDD: '📋 Save CDD Record', cddHistory: 'CDD History',
     cddType: 'CDD Type', cddInitial: 'Initial', cddPeriodic: 'Periodic', cddEvent: 'Event-triggered',
@@ -235,7 +235,7 @@ const i18n = {
     loadSample: '📦 載入範本資料', loadSampleDesc: '載入 8 個範本實體及關係圖。',
     clearAll: '🗑️ 清除所有資料', clearAllConfirm: '確定清除所有實體和關係？此操作無法還原。',
     sampleLoaded: '範本資料已成功載入。',
-    uboTab: 'UBO', noUBOs: '在目前門檻下未偵測到 UBO。', uboChain: '鏈路', directOwnership: '直接持股', indirectOwnership: '間接持股',
+    uboTab: 'UBO', noUBOs: '在目前門檻下未偵測到 UBO。', uboChain: '鏈路', directOwnership: '直接持股', indirectOwnership: '間接持股', mixedOwnership: '直接+間接持股',
     uboAnalysis: 'UBO 分析', threshold: '門檻', detectedUBOs: '偵測到的 UBO', selectAll: '全選',
     cddTab: 'CDD 記錄', saveCDD: '📋 儲存 CDD 記錄', cddHistory: 'CDD 歷史',
     cddType: 'CDD 類型', cddInitial: '初始 CDD', cddPeriodic: '定期審查', cddEvent: '事件觸發',
@@ -423,24 +423,28 @@ export default function KYCSystem() {
 
   const getEffectiveRating = (entity) => { const crr = calcCRR(entity); if (crr.autoHighRisk) return { ...crr, overridden: false }; return entity.riskOverride ? { ...crr, rating: entity.riskOverride.rating, overridden: true } : { ...crr, overridden: false }; };
 
-  const findUBOs = useCallback((targetId, threshold, visited = new Set()) => {
-    if (visited.has(targetId)) return []; visited.add(targetId);
-    const owners = relationships.filter(r => r.targetId === targetId && r.type === 'ownership');
-    let ubos = [];
-    owners.forEach(r => {
-      const owner = entities.find(e => e.id === r.sourceId); if (!owner) return;
-      const pct = getRelPercentage(r);
-      if (owner.type === 'person') {
-        if ((pct || 0) >= threshold) ubos.push({ entity: owner, percentage: pct, shares: r.shares, path: [owner.name], direct: true });
-      } else if (owner.type === 'company') {
-        const childUbos = findUBOs(owner.id, threshold, new Set(visited));
-        childUbos.forEach(u => {
-          const eff = pct != null ? (pct / 100) * u.percentage : u.percentage;
-          if (eff >= threshold) ubos.push({ entity: u.entity, percentage: Math.round(eff * 100) / 100, path: [...u.path, owner.name], direct: false });
-        });
-      }
+    const findUBOs = useCallback((targetId, threshold) => {
+    const po = {};
+    const trace = (curId, mult, chain, vis) => {
+      if (vis.has(curId)) return; vis.add(curId);
+      relationships.filter(r => r.targetId === curId && r.type === 'ownership').forEach(rel => {
+        const owner = entities.find(e => e.id === rel.sourceId); if (!owner) return;
+        const pct = getRelPercentage(rel); if (pct == null || pct <= 0) return;
+        const em = mult * pct / 100, ep = em * 100;
+        if (owner.type === 'person') {
+          if (!po[owner.id]) po[owner.id] = { entity: owner, totalPct: 0, paths: [] };
+          po[owner.id].totalPct += ep;
+          po[owner.id].paths.push({ percentage: Math.round(ep * 100) / 100, chain: [owner.name, ...chain], direct: chain.length === 0 });
+        } else if (owner.type === 'company') {
+          trace(owner.id, em, [owner.name, ...chain], new Set(vis));
+        }
+      });
+    };
+    trace(targetId, 1, [], new Set());
+    return Object.values(po).filter(({ totalPct }) => Math.round(totalPct * 100) / 100 >= threshold).map(({ entity, totalPct, paths }) => {
+      const hd = paths.some(p => p.direct), hi = paths.some(p => !p.direct);
+      return { entity, percentage: Math.round(totalPct * 100) / 100, path: paths[0].chain, paths, direct: hd && !hi, mixed: hd && hi };
     });
-    return ubos;
   }, [entities, relationships, getRelPercentage]);
 
   const autoTodos = useMemo(() => {
