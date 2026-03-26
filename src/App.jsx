@@ -947,7 +947,7 @@ export default function KYCSystem() {
     {modalType === 'confirmDeleteAllSnapshots' && (<ModalShell title={t.confirmDeleteSnapshotTitle} onClose={closeModal}><div className="space-y-3"><div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">{t.confirmDeleteAllSnapshotsMsg}</div><div className="flex gap-2 justify-end"><button onClick={closeModal} className="px-4 py-2 border rounded-lg text-sm text-gray-600">{t.cancel}</button><button onClick={() => { deleteAllSnapshots(); closeModal(); }} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium">{t.confirmDelete}</button></div></div></ModalShell>)}
 
     {modalType === 'addRel' && (<ModalShell title={t.addRelTitle} onClose={closeModal}>
-      <RelFormContent data={d} setField={setD} isEdit={false} />
+      {renderRelForm(d, setD, false)} />
       <button onClick={() => {
         const errors = getRelValidationErrors(d.sourceId, d.targetId, d.type || 'ownership', (d.inputMode || 'shares') === 'shares' ? d.shares : null, d.inputMode === 'percentage' ? d.percentage : null, d.inputMode || 'shares');
         if (!d.sourceId || !d.targetId || errors.length > 0) return;
@@ -956,7 +956,7 @@ export default function KYCSystem() {
     </ModalShell>)}
 
     {modalType === 'editRel' && (<ModalShell title={t.editRelTitle} onClose={closeModal}>
-      <RelFormContent data={d} setField={setD} isEdit={true} />
+      {renderRelForm(d, setD, true)} />
       <div className="flex gap-2 mt-4">
         <button onClick={() => {
           const errors = getRelValidationErrors(d.sourceId, d.targetId, d.type || 'ownership', (d.inputMode || 'shares') === 'shares' ? d.shares : null, d.inputMode === 'percentage' ? d.percentage : null, d.inputMode || 'shares', d.id);
