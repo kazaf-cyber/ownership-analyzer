@@ -55,7 +55,7 @@ const SAMPLE_RELS = [
   { id: 'r2', sourceId: 'e5', targetId: 'e1', type: 'ownership', shares: 3000, percentage: null, description: 'Direct shareholding' },
   { id: 'r3', sourceId: 'e7', targetId: 'e1', type: 'ownership', shares: 3000, percentage: null, description: 'Through foundation' },
   { id: 'r4', sourceId: 'e1', targetId: 'e2', type: 'ownership', shares: 1000, percentage: null, description: 'Wholly owned subsidiary' },
-  { id: 'r5', sourceId: 'e1', targetId: 'e3', type: 'control', shares: null, percentage: null, description: 'Trustee appointment' },
+  { id: 'r5', sourceId: 'e1', targetId: 'e3', type: 'control', shares: 60, percentage: null, description: 'Trustee appointment' },
   { id: 'r6', sourceId: 'e3', targetId: 'e6', type: 'ownership', shares: 3000, percentage: null, description: 'Trust holding' },
   { id: 'r7', sourceId: 'e8', targetId: 'e6', type: 'ownership', shares: 1250, percentage: null, description: 'Direct shareholding' },
   { id: 'r8', sourceId: 'e4', targetId: 'e8', type: 'rca', shares: null, percentage: null, description: 'Business associate' },
@@ -387,7 +387,6 @@ export default function KYCSystem() {
     autoHighRisk: true,
     jurisdictionForced: false
   };
-
   const w = settings.weights;
   let jScore = settings.highRisk.includes(entity.jurisdiction) ? 100
     : settings.offshore.includes(entity.jurisdiction) ? 80
@@ -400,29 +399,23 @@ export default function KYCSystem() {
     : entity.subType === 'Trading Company' ? 35 : 20;
   const depth = getOwnershipDepth(entity.id);
   let ownScore = Math.min(100, depth * 30);
-
   const total = w.jurisdiction + w.pep + w.sanctions + w.negativeNews + w.entityType + w.ownership;
   const score = total > 0
     ? Math.round((jScore * w.jurisdiction + pepScore * w.pep + sanctScore * w.sanctions
         + newsScore * w.negativeNews + typeScore * w.entityType + ownScore * w.ownership) / total)
     : 0;
-
-  // ✅ 管轄地強制最低評級
   const rOrder = { Low: 0, Medium: 1, High: 2 };
   let minRating = 'Low';
-  if (settings.highRisk.includes(entity.jurisdiction))     minRating = 'High';
+  if (settings.highRisk.includes(entity.jurisdiction)) minRating = 'High';
   else if (settings.offshore.includes(entity.jurisdiction)) minRating = 'Medium';
   else if (settings.monitored.includes(entity.jurisdiction)) minRating = 'Medium';
-
   let rating = score >= 70 ? 'High' : score >= 40 ? 'Medium' : 'Low';
   const rawRating = rating;
   if (rOrder[minRating] > rOrder[rating]) rating = minRating;
-
   return {
     score,
     rating,
-    breakdown: { jurisdiction: jScore, pep: pepScore, sanctions: sanctScore,
-                 negativeNews: newsScore, entityType: typeScore, ownership: ownScore },
+    breakdown: { jurisdiction: jScore, pep: pepScore, sanctions: sanctScore, negativeNews: newsScore, entityType: typeScore, ownership: ownScore },
     autoHighRisk: false,
     jurisdictionForced: rOrder[minRating] > rOrder[rawRating]
   };
@@ -432,11 +425,14 @@ export default function KYCSystem() {
 
   /* ===== FIX: UBO multi-path aggregation ===== */
   const findUBOs = useCallback((targetId, threshold) => {
-    const po = {};
-    const trace = (curId, mult, chain, vis) => {
-      if (vis.has(curId)) return;
-      vis.add(curId);
-      relationships.filter(r => r.targetId === curId && r.type === 'ownership').forEach(rel => {
+  const po = {};
+  const trace = (curId, mult, chain, vis) => {
+    if (vis.has(curId)) return;
+    vis.add(curId);
+    // ownership 關係：按持股比例計算
+    relationships
+      .filter(r => r.targetId === curId && r.type === 'ownership')
+      .forEach(rel => {
         const owner = entities.find(e => e.id === rel.sourceId);
         if (!owner) return;
         const pct = getRelPercentage(rel);
@@ -446,20 +442,62 @@ export default function KYCSystem() {
         if (owner.type === 'person') {
           if (!po[owner.id]) po[owner.id] = { entity: owner, totalPct: 0, paths: [] };
           po[owner.id].totalPct += ep;
-          po[owner.id].paths.push({ percentage: Math.round(ep * 100) / 100, chain: [owner.name, ...chain], direct: chain.length === 0 });
-        } else if (owner.type === 'company') {
+          po[owner.id].paths.push({
+            percentage: Math.round(ep * 100) / 100,
+            chain: [owner.name, ...chain],
+            direct: chain.length === 0,
+            viaControl: false,
+            controlPct: null
+          });
+        } else {
           trace(owner.id, em, [owner.name, ...chain], new Set(vis));
         }
       });
-    };
-    trace(targetId, 1, [], new Set());
-    return Object.values(po)
-      .filter(({ totalPct }) => Math.round(totalPct * 100) / 100 >= threshold)
-      .map(({ entity, totalPct, paths }) => {
-        const hd = paths.some(p => p.direct), hi = paths.some(p => !p.direct);
-        return { entity, percentage: Math.round(totalPct * 100) / 100, path: paths[0].chain, paths, direct: hd && !hi, mixed: hd && hi };
+    // control 關係：支援百分比，未填則視為 100% 完全控制
+    relationships
+      .filter(r => r.targetId === curId && r.type === 'control')
+      .forEach(rel => {
+        const controller = entities.find(e => e.id === rel.sourceId);
+        if (!controller) return;
+        const ctrlPct = (rel.percentage != null && rel.percentage > 0) ? rel.percentage : 100;
+        const em = mult * ctrlPct / 100;
+        const ep = em * 100;
+        if (controller.type === 'person') {
+          if (!po[controller.id]) po[controller.id] = { entity: controller, totalPct: 0, paths: [] };
+          po[controller.id].totalPct += ep;
+          po[controller.id].paths.push({
+            percentage: Math.round(ep * 100) / 100,
+            chain: [controller.name, ...chain],
+            direct: chain.length === 0,
+            viaControl: true,
+            controlPct: ctrlPct
+          });
+        } else {
+          trace(controller.id, em, [controller.name, ...chain], new Set(vis));
+        }
       });
-  }, [entities, relationships, getRelPercentage]);
+  };
+  trace(targetId, 1, [], new Set());
+  return Object.values(po)
+    .filter(({ totalPct, paths }) =>
+      Math.round(totalPct * 100) / 100 >= threshold ||
+      paths.some(p => p.viaControl && p.controlPct >= 25)
+    )
+    .map(({ entity, totalPct, paths }) => {
+      const hd = paths.some(p => p.direct);
+      const hi = paths.some(p => !p.direct);
+      const hasControl = paths.some(p => p.viaControl);
+      return {
+        entity,
+        percentage: Math.round(totalPct * 100) / 100,
+        path: paths[0].chain,
+        paths,
+        direct: hd && !hi,
+        mixed: hd && hi,
+        viaControl: hasControl
+      };
+    });
+}, [entities, relationships, getRelPercentage]);
 
   const autoTodos = useMemo(() => {
     const todos = [];
