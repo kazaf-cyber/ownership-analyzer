@@ -532,35 +532,26 @@ export default function KYCSystem() {
     return (o[a.priority] ?? 3) - (o[b.priority] ?? 3);
   });
 }, [entities, relationships, settings, lang]);
-    const todos = [];
-    entities.forEach(ent => {
-      if (ent.nextReviewDate && ent.nextReviewDate < today) todos.push({ id: `t-r-${ent.id}`, entityId: ent.id, type: 'overdue', text: lang === 'zh' ? `${ent.name} 審查已逾期（${ent.nextReviewDate}）` : `Review overdue: ${ent.name} (${ent.nextReviewDate})`, priority: 'high' });
-      const expD = (ent.documents || []).filter(d => d.status === 'expired' || (d.expiry && d.expiry < today));
-      if (expD.length > 0) todos.push({ id: `t-d-${ent.id}`, entityId: ent.id, type: 'exp_doc', text: lang === 'zh' ? `${ent.name} ${expD.length} 份文件過期` : `${expD.length} expired doc(s): ${ent.name}`, priority: 'medium' });
-      const soonExpDocs = (ent.documents || []).filter(d => d.status === 'received' && isExpiringIn30(d.expiry));
-      if (soonExpDocs.length > 0) todos.push({ id: `t-de-${ent.id}`, entityId: ent.id, type: 'exp_soon', text: lang === 'zh' ? `${ent.name} ${soonExpDocs.length} 份文件即將到期（30天內）` : `${soonExpDocs.length} doc(s) expiring soon: ${ent.name}`, priority: 'medium' });
-      if (ent.isSanctioned) todos.push({ id: `t-s-${ent.id}`, entityId: ent.id, type: 'sanction', text: lang === 'zh' ? `緊急：${ent.name} 命中制裁` : `URGENT: Sanctions hit ${ent.name}`, priority: 'critical' });
-      if (getEffectiveRating(ent).rating === 'High' && !ent.str?.flagged) todos.push({ id: `t-st-${ent.id}`, entityId: ent.id, type: 'str', text: lang === 'zh' ? `高風險 ${ent.name}：考慮 STR` : `High-risk ${ent.name}: consider STR`, priority: 'high' });
-      if (ent.screeningLogs.length === 0) todos.push({ id: `t-sc-${ent.id}`, entityId: ent.id, type: 'no_screen', text: lang === 'zh' ? `${ent.name} 無篩查記錄` : `No screening: ${ent.name}`, priority: 'medium' });
-      const rels = relationships.filter(r => r.sourceId === ent.id || r.targetId === ent.id);
-      if (rels.length === 0) todos.push({ id: `t-nr-${ent.id}`, entityId: ent.id, type: 'no_rel', text: lang === 'zh' ? `${ent.name} 尚無任何關係連結` : `${ent.name} has no relationships`, priority: 'low' });
-      if (isAutoHighRisk(ent)) {
-        const oneYearFromLast = ent.lastReviewDate ? new Date(new Date(ent.lastReviewDate).getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) : today;
-        if (oneYearFromLast <= today) todos.push({ id: `t-ar-${ent.id}`, entityId: ent.id, type: 'annual', text: lang === 'zh' ? `${ent.name}（${ent.subType}）強制年審已到期` : `Annual review due: ${ent.name} (${ent.subType})`, priority: 'critical' });
-      }
-      if (getEffectiveRating(ent).rating === 'High' && !isAutoHighRisk(ent) && (ent.cddRecords || []).length === 0) {
-        todos.push({ id: `t-edd-${ent.id}`, entityId: ent.id, type: 'edd', text: lang === 'zh' ? `${ent.name} 高風險未有 CDD 記錄，需進行 EDD` : `EDD needed: ${ent.name} (High Risk, no CDD)`, priority: 'high' });
-      }
-      if (ent.type === 'company' && ent.totalShares > 0) {
-        const totalAllocPct = relationships.filter(r => r.targetId === ent.id && r.type === 'ownership').reduce((s, r) => s + (getRelPercentage(r) || 0), 0);
-        if (totalAllocPct > 100) todos.push({ id: `t-pct-${ent.id}`, entityId: ent.id, type: 'pct_exceed', text: lang === 'zh' ? `${ent.name} 持股比例合計 ${Math.round(totalAllocPct)}% 超過 100%` : `${ent.name} ownership ${Math.round(totalAllocPct)}% exceeds 100%`, priority: 'critical' });
-      }
-    });
-    return todos.sort((a, b) => {
-        const o = { critical: 0, high: 1, medium: 2, low: 3 };
-        return (o[a.priority] ?? 3) - (o[b.priority] ?? 3);
-      });
-  }, [entities, relationships, settings, lang]);
+  
+    const autoTodos = useMemo(() => {
+  const todos = [];
+  entities.forEach(ent => {
+    if (ent.nextReviewDate && ent.nextReviewDate < today) todos.push({ id: `t-r-${ent.id}`, entityId: ent.id, type: 'overdue', text: lang === 'zh' ? `${ent.name} 審查已逾期（${ent.nextReviewDate}）` : `Review overdue: ${ent.name} (${ent.nextReviewDate})`, priority: 'high' });
+    const expD = (ent.documents || []).filter(d => d.status === 'expired' || (d.expiry && d.expiry < today));
+    if (expD.length > 0) todos.push({ id: `t-d-${ent.id}`, entityId: ent.id, type: 'exp_doc', text: lang === 'zh' ? `${ent.name} ${expD.length} 份文件過期` : `${expD.length} expired doc(s): ${ent.name}`, priority: 'medium' });
+    const soonExpDocs = (ent.documents || []).filter(d => d.status === 'received' && isExpiringIn30(d.expiry));
+    if (soonExpDocs.length > 0) todos.push({ id: `t-de-${ent.id}`, entityId: ent.id, type: 'exp_soon', text: lang === 'zh' ? `${ent.name} ${soonExpDocs.length} 份文件即將到期（30天內）` : `${soonExpDocs.length} doc(s) expiring soon: ${ent.name}`, priority: 'medium' });
+    if (ent.isSanctioned) todos.push({ id: `t-s-${ent.id}`, entityId: ent.id, type: 'sanction', text: lang === 'zh' ? `緊急：${ent.name} 命中制裁` : `URGENT: Sanctions hit ${ent.name}`, priority: 'critical' });
+    if (getEffectiveRating(ent).rating === 'High' && !ent.str?.flagged) todos.push({ id: `t-st-${ent.id}`, entityId: ent.id, type: 'str', text: lang === 'zh' ? `高風險 ${ent.name}：考慮 STR` : `High-risk ${ent.name}: consider STR`, priority: 'high' });
+    if ((ent.screeningLogs || []).length === 0) todos.push({ id: `t-sc-${ent.id}`, entityId: ent.id, type: 'no_screen', text: lang === 'zh' ? `${ent.name} 無篩查記錄` : `No screening: ${ent.name}`, priority: 'medium' });
+    const rels = relationships.filter(r => r.sourceId === ent.id || r.targetId === ent.id);
+    if (rels.length === 0) todos.push({ id: `t-nr-${ent.id}`, entityId: ent.id, type: 'no_rel', text: lang === 'zh' ? `${ent.name} 尚無任何關係` : `No relationships: ${ent.name}`, priority: 'medium' });
+    if (isAutoHighRisk(ent)) { const oneYearFromLast = ent.lastReviewDate ? new Date(new Date(ent.lastReviewDate).getTime() + 365*24*60*60*1000).toISOString().slice(0,10) : today; if (oneYearFromLast <= today) todos.push({ id: `t-ar-${ent.id}`, entityId: ent.id, type: 'annual', text: lang === 'zh' ? `${ent.name}（${ent.subType}）強制年審已到期` : `Annual review due: ${ent.name} (${ent.subType})`, priority: 'critical' }); }
+    if (getEffectiveRating(ent).rating === 'High' && !isAutoHighRisk(ent) && (ent.cddRecords || []).length === 0) todos.push({ id: `t-edd-${ent.id}`, entityId: ent.id, type: 'edd', text: lang === 'zh' ? `${ent.name} 高風險未有 CDD 記錄，需進行 EDD` : `EDD needed: ${ent.name} (High Risk, no CDD)`, priority: 'high' });
+    if (ent.type === 'company' && ent.totalShares > 0) { const totalAllocPct = relationships.filter(r => r.targetId === ent.id && r.type === 'ownership').reduce((s, r) => s + (getRelPercentage(r) || 0), 0); if (totalAllocPct > 100) todos.push({ id: `t-pct-${ent.id}`, entityId: ent.id, type: 'pct_exceed', text: lang === 'zh' ? `${ent.name} 持股比例合計 ${Math.round(totalAllocPct)}% 超過 100%` : `${ent.name} ownership ${Math.round(totalAllocPct)}% exceeds 100%`, priority: 'critical' }); }
+  });
+  return todos.sort((a, b) => { const o = { critical: 0, high: 1, medium: 2, low: 3 }; return (o[a.priority] ?? 3) - (o[b.priority] ?? 3); });
+}, [entities, relationships, settings, lang]);
 
   const dagLayout = useMemo(() => {
     if (entities.length === 0) return { positions: {}, W: 700, H: 350 };
