@@ -502,58 +502,36 @@ export default function KYCSystem() {
   const autoTodos = useMemo(() => {
   const todos = [];
   entities.forEach(ent => {
-    if (ent.nextReviewDate && ent.nextReviewDate < today)
-      todos.push({
-        id: `t-r-${ent.id}`, entityId: ent.id, type: 'overdue',
-        text: lang === 'zh' ? `${ent.name} 審查已逾期（${ent.nextReviewDate}）` : `Review overdue: ${ent.name} (${ent.nextReviewDate})`,
-        priority: 'high'
-      });
+    if (ent.nextReviewDate && ent.nextReviewDate < today) {
+      todos.push({ id: `t-r-${ent.id}`, entityId: ent.id, type: 'overdue', text: lang === 'zh' ? `${ent.name} 審查已逾期（${ent.nextReviewDate}）` : `Review overdue: ${ent.name} (${ent.nextReviewDate})`, priority: 'high' });
+    }
     const expD = (ent.documents || []).filter(d => d.status === 'expired' || (d.expiry && d.expiry < today));
-    if (expD.length > 0)
-      todos.push({
-        id: `t-d-${ent.id}`, entityId: ent.id, type: 'exp_doc',
-        text: lang === 'zh' ? `${ent.name} ${expD.length} 份文件過期` : `${expD.length} expired doc(s): ${ent.name}`,
-        priority: 'medium'
-      });
+    if (expD.length > 0) {
+      todos.push({ id: `t-d-${ent.id}`, entityId: ent.id, type: 'exp_doc', text: lang === 'zh' ? `${ent.name} ${expD.length} 份文件過期` : `${expD.length} expired doc(s): ${ent.name}`, priority: 'medium' });
+    }
     const soonExpDocs = (ent.documents || []).filter(d => d.status === 'received' && isExpiringIn30(d.expiry));
-    if (soonExpDocs.length > 0)
-      todos.push({
-        id: `t-de-${ent.id}`, entityId: ent.id, type: 'exp_soon',
-        text: lang === 'zh' ? `${ent.name} ${soonExpDocs.length} 份文件即將到期（30天內）` : `${soonExpDocs.length} doc(s) expiring soon: ${ent.name}`,
-        priority: 'medium'
-      });
-    if (ent.isSanctioned)
-      todos.push({
-        id: `t-s-${ent.id}`, entityId: ent.id, type: 'sanction',
-        text: lang === 'zh' ? `緊急：${ent.name} 命中制裁` : `URGENT: Sanctions hit ${ent.name}`,
-        priority: 'critical'
-      });
-    if (getEffectiveRating(ent).rating === 'High' && !ent.str?.flagged)
-      todos.push({
-        id: `t-st-${ent.id}`, entityId: ent.id, type: 'str',
-        text: lang === 'zh' ? `高風險 ${ent.name}：考慮 STR` : `High-risk ${ent.name}: consider STR`,
-        priority: 'high'
-      });
-    if ((ent.screeningLogs || []).length === 0)
-      todos.push({
-        id: `t-sc-${ent.id}`, entityId: ent.id, type: 'no_screen',
-        text: lang === 'zh' ? `${ent.name} 無篩查記錄` : `No screening: ${ent.name}`,
-        priority: 'medium'
-      });
+    if (soonExpDocs.length > 0) {
+      todos.push({ id: `t-de-${ent.id}`, entityId: ent.id, type: 'exp_soon', text: lang === 'zh' ? `${ent.name} ${soonExpDocs.length} 份文件即將到期（30天內）` : `${soonExpDocs.length} doc(s) expiring soon: ${ent.name}`, priority: 'medium' });
+    }
+    if (ent.isSanctioned) {
+      todos.push({ id: `t-s-${ent.id}`, entityId: ent.id, type: 'sanction', text: lang === 'zh' ? `緊急：${ent.name} 命中制裁` : `URGENT: Sanctions hit ${ent.name}`, priority: 'critical' });
+    }
+    if (getEffectiveRating(ent).rating === 'High' && !ent.str?.flagged) {
+      todos.push({ id: `t-st-${ent.id}`, entityId: ent.id, type: 'str', text: lang === 'zh' ? `高風險 ${ent.name}：考慮 STR` : `High-risk ${ent.name}: consider STR`, priority: 'high' });
+    }
+    if ((ent.screeningLogs || []).length === 0) {
+      todos.push({ id: `t-sc-${ent.id}`, entityId: ent.id, type: 'no_screen', text: lang === 'zh' ? `${ent.name} 無篩查記錄` : `No screening: ${ent.name}`, priority: 'medium' });
+    }
     const rels = relationships.filter(r => r.sourceId === ent.id || r.targetId === ent.id);
-    if (rels.length === 0)
-      todos.push({
-        id: `t-nr-${ent.id}`, entityId: ent.id, type: 'no_rel',
-        text: lang === 'zh' ? `${ent.name} 尚無任何關係` : `No relationships: ${ent.name}`,
-        priority: 'medium'
-      });
+    if (rels.length === 0) {
+      todos.push({ id: `t-nr-${ent.id}`, entityId: ent.id, type: 'no_rel', text: lang === 'zh' ? `${ent.name} 尚無任何關係` : `No relationships: ${ent.name}`, priority: 'medium' });
+    }
   });
   return todos.sort((a, b) => {
-        const order = { critical: 0, high: 1, medium: 2, low: 3 };
-        return (order[a.priority] ?? 3) - (order[b.priority] ?? 3);
-      });
+    const o = { critical: 0, high: 1, medium: 2, low: 3 };
+    return (o[a.priority] ?? 3) - (o[b.priority] ?? 3);
+  });
 }, [entities, relationships, settings, lang]);
-
     const todos = [];
     entities.forEach(ent => {
       if (ent.nextReviewDate && ent.nextReviewDate < today) todos.push({ id: `t-r-${ent.id}`, entityId: ent.id, type: 'overdue', text: lang === 'zh' ? `${ent.name} 審查已逾期（${ent.nextReviewDate}）` : `Review overdue: ${ent.name} (${ent.nextReviewDate})`, priority: 'high' });
