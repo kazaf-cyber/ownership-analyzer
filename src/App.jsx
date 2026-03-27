@@ -399,9 +399,9 @@ export default function KYCSystem() {
   if (isAutoHighRisk(entity)) return {
     score: 100,
     rating: 'High',
-    breakdown: { jurisdiction: 100, pep: 0, sanctions: 0, negativeNews: 0, entityType: 100, ownership: 100 },
+    breakdown: { jurisdiction: 100, pep: 0, sanctions: 100, negativeNews: 0, entityType: 100, ownership: 100 },
     autoHighRisk: true,
-    jurisdictionForced: false, sanctionForced: true, pepForced: false
+    jurisdictionForced: false, pepForced: false
   };
   const w = settings.weights;
   let jScore = settings.highRisk.includes(entity.jurisdiction) ? 100
