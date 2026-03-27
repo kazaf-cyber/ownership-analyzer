@@ -579,8 +579,8 @@ export default function KYCSystem() {
       }
     });
     return todos.sort((a, b) => {
-        const order = { critical: 0, high: 1, medium: 2, low: 3 };
-        return (order[a.priority] ?? 3) - (order[b.priority] ?? 3);
+        const o = { critical: 0, high: 1, medium: 2, low: 3 };
+        return (o[a.priority] ?? 3) - (o[b.priority] ?? 3);
       });
   }, [entities, relationships, settings, lang]);
 
