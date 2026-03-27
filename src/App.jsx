@@ -578,7 +578,10 @@ export default function KYCSystem() {
         if (totalAllocPct > 100) todos.push({ id: `t-pct-${ent.id}`, entityId: ent.id, type: 'pct_exceed', text: lang === 'zh' ? `${ent.name} 持股比例合計 ${Math.round(totalAllocPct)}% 超過 100%` : `${ent.name} ownership ${Math.round(totalAllocPct)}% exceeds 100%`, priority: 'critical' });
       }
     });
-    return todos.sort((a, b) => ({ critical: 0, high: 1, medium: 2, low: 3 }[a.priority] || 9) - ({ critical: 0, high: 1, medium: 2, low: 3 }[b.priority] || 9));
+    return todos.sort((a, b) => {
+        const order = { critical: 0, high: 1, medium: 2, low: 3 };
+        return (order[a.priority] ?? 3) - (order[b.priority] ?? 3);
+      });
   }, [entities, relationships, settings, lang]);
 
   const dagLayout = useMemo(() => {
