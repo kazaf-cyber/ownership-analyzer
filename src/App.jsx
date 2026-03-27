@@ -428,6 +428,7 @@ export default function KYCSystem() {
   let rating = score >= 70 ? 'High' : score >= 40 ? 'Medium' : 'Low';
   const rawRating = rating;
   if (rOrder[minRating] > rOrder[rating]) rating = minRating;
+  if (entity.isSanctioned) return { score: 100, rating: 'High', breakdown: { jurisdiction: jScore, pep: pepScore, sanctions: 100, negativeNews: newsScore, entityType: typeScore, ownership: ownScore }, autoHighRisk: false, sanctionForced: true, jurisdictionForced: false, pepForced: false };
   let pepForced = false;
   if (entity.isPEP && rating !== 'High') {
   pepForced = true;
