@@ -1,0 +1,23 @@
+name: Integrate AMS Module
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'src/App.jsx', 'src/ams_module.js' ]
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run AMS Integration
+        run: |
+          cd src
+          node integrate.js App.jsx
+      - name: Commit if changed
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add -A
+          git diff --staged --quiet || git commit -m "chore: auto-integrate AMS module"
+          git push
