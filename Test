@@ -1,0 +1,1462 @@
+import React, { useState } from 'react';
+import {
+  Search,
+  Brain,
+  AlertTriangle,
+  CheckCircle,
+  XCircle,
+  Info,
+  ChevronDown,
+  ChevronRight,
+  Globe,
+  ExternalLink,
+  Loader,
+  Shield,
+  FileText,
+  Filter,
+} from 'lucide-react';
+
+// ===== 固定關鍵字（不可分批，必須一次性搜尋）=====
+const EN_KEYWORDS = [
+  'market abuse',
+  'regulatory breach',
+  'tax evasion',
+  'allegation',
+  'bribery',
+  'corruption',
+  'criminal',
+  'fraud',
+  'illegal',
+  'indict',
+  'investigation',
+  'laundering',
+  'lawsuit',
+  'penalty',
+  'prosecution',
+  'sanctions',
+  'terrorist',
+  'trafficking',
+  'ML',
+  'AML',
+];
+
+const ZH_KEYWORDS = [
+  '市場濫用',
+  '監管違規',
+  '逃稅',
+  '指控',
+  '賄賂',
+  '腐敗',
+  '刑事',
+  '欺詐',
+  '非法',
+  '起訴',
+  '調查',
+  '洗錢',
+  '訴訟',
+  '處罰',
+  '檢舉',
+  '制裁',
+  '恐怖分子',
+  '販運',
+  '洗錢',
+  '反洗錢',
+];
+
+const buildQuery = (entity, lang) => {
+  const kw = lang === 'en' ? EN_KEYWORDS : ZH_KEYWORDS;
+  return `"${entity}" ${kw.map((k) => `"${k}"`).join(' OR ')}`;
+};
+
+// ===== 4 種分類定義 =====
+const CLS_CONFIG = {
+  TRUE_HIT: {
+    label: 'True Hit',
+    labelZh: '確認命中',
+    desc: 'The hit is confirmed to be the subject and is associated with negative news related to ML/TF or sanctions',
+    icon: AlertTriangle,
+    bg: 'bg-red-50',
+    border: 'border-red-300',
+    text: 'text-red-700',
+    badge: 'bg-red-100 text-red-800 border-red-200',
+    ring: 'ring-red-200',
+  },
+  FALSE_HIT: {
+    label: 'False Hit',
+    labelZh: '誤報',
+    desc: 'Full name / gender / DOB / Age not match',
+    icon: XCircle,
+    bg: 'bg-amber-50',
+    border: 'border-amber-300',
+    text: 'text-amber-700',
+    badge: 'bg-amber-100 text-amber-800 border-amber-200',
+    ring: 'ring-amber-200',
+  },
+  IRRELEVANT_MLTF: {
+    label: 'Irrelevant to ML/TF',
+    labelZh: '與ML/TF無關',
+    desc: 'No negative news related to ML/TF or sanctions; no need to determine whether the hit is the subject',
+    icon: Info,
+    bg: 'bg-slate-50',
+    border: 'border-slate-300',
+    text: 'text-slate-600',
+    badge: 'bg-slate-100 text-slate-700 border-slate-200',
+    ring: 'ring-slate-200',
+  },
+  NO_HIT: {
+    label: 'No Hit',
+    labelZh: '無命中',
+    desc: 'No search/keywords found, or the search returned no result',
+    icon: CheckCircle,
+    bg: 'bg-green-50',
+    border: 'border-green-300',
+    text: 'text-green-700',
+    badge: 'bg-green-100 text-green-800 border-green-200',
+    ring: 'ring-green-200',
+  },
+};
+
+// ===== Mock 搜尋結果 =====
+const MOCK_EN = [
+  {
+    rank: 1,
+    title:
+      'ABC Holdings Ltd Director Under Investigation for Money Laundering Scheme',
+    source: 'South China Morning Post',
+    date: '2026-02-15',
+    snippet:
+      'Hong Kong authorities have launched a formal investigation into ABC Holdings Ltd and its director John Chen for allegedly laundering approximately USD 50 million through a network of shell companies across multiple jurisdictions...',
+    matchedKeywords: ['laundering', 'investigation'],
+    cls: 'TRUE_HIT',
+    confidence: 0.94,
+    reason:
+      'Article directly names "ABC Holdings Ltd" and its director. Money laundering through shell companies is a core ML/TF concern. Jurisdiction (Hong Kong) matches the client profile.',
+    riskCat: 'Money Laundering',
+  },
+  {
+    rank: 2,
+    title:
+      'ABC Holdings Ltd Faces Fraud Allegations Linked to Sanctions Evasion',
+    source: 'Reuters',
+    date: '2026-01-20',
+    snippet:
+      'ABC Holdings Ltd is facing multiple fraud allegations after investigators discovered the company may have facilitated transactions with sanctioned entities in violation of UN and US sanctions...',
+    matchedKeywords: ['fraud', 'allegation', 'sanctions'],
+    cls: 'TRUE_HIT',
+    confidence: 0.92,
+    reason:
+      'Exact entity name match. Fraud + sanctions evasion are directly related to ML/TF. The article describes deliberate circumvention of international sanctions.',
+    riskCat: 'Sanctions Evasion / Fraud',
+  },
+  {
+    rank: 3,
+    title: 'HKMA Names ABC Holdings Ltd in Terrorist Financing Probe',
+    source: 'Financial Times',
+    date: '2025-11-30',
+    snippet:
+      'The Hong Kong Monetary Authority has named ABC Holdings Ltd among several companies being investigated for potential terrorist financing activities, following suspicious transaction reports filed by multiple banks...',
+    matchedKeywords: ['terrorist', 'investigation'],
+    cls: 'TRUE_HIT',
+    confidence: 0.96,
+    reason:
+      'Exact entity match. Named by HKMA in terrorist financing investigation — this is a direct TF concern and the highest severity ML/TF category.',
+    riskCat: 'Terrorist Financing',
+  },
+  {
+    rank: 4,
+    title:
+      'ABC Holdings Pty Ltd Melbourne Recognised for Innovation Excellence',
+    source: 'The Australian',
+    date: '2026-01-10',
+    snippet:
+      'ABC Holdings Pty Ltd, an Australian technology startup headquartered in Melbourne, has been awarded the 2025 Innovation Excellence Award for its groundbreaking work in renewable energy solutions...',
+    matchedKeywords: [],
+    cls: 'FALSE_HIT',
+    confidence: 0.91,
+    reason:
+      'Different entity — "ABC Holdings Pty Ltd" is an Australian tech startup (Pty Ltd = Australian entity type). Different jurisdiction (Australia vs Hong Kong), different industry (tech vs financial), no adverse information.',
+    riskCat: 'N/A',
+  },
+  {
+    rank: 5,
+    title:
+      'ABC Holdings Inc CEO John Smith Announces Strategic Restructuring',
+    source: 'Wall Street Journal',
+    date: '2026-02-28',
+    snippet:
+      'ABC Holdings Inc, a Delaware-incorporated conglomerate, announced today that CEO John Smith will oversee a major restructuring initiative aimed at improving operational efficiency across its US divisions...',
+    matchedKeywords: [],
+    cls: 'FALSE_HIT',
+    confidence: 0.89,
+    reason:
+      'Different entity — "ABC Holdings Inc" is a US Delaware company. Different jurisdiction, different legal entity type, different key personnel (John Smith, not matching client profile).',
+    riskCat: 'N/A',
+  },
+  {
+    rank: 6,
+    title:
+      "Japan's ABC Holdings Corp Reports Record Revenue Amid Market Growth",
+    source: 'Nikkei Asia',
+    date: '2026-03-05',
+    snippet:
+      'ABC Holdings Corporation, listed on the Tokyo Stock Exchange, reported record quarterly revenue driven by strong performance in its semiconductor division and favorable exchange rates...',
+    matchedKeywords: [],
+    cls: 'FALSE_HIT',
+    confidence: 0.87,
+    reason:
+      'Different entity — "ABC Holdings Corp" is a Japanese listed company on TSE. Different jurisdiction (Japan), different industry (semiconductors), no adverse information present.',
+    riskCat: 'N/A',
+  },
+  {
+    rank: 7,
+    title:
+      'ABC Holdings Ltd Sued by Former Partner for Breach of Commercial Contract',
+    source: 'HK Economic Journal',
+    date: '2026-02-01',
+    snippet:
+      'ABC Holdings Ltd is facing a civil lawsuit filed by former business partner XYZ Trading Co. over alleged breach of a commercial supply contract worth HKD 120 million. The dispute centres on delivery timelines and quality standards...',
+    matchedKeywords: ['lawsuit'],
+    cls: 'IRRELEVANT_MLTF',
+    confidence: 0.88,
+    reason:
+      'Entity name matches (correct subject). However, this is a commercial contract dispute — a civil matter about delivery timelines and quality. Not related to ML/TF or sanctions. No need to determine subject match further.',
+    riskCat: 'N/A — Commercial Dispute',
+  },
+  {
+    rank: 8,
+    title:
+      'ABC Holdings Ltd Fined for Environmental Regulatory Breach at Construction Site',
+    source: 'Green Post HK',
+    date: '2025-12-20',
+    snippet:
+      'The Environmental Protection Department has fined ABC Holdings Ltd HKD 500,000 for breaching environmental regulations at its Tuen Mun construction site, including improper waste disposal and excessive noise...',
+    matchedKeywords: ['regulatory breach', 'penalty'],
+    cls: 'IRRELEVANT_MLTF',
+    confidence: 0.86,
+    reason:
+      'Entity name matches, and keywords "regulatory breach" and "penalty" triggered the search hit. However, this is about environmental violations (waste disposal, noise), entirely unrelated to ML/TF or sanctions.',
+    riskCat: 'N/A — Environmental',
+  },
+  {
+    rank: 9,
+    title:
+      'ABC Holdings Ltd Under Investigation for Workplace Safety Violations',
+    source: 'Labour Tribune',
+    date: '2026-01-15',
+    snippet:
+      'The Labour Department has opened an investigation into ABC Holdings Ltd following multiple workplace safety complaints at its Kwun Tong office complex. Inspectors found several fire safety and structural violations...',
+    matchedKeywords: ['investigation'],
+    cls: 'IRRELEVANT_MLTF',
+    confidence: 0.85,
+    reason:
+      'Entity name matches and "investigation" keyword triggered the hit. However, this investigation is about workplace/fire safety — completely unrelated to ML/TF or sanctions.',
+    riskCat: 'N/A — Workplace Safety',
+  },
+  {
+    rank: 10,
+    title:
+      'Hong Kong Introduces New AML Framework for Financial Institutions in 2026',
+    source: 'Bloomberg',
+    date: '2026-03-01',
+    snippet:
+      'The Hong Kong government has unveiled a comprehensive new anti-money laundering framework that will require all licensed financial institutions to implement enhanced due diligence procedures by Q3 2026...',
+    matchedKeywords: ['AML'],
+    cls: 'NO_HIT',
+    confidence: 0.93,
+    reason:
+      'General regulatory news about AML framework in Hong Kong. No mention of ABC Holdings Ltd anywhere in the article. The "AML" keyword triggered this result but it has no connection to the search subject.',
+    riskCat: 'N/A',
+  },
+];
+
+const MOCK_ZH = [
+  {
+    rank: 1,
+    title: 'ABC Holdings Ltd 涉嫌洗錢五千萬 廉政公署展開正式調查',
+    source: '明報',
+    date: '2026-02-10',
+    snippet:
+      '廉政公署證實已對 ABC Holdings Ltd 及其董事展開正式洗錢調查。據悉該公司涉嫌透過多間空殼公司清洗約五千萬美元非法資金，資金流向涉及多個海外司法管轄區...',
+    matchedKeywords: ['洗錢', '調查'],
+    cls: 'TRUE_HIT',
+    confidence: 0.96,
+    reason:
+      'Article directly names "ABC Holdings Ltd" as ICAC investigation target for money laundering. Exact entity match, ML/TF directly relevant, high-credibility source (明報).',
+    riskCat: '洗錢 / Money Laundering',
+  },
+  {
+    rank: 2,
+    title: 'ABC Holdings Ltd 董事因賄賂政府官員罪被正式起訴',
+    source: '星島日報',
+    date: '2026-01-25',
+    snippet:
+      'ABC Holdings Ltd 一名高級董事因涉嫌向多名政府官員行賄以獲取大型基建項目合約，今日被正式起訴。案件涉及金額超過港幣八千萬元...',
+    matchedKeywords: ['賄賂', '起訴'],
+    cls: 'TRUE_HIT',
+    confidence: 0.93,
+    reason:
+      'Exact entity match — director of ABC Holdings Ltd prosecuted for bribery. Bribery/corruption is directly ML/TF relevant as a predicate offence.',
+    riskCat: '賄賂 / Bribery',
+  },
+  {
+    rank: 3,
+    title: 'ABC Holdings Ltd 被揭涉及違反國際制裁名單交易',
+    source: '香港經濟日報',
+    date: '2025-12-15',
+    snippet:
+      '據知情人士透露，ABC Holdings Ltd 被發現與多個受國際制裁的實體進行商業交易，涉嫌違反聯合國及美國財政部制裁規定。金管局已介入調查...',
+    matchedKeywords: ['制裁', '調查'],
+    cls: 'TRUE_HIT',
+    confidence: 0.95,
+    reason:
+      'Exact entity match. Company found conducting transactions with sanctioned entities — a direct sanctions violation. HKMA involvement confirms regulatory severity.',
+    riskCat: '制裁違規 / Sanctions',
+  },
+  {
+    rank: 4,
+    title: '澳洲 ABC Holdings 公司獲頒年度最佳創新企業獎',
+    source: '澳洲新報',
+    date: '2026-01-08',
+    snippet:
+      '總部位於墨爾本的澳洲科技公司 ABC Holdings Pty Ltd 在年度商業頒獎典禮上獲頒最佳創新企業獎，表彰其在可再生能源領域的突破性貢獻...',
+    matchedKeywords: [],
+    cls: 'FALSE_HIT',
+    confidence: 0.9,
+    reason:
+      'Different entity — Australian company "ABC Holdings Pty Ltd" based in Melbourne. Different jurisdiction (Australia), different industry (tech/renewable energy), different entity type.',
+    riskCat: 'N/A',
+  },
+  {
+    rank: 5,
+    title: '台灣 ABC 控股有限公司宣布重大人事調動',
+    source: '經濟日報(台灣)',
+    date: '2026-02-20',
+    snippet:
+      '台灣 ABC 控股有限公司今日宣布，原營運長將升任執行長一職，前任執行長因個人原因離職。公司表示此次人事調動不影響營運方向...',
+    matchedKeywords: [],
+    cls: 'FALSE_HIT',
+    confidence: 0.88,
+    reason:
+      'Different entity — Taiwanese company "ABC 控股有限公司". Different jurisdiction (Taiwan), different personnel, no adverse information.',
+    riskCat: 'N/A',
+  },
+  {
+    rank: 6,
+    title: '日本 ABC Holdings 株式會社發布年度財務業績報告',
+    source: '日經中文網',
+    date: '2026-03-01',
+    snippet:
+      '於東京證券交易所上市的 ABC Holdings 株式會社公布年度業績，營收較去年同期增長百分之十二，主要受惠於半導體業務的強勁增長...',
+    matchedKeywords: [],
+    cls: 'FALSE_HIT',
+    confidence: 0.87,
+    reason:
+      'Different entity — Japanese listed company "ABC Holdings 株式會社" on TSE. Different jurisdiction (Japan), different industry (semiconductors).',
+    riskCat: 'N/A',
+  },
+  {
+    rank: 7,
+    title: 'ABC Holdings Ltd 因商業合約糾紛遭前合作夥伴提起訴訟',
+    source: '信報',
+    date: '2026-01-30',
+    snippet:
+      'ABC Holdings Ltd 被前合作夥伴入稟高等法院，指控其違反一項價值一億二千萬港元的商業供應合約。原告指被告未能按時交付貨物且品質不達標...',
+    matchedKeywords: ['訴訟'],
+    cls: 'IRRELEVANT_MLTF',
+    confidence: 0.86,
+    reason:
+      'Entity name matches (correct subject). However, this is a civil commercial contract dispute about delivery and quality — entirely unrelated to ML/TF or sanctions.',
+    riskCat: 'N/A — 商業糾紛',
+  },
+  {
+    rank: 8,
+    title: 'ABC Holdings Ltd 涉環境違規被環保署罰款五十萬',
+    source: '文匯報',
+    date: '2025-11-25',
+    snippet:
+      '環境保護署對 ABC Holdings Ltd 位於屯門的建築工地發出罰款通知，指其違反環境保護條例，涉及非法傾倒建築廢料及噪音超標...',
+    matchedKeywords: ['非法', '處罰'],
+    cls: 'IRRELEVANT_MLTF',
+    confidence: 0.85,
+    reason:
+      'Entity name matches. Keywords "非法" and "處罰" triggered the hit. But the violation is environmental (waste disposal, noise) — not related to ML/TF or sanctions.',
+    riskCat: 'N/A — 環境違規',
+  },
+  {
+    rank: 9,
+    title: 'ABC Holdings Ltd 被指控拖欠員工薪金遭勞工處調查',
+    source: '東方日報',
+    date: '2026-02-05',
+    snippet:
+      '勞工處證實已接獲多宗針對 ABC Holdings Ltd 的投訴，指該公司拖欠約三十名員工共計逾二百萬港元薪金。勞工處已展開調查並約見公司管理層...',
+    matchedKeywords: ['指控', '調查'],
+    cls: 'IRRELEVANT_MLTF',
+    confidence: 0.84,
+    reason:
+      'Entity name matches. Keywords "指控" and "調查" triggered the hit. But this concerns wage disputes / labour law — unrelated to ML/TF or sanctions.',
+    riskCat: 'N/A — 勞資糾紛',
+  },
+  {
+    rank: 10,
+    title: '金管局發布2026年最新反洗錢監管指引',
+    source: '香港01',
+    date: '2026-03-10',
+    snippet:
+      '香港金融管理局今日發布最新反洗錢及反恐融資監管指引，要求所有持牌金融機構於2026年第三季前完成系統升級，以符合加強版客戶盡職審查要求...',
+    matchedKeywords: ['反洗錢'],
+    cls: 'NO_HIT',
+    confidence: 0.92,
+    reason:
+      'General regulatory news about HKMA AML guidelines. No mention of ABC Holdings Ltd. The keyword "反洗錢" triggered the result but it has zero connection to the search subject.',
+    riskCat: 'N/A',
+  },
+];
+
+// ===== Code Snippets =====
+const CODE_GOOGLE = `// ===== Google Custom Search API =====
+// ⚠️ 所有關鍵字以 OR 連接，單次搜尋，禁止分批
+
+const { google } = require('googleapis');
+const customsearch = google.customsearch('v1');
+
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
+const SEARCH_ENGINE_ID = process.env.SEARCH_ENGINE_ID;
+
+const EN_KEYWORDS = [
+  "market abuse","regulatory breach","tax evasion",
+  "allegation","bribery","corruption","criminal",
+  "fraud","illegal","indict","investigation",
+  "laundering","lawsuit","penalty","prosecution",
+  "sanctions","terrorist","trafficking","ML","AML"
+];
+
+const ZH_KEYWORDS = [
+  "市場濫用","監管違規","逃稅","指控","賄賂",
+  "腐敗","刑事","欺詐","非法","起訴","調查",
+  "洗錢","訴訟","處罰","檢舉","制裁",
+  "恐怖分子","販運","洗錢","反洗錢"
+];
+
+async function searchAdverseMedia(entityName, language = 'en') {
+  const keywords = language === 'en' ? EN_KEYWORDS : ZH_KEYWORDS;
+
+  // ✅ 所有關鍵字用 OR 連接成單一極長字串
+  // ❌ 禁止將關鍵字分為多組進行批次搜尋
+  const keywordString = keywords.map(k => \\\`"\\\${k}"\\\`).join(' OR ');
+  const query = \\\`"\\\${entityName}" \\\${keywordString}\\\`;
+
+  // 單次 API 呼叫，返回前 10 筆結果
+  const res = await customsearch.cse.list({
+    auth: GOOGLE_API_KEY,
+    cx: SEARCH_ENGINE_ID,
+    q: query,
+    num: 10,     // 最多取回 10 筆
+    lr: language === 'zh'
+      ? 'lang_zh-TW|lang_zh-CN'
+      : 'lang_en',
+    dateRestrict: 'y2',   // 最近 2 年
+    sort: 'date',
+  });
+
+  // 依照 Google 排序，順序編號 #1 至 #10
+  return (res.data.items || []).map((item, idx) => ({
+    rank: idx + 1,
+    title: item.title,
+    snippet: item.snippet,
+    url: item.link,
+    source: item.displayLink,
+  }));
+}`;
+
+const CODE_AI = `// ===== AI Classification — 4 類判斷 =====
+// ⚠️ API endpoint 待客戶提供後替換
+
+async function classifyResult(article, entityProfile) {
+  const systemPrompt = \\\`You are an expert AML/KYC compliance analyst.
+Classify news search results using EXACTLY one of these 4 categories:
+
+1. NO_HIT
+   No search/keywords found, or the search returned no result.
+
+2. FALSE_HIT
+   Full name / gender / DOB / Age not match.
+   (The article refers to a DIFFERENT person or entity.)
+
+3. TRUE_HIT
+   The hit is confirmed to be the subject AND is associated
+   with negative news related to ML/TF or sanctions.
+
+4. IRRELEVANT_MLTF
+   For all other hits where there is no negative news related
+   to ML/TF or sanctions. There is no need to determine
+   whether the hit is the subject.
+
+ENTITY PROFILE:
+- Name: \\\${entityProfile.name}
+- Entity Type: \\\${entityProfile.type}
+- Jurisdiction: \\\${entityProfile.jurisdiction}
+- Industry: \\\${entityProfile.industry}
+- DOB/Incorp Date: \\\${entityProfile.dateOfBirth || 'N/A'}
+- Gender: \\\${entityProfile.gender || 'N/A'}
+- Related Persons: \\\${entityProfile.relatedPersons?.join(', ')}
+
+IMPORTANT:
+- For TRUE_HIT: entity MUST match AND news MUST relate to ML/TF/sanctions
+- For FALSE_HIT: entity details (name/DOB/gender/age) do NOT match
+- For IRRELEVANT_MLTF: whether or not entity matches, the news is NOT
+  about ML/TF or sanctions — no further determination needed
+- For NO_HIT: no meaningful result or no keywords found\\\`;
+
+  const userPrompt = \\\`Classify this search result:
+
+TITLE: \\\${article.title}
+SOURCE: \\\${article.source}
+DATE: \\\${article.date}
+SNIPPET: \\\${article.snippet}
+URL: \\\${article.url}
+
+Respond in JSON:
+{
+  "classification": "TRUE_HIT|FALSE_HIT|IRRELEVANT_MLTF|NO_HIT",
+  "confidence": 0.0 to 1.0,
+  "reason": "2-3 sentence explanation",
+  "riskCategory": "category if TRUE_HIT, else N/A",
+  "matchedKeywords": ["keywords found in article"],
+  "actionRequired": "ESCALATE|REVIEW|DISMISS|NONE"
+}\\\`;
+
+  // TODO: 替換為客戶提供的 AI API
+  const response = await fetch(AI_API_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': \\\`Bearer \\\${AI_API_KEY}\\\`,
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+    }),
+  });
+
+  return await response.json();
+}`;
+
+const CODE_API = `// ===== 完整 API Endpoint =====
+const express = require('express');
+const router = express.Router();
+
+// POST /api/screening/adverse-media
+router.post('/adverse-media', async (req, res) => {
+  const { clientId, entityName, entityProfile, language } = req.body;
+  // language: 'en' | 'zh' | 'both'
+
+  try {
+    const allResults = [];
+
+    // Step 1: Google Search (單次查詢，不分批)
+    if (language === 'en' || language === 'both') {
+      const enResults = await searchAdverseMedia(entityName, 'en');
+      allResults.push(...enResults.map(r => ({ ...r, language: 'en' })));
+    }
+    if (language === 'zh' || language === 'both') {
+      const zhResults = await searchAdverseMedia(entityName, 'zh');
+      allResults.push(...zhResults.map(r => ({ ...r, language: 'zh' })));
+    }
+
+    // Step 2: AI Classification (4 類判斷)
+    const classified = [];
+    for (const article of allResults) {
+      const aiResult = await classifyResult(article, entityProfile);
+      classified.push({ ...article, ...aiResult });
+      await new Promise(r => setTimeout(r, 300)); // rate limit
+    }
+
+    // Step 3: Summary
+    const summary = {
+      entityName,
+      screeningDate: new Date().toISOString(),
+      language,
+      totalResults: classified.length,
+      trueHits:  classified.filter(r => r.classification === 'TRUE_HIT').length,
+      falseHits: classified.filter(r => r.classification === 'FALSE_HIT').length,
+      irrelevant: classified.filter(r => r.classification === 'IRRELEVANT_MLTF').length,
+      noHits:    classified.filter(r => r.classification === 'NO_HIT').length,
+      overallRisk: classified.some(r => r.classification === 'TRUE_HIT')
+        ? 'HIGH' : 'LOW',
+      results: classified,
+    };
+
+    // Step 4: Save to DB
+    await pool.query(
+      \\\`INSERT INTO screening_logs
+       (client_id, screening_type, screening_date,
+        results_summary, full_results, screened_by)
+       VALUES ($1, 'adverse_media', NOW(), $2, $3, $4)\\\`,
+      [clientId, JSON.stringify(summary),
+       JSON.stringify(classified), req.user.id]
+    );
+
+    res.json(summary);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});`;
+
+// ===== Main Component =====
+export default function AdverseMediaScreening() {
+  const [activeTab, setActiveTab] = useState('demo');
+  const [searchEntity, setSearchEntity] = useState('ABC Holdings Ltd');
+  const [searchLang, setSearchLang] = useState('en');
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchComplete, setSearchComplete] = useState(false);
+  const [enResults, setEnResults] = useState([]);
+  const [zhResults, setZhResults] = useState([]);
+  const [expandedId, setExpandedId] = useState(null);
+  const [filterType, setFilterType] = useState('ALL');
+  const [showCode, setShowCode] = useState(null);
+  const [progress, setProgress] = useState(0);
+  const [stage, setStage] = useState('');
+  const [showQuery, setShowQuery] = useState(false);
+
+  const runSearch = () => {
+    setIsSearching(true);
+    setSearchComplete(false);
+    setEnResults([]);
+    setZhResults([]);
+    setProgress(0);
+    setFilterType('ALL');
+    setExpandedId(null);
+
+    const stages =
+      searchLang === 'both'
+        ? [
+            { p: 10, s: '📡 建構搜尋查詢...', d: 500 },
+            {
+              p: 25,
+              s: '🔍 正在搜尋 Google (English) — 單次查詢，前10筆...',
+              d: 1200,
+            },
+            {
+              p: 45,
+              s: '🔍 正在搜尋 Google (中文) — 單次查詢，前10筆...',
+              d: 1200,
+            },
+            {
+              p: 65,
+              s: '🤖 AI 正在逐條分析 English 結果 (1-10)...',
+              d: 1500,
+            },
+            {
+              p: 82,
+              s: '🤖 AI 正在逐條分析中文結果 (1-10)...',
+              d: 1500,
+            },
+            { p: 95, s: '📊 正在生成篩查報告...', d: 600 },
+            { p: 100, s: '✅ 篩查完成', d: 300 },
+          ]
+        : [
+            { p: 15, s: '📡 建構搜尋查詢...', d: 500 },
+            {
+              p: 40,
+              s: `🔍 正在搜尋 Google (${searchLang === 'en' ? 'English' : '中文'}) — 單次查詢，前10筆...`,
+              d: 1500,
+            },
+            {
+              p: 70,
+              s: '🤖 AI 正在逐條分析結果 (1-10)...',
+              d: 2000,
+            },
+            { p: 95, s: '📊 正在生成篩查報告...', d: 600 },
+            { p: 100, s: '✅ 篩查完成', d: 300 },
+          ];
+
+    let total = 0;
+    stages.forEach(({ p, s, d }) => {
+      total += d;
+      setTimeout(() => {
+        setProgress(p);
+        setStage(s);
+      }, total);
+    });
+    setTimeout(() => {
+      setIsSearching(false);
+      setSearchComplete(true);
+      if (searchLang === 'en' || searchLang === 'both') setEnResults(MOCK_EN);
+      if (searchLang === 'zh' || searchLang === 'both') setZhResults(MOCK_ZH);
+    }, total + 200);
+  };
+
+  const allResults = [
+    ...(searchLang === 'en' || searchLang === 'both' ? enResults : []),
+    ...(searchLang === 'zh' || searchLang === 'both' ? zhResults : []),
+  ];
+  const counts = { TRUE_HIT: 0, FALSE_HIT: 0, IRRELEVANT_MLTF: 0, NO_HIT: 0 };
+  allResults.forEach((r) => {
+    counts[r.cls]++;
+  });
+
+  const filterResults = (list) =>
+    filterType === 'ALL' ? list : list.filter((r) => r.cls === filterType);
+
+  const ResultCard = ({ r, lang }) => {
+    const c = CLS_CONFIG[r.cls];
+    const Icon = c.icon;
+    const isOpen = expandedId === `${lang}-${r.rank}`;
+    return (
+      <div
+        className={`border-2 ${c.border} rounded-xl overflow-hidden bg-white transition-all`}
+      >
+        <div
+          className="p-3 cursor-pointer hover:bg-gray-50 flex items-start gap-3"
+          onClick={() => setExpandedId(isOpen ? null : `${lang}-${r.rank}`)}
+        >
+          <div className="flex flex-col items-center gap-1 pt-0.5">
+            <span className="text-xs font-bold text-gray-400 w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center">
+              #{r.rank}
+            </span>
+            <Icon className={`w-4 h-4 ${c.text}`} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap mb-1">
+              <span
+                className={`px-2 py-0.5 rounded-full text-xs font-bold border ${c.badge}`}
+              >
+                {c.label}
+              </span>
+              <span className="text-xs text-gray-400">
+                {Math.round(r.confidence * 100)}% confidence
+              </span>
+              <span className="text-xs text-gray-400">·</span>
+              <span className="text-xs text-gray-500">{r.source}</span>
+              <span className="text-xs text-gray-400">{r.date}</span>
+            </div>
+            <h3 className="text-sm font-bold text-gray-800 leading-snug">
+              {r.title}
+            </h3>
+            <p className="text-xs text-gray-500 mt-1 leading-relaxed line-clamp-2">
+              {r.snippet}
+            </p>
+            {r.matchedKeywords.length > 0 && (
+              <div className="flex gap-1 mt-1.5 flex-wrap">
+                {r.matchedKeywords.map((kw, i) => (
+                  <span
+                    key={i}
+                    className="bg-red-50 text-red-600 border border-red-200 px-1.5 py-0.5 rounded text-xs font-mono"
+                  >
+                    {kw}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="text-gray-300 pt-1">
+            {isOpen ? (
+              <ChevronDown className="w-4 h-4" />
+            ) : (
+              <ChevronRight className="w-4 h-4" />
+            )}
+          </div>
+        </div>
+        {isOpen && (
+          <div className="px-3 pb-3">
+            <div className={`${c.bg} rounded-lg p-3`}>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <Brain className={`w-3.5 h-3.5 ${c.text}`} />
+                <span className={`text-xs font-bold ${c.text}`}>
+                  🤖 AI Analysis
+                </span>
+              </div>
+              <p className="text-xs text-gray-700 leading-relaxed">{r.reason}</p>
+              <div className="flex gap-3 mt-2 text-xs text-gray-500">
+                <span>
+                  Risk: <b className={c.text}>{r.riskCat}</b>
+                </span>
+                <span>
+                  Confidence: <b>{Math.round(r.confidence * 100)}%</b>
+                </span>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-2">
+              <button className="bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-blue-100 flex items-center gap-1">
+                <ExternalLink className="w-3 h-3" />
+                查看原文
+              </button>
+              {r.cls === 'TRUE_HIT' && (
+                <button className="bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-red-100">
+                  ⚠️ 升級報告
+                </button>
+              )}
+              <button className="bg-gray-50 text-gray-600 border border-gray-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-gray-100">
+                ✏️ 人工覆核
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const ResultSection = ({ title, lang, results, query }) => {
+    const filtered = filterResults(results);
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-bold text-gray-700">
+            {title} ({filtered.length}/{results.length} 筆)
+          </h3>
+        </div>
+        <div className="bg-gray-900 rounded-lg p-3 overflow-x-auto">
+          <div className="text-xs text-gray-400 mb-1 font-bold">
+            Google Search Query:
+          </div>
+          <code className="text-xs text-green-400 font-mono break-all leading-relaxed">
+            {query}
+          </code>
+        </div>
+        <div className="space-y-2">
+          {filtered.length === 0 ? (
+            <div className="text-center py-8 text-sm text-gray-400">
+              此分類下無結果
+            </div>
+          ) : (
+            filtered.map((r) => (
+              <ResultCard key={`${lang}-${r.rank}`} r={r} lang={lang} />
+            ))
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const tabs = [
+    { id: 'demo', label: '🔍 功能 Demo' },
+    { id: 'arch', label: '🏗️ 架構 / 分類標準' },
+    { id: 'code', label: '💻 程式碼' },
+    { id: 'keywords', label: '📋 關鍵字' },
+  ];
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-slate-800 text-white px-4 py-3">
+        <h1 className="text-base font-bold flex items-center gap-2">
+          <Shield className="w-5 h-5" />
+          Adverse Media Screening — 負面新聞篩查
+        </h1>
+        <p className="text-xs text-slate-400 mt-0.5">
+          Google Search（單次查詢）+ AI 四類判斷（True Hit / False Hit /
+          Irrelevant to ML·TF / No Hit）
+        </p>
+      </div>
+
+      {/* Tab Bar */}
+      <div className="bg-white border-b sticky top-0 z-10">
+        <div className="max-w-6xl mx-auto flex overflow-x-auto">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition ${
+                activeTab === t.id
+                  ? 'border-blue-500 text-blue-700 bg-blue-50'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="max-w-6xl mx-auto p-4">
+        {/* ===== DEMO TAB ===== */}
+        {activeTab === 'demo' && (
+          <div className="space-y-4">
+            {/* Search Configuration */}
+            <div className="bg-white rounded-xl border shadow-sm p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Search className="w-4 h-4 text-blue-600" />
+                <h2 className="text-sm font-bold text-gray-800">
+                  Search Configuration
+                </h2>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div className="flex-1">
+                  <label className="text-xs text-gray-500 mb-1 block">
+                    Entity Name 搜尋對象
+                  </label>
+                  <input
+                    type="text"
+                    value={searchEntity}
+                    onChange={(e) => setSearchEntity(e.target.value)}
+                    className="w-full border-2 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    placeholder="公司或人名..."
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">
+                    Language 搜尋語言
+                  </label>
+                  <div className="flex gap-1">
+                    {[
+                      { v: 'en', l: '🇬🇧 English' },
+                      { v: 'zh', l: '🇨🇳 中文' },
+                      { v: 'both', l: '🌐 Both' },
+                    ].map((o) => (
+                      <button
+                        key={o.v}
+                        onClick={() => setSearchLang(o.v)}
+                        className={`px-3 py-2 rounded-lg text-xs font-bold border-2 transition ${
+                          searchLang === o.v
+                            ? 'bg-blue-600 text-white border-blue-600'
+                            : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300'
+                        }`}
+                      >
+                        {o.l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-end">
+                  <button
+                    onClick={runSearch}
+                    disabled={isSearching || !searchEntity}
+                    className="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
+                  >
+                    {isSearching ? (
+                      <>
+                        <Loader className="w-4 h-4 animate-spin" />
+                        篩查中...
+                      </>
+                    ) : (
+                      <>
+                        <Globe className="w-4 h-4" />
+                        開始篩查
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Query Preview */}
+              <div className="mt-3">
+                <button
+                  onClick={() => setShowQuery(!showQuery)}
+                  className="text-xs text-blue-600 font-bold flex items-center gap-1 hover:underline"
+                >
+                  {showQuery ? (
+                    <ChevronDown className="w-3 h-3" />
+                  ) : (
+                    <ChevronRight className="w-3 h-3" />
+                  )}{' '}
+                  預覽完整查詢字串
+                </button>
+                {showQuery && (
+                  <div className="mt-2 space-y-2">
+                    {(searchLang === 'en' || searchLang === 'both') && (
+                      <div className="bg-gray-900 rounded-lg p-3 overflow-x-auto">
+                        <div className="text-xs text-gray-400 mb-1">
+                          🇬🇧 English Query (single request, top 10):
+                        </div>
+                        <code className="text-xs text-green-400 font-mono break-all">
+                          {buildQuery(searchEntity, 'en')}
+                        </code>
+                      </div>
+                    )}
+                    {(searchLang === 'zh' || searchLang === 'both') && (
+                      <div className="bg-gray-900 rounded-lg p-3 overflow-x-auto">
+                        <div className="text-xs text-gray-400 mb-1">
+                          🇨🇳 中文 Query (single request, top 10):
+                        </div>
+                        <code className="text-xs text-green-400 font-mono break-all">
+                          {buildQuery(searchEntity, 'zh')}
+                        </code>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Progress Bar */}
+              {isSearching && (
+                <div className="mt-3 bg-blue-50 rounded-lg p-3">
+                  <div className="flex justify-between text-xs mb-1.5">
+                    <span className="text-blue-700 font-medium">{stage}</span>
+                    <span className="text-blue-500">{progress}%</span>
+                  </div>
+                  <div className="h-2 bg-blue-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-blue-500 rounded-full transition-all duration-500"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Results */}
+            {searchComplete && (
+              <>
+                {/* Summary Cards */}
+                <div className="grid grid-cols-5 gap-2">
+                  <div className="bg-white rounded-lg border p-3 text-center">
+                    <div className="text-xl font-bold text-gray-800">
+                      {allResults.length}
+                    </div>
+                    <div className="text-xs text-gray-500">Total</div>
+                  </div>
+                  {Object.entries(CLS_CONFIG).map(([key, c]) => {
+                    const Icon = c.icon;
+                    return (
+                      <div
+                        key={key}
+                        className={`${c.bg} rounded-lg border ${c.border} p-3 text-center`}
+                      >
+                        <div className={`text-xl font-bold ${c.text}`}>
+                          {counts[key]}
+                        </div>
+                        <div
+                          className={`text-xs ${c.text} flex items-center justify-center gap-1`}
+                        >
+                          <Icon className="w-3 h-3" />
+                          {c.label}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Overall Risk */}
+                <div
+                  className={`${
+                    counts.TRUE_HIT > 0 ? 'bg-red-600' : 'bg-green-600'
+                  } rounded-lg p-3 text-white flex items-center justify-between`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Shield className="w-5 h-5" />
+                    <span className="font-bold text-sm">
+                      Overall Risk Assessment:
+                    </span>
+                    <span className="text-lg font-black">
+                      {counts.TRUE_HIT > 0 ? '⚠️ HIGH RISK' : '✅ LOW RISK'}
+                    </span>
+                  </div>
+                  <span className="text-xs opacity-80">
+                    {counts.TRUE_HIT > 0
+                      ? `${counts.TRUE_HIT} confirmed hit(s) related to ML/TF/Sanctions`
+                      : 'No ML/TF/Sanctions-related hits found'}
+                  </span>
+                </div>
+
+                {/* Filter Buttons */}
+                <div className="flex gap-1.5 flex-wrap">
+                  {[
+                    { k: 'ALL', l: `全部 (${allResults.length})` },
+                    ...Object.entries(CLS_CONFIG).map(([k, c]) => ({
+                      k,
+                      l: `${c.label} (${counts[k]})`,
+                    })),
+                  ].map((f) => (
+                    <button
+                      key={f.k}
+                      onClick={() => setFilterType(f.k)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition border ${
+                        filterType === f.k
+                          ? 'bg-slate-700 text-white border-slate-700'
+                          : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+                      }`}
+                    >
+                      {f.l}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Result Lists */}
+                {(searchLang === 'en' || searchLang === 'both') &&
+                  enResults.length > 0 && (
+                    <ResultSection
+                      title="🇬🇧 English Search Results"
+                      lang="en"
+                      results={enResults}
+                      query={buildQuery(searchEntity, 'en')}
+                    />
+                  )}
+                {(searchLang === 'zh' || searchLang === 'both') &&
+                  zhResults.length > 0 && (
+                    <ResultSection
+                      title="🇨🇳 中文搜尋結果"
+                      lang="zh"
+                      results={zhResults}
+                      query={buildQuery(searchEntity, 'zh')}
+                    />
+                  )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ===== ARCHITECTURE TAB ===== */}
+        {activeTab === 'arch' && (
+          <div className="space-y-4">
+            {/* Flow */}
+            <div className="bg-white rounded-xl border shadow-sm p-5">
+              <h2 className="text-sm font-bold text-gray-800 mb-4">
+                🏗️ 系統流程
+              </h2>
+              {[
+                {
+                  n: 1,
+                  icon: '👤',
+                  t: '觸發篩查',
+                  d: '合規人員輸入 Entity Name，選擇搜尋語言（EN / ZH / Both）',
+                },
+                {
+                  n: 2,
+                  icon: '⚡',
+                  t: '建構單一查詢字串',
+                  d: '將 Entity Name + 全部關鍵字以 OR 連接成一個極長字串。禁止分批，確保單次查詢。',
+                },
+                {
+                  n: 3,
+                  icon: '🔍',
+                  t: 'Google Custom Search API',
+                  d: '單次 API 呼叫，返回排名前 1-10 的搜尋結果。如選 Both 則分別呼叫英文和中文各一次。',
+                },
+                {
+                  n: 4,
+                  icon: '🤖',
+                  t: 'AI 逐條分析（4 類判斷）',
+                  d: '將每條結果 + Entity Profile 送至 AI API，判斷為 True Hit / False Hit / Irrelevant to ML·TF / No Hit。',
+                },
+                {
+                  n: 5,
+                  icon: '💾',
+                  t: '儲存結果',
+                  d: '篩查結果（含 AI 分類、信心度、理由）存入 screening_logs 資料庫表。',
+                },
+                {
+                  n: 6,
+                  icon: '📊',
+                  t: '顯示報告 + 人工覆核',
+                  d: '依序 #1-#10 展示結果，合規人員可逐條覆核、修改分類、升級報告。',
+                },
+              ].map((s) => (
+                <div
+                  key={s.n}
+                  className="flex items-start gap-3 pb-3 mb-3 border-b last:border-0 last:mb-0 last:pb-0"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center text-sm font-bold text-blue-700 shrink-0">
+                    {s.n}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span>{s.icon}</span>
+                      <span className="font-bold text-gray-800 text-sm">
+                        {s.t}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-600 mt-0.5">{s.d}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* 4 Classification Rules */}
+            <div className="bg-white rounded-xl border shadow-sm p-5">
+              <h2 className="text-sm font-bold text-gray-800 mb-4">
+                🤖 AI 四類判斷標準
+              </h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {Object.entries(CLS_CONFIG).map(([key, c]) => {
+                  const Icon = c.icon;
+                  const rules = {
+                    NO_HIT: [
+                      '搜尋無結果，或結果中無相關關鍵字命中',
+                      '文章完全未提及搜尋對象',
+                      '無需任何後續行動',
+                    ],
+                    FALSE_HIT: [
+                      '文章提及的人物/實體與搜尋對象不同',
+                      '全名、性別、出生日期、年齡不匹配',
+                      '可能是同名不同人/公司（不同管轄區、行業等）',
+                    ],
+                    TRUE_HIT: [
+                      '✅ 確認為搜尋對象本人/本公司',
+                      '✅ 且涉及 ML（洗錢）/ TF（恐怖融資）/ 制裁相關負面新聞',
+                      '⚠️ 需要升級報告及人工覆核',
+                    ],
+                    IRRELEVANT_MLTF: [
+                      '文章可能提及該實體，但內容與 ML/TF/制裁無關',
+                      '例如：商業糾紛、環境違規、勞資問題等',
+                      '無需判斷是否為搜尋對象本人',
+                    ],
+                  };
+                  return (
+                    <div
+                      key={key}
+                      className={`${c.bg} border-2 ${c.border} rounded-xl p-4`}
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <Icon className={`w-5 h-5 ${c.text}`} />
+                        <span className={`font-bold text-sm ${c.text}`}>
+                          {c.label} ({c.labelZh})
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-600 italic mb-2">
+                        {c.desc}
+                      </p>
+                      <div className="border-t border-gray-200 pt-2">
+                        {rules[key].map((r, i) => (
+                          <div key={i} className="text-xs text-gray-700 py-0.5">
+                            {r}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-4">
+              <h2 className="text-sm font-bold text-amber-800 mb-2">
+                ⚠️ 重要提醒
+              </h2>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  {
+                    t: '🔑 單次查詢原則',
+                    d: '所有關鍵字以 OR 連接為一個查詢字串，一次 API 呼叫取回前 10 筆。不分批、不分組。',
+                  },
+                  {
+                    t: '👁️ 人工覆核',
+                    d: 'AI 判斷僅供參考。監管要求合規人員必須人工覆核每個 True Hit，不能完全依賴 AI。',
+                  },
+                  {
+                    t: '🤖 AI API 待接入',
+                    d: 'AI 分類的 API endpoint 待客戶提供後替換。目前展示為模擬結果。',
+                  },
+                  {
+                    t: '🌐 多語言',
+                    d: '建議香港客戶同時搜尋 EN + ZH。每種語言各返回 10 筆結果。',
+                  },
+                ].map((n, i) => (
+                  <div
+                    key={i}
+                    className="bg-white rounded-lg p-3 border border-amber-100"
+                  >
+                    <div className="text-xs font-bold text-amber-800">{n.t}</div>
+                    <div className="text-xs text-amber-700 mt-0.5">{n.d}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ===== CODE TAB ===== */}
+        {activeTab === 'code' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-xl border shadow-sm p-4">
+              <h2 className="text-sm font-bold text-gray-800 mb-3">
+                💻 實作程式碼
+              </h2>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { k: 'google', l: '🔍 Google Search', d: '單次查詢邏輯' },
+                  { k: 'ai', l: '🤖 AI 4類判斷', d: 'Prompt + API 呼叫' },
+                  { k: 'api', l: '⚡ Backend API', d: '完整 Endpoint' },
+                ].map((c) => (
+                  <button
+                    key={c.k}
+                    onClick={() =>
+                      setShowCode(showCode === c.k ? null : c.k)
+                    }
+                    className={`text-left p-3 rounded-lg border-2 transition ${
+                      showCode === c.k
+                        ? 'bg-slate-800 text-white border-slate-700'
+                        : 'bg-gray-50 hover:bg-gray-100 border-gray-200'
+                    }`}
+                  >
+                    <div className="text-sm font-bold">{c.l}</div>
+                    <div
+                      className={`text-xs mt-0.5 ${
+                        showCode === c.k ? 'text-gray-300' : 'text-gray-500'
+                      }`}
+                    >
+                      {c.d}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            {showCode && (
+              <div className="bg-gray-900 rounded-xl overflow-hidden">
+                <div className="flex justify-between px-4 py-2 bg-gray-800">
+                  <span className="text-xs text-gray-400 font-mono">
+                    {showCode}.js
+                  </span>
+                  <button
+                    onClick={() => setShowCode(null)}
+                    className="text-gray-400 hover:text-white text-xs"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="p-4 overflow-auto max-h-96">
+                  <pre className="text-xs text-green-400 font-mono whitespace-pre">
+                    {showCode === 'google'
+                      ? CODE_GOOGLE
+                      : showCode === 'ai'
+                        ? CODE_AI
+                        : CODE_API}
+                  </pre>
+                </div>
+              </div>
+            )}
+            <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4">
+              <h2 className="text-xs font-bold text-blue-800 mb-2">
+                📦 安裝套件 & 環境變數
+              </h2>
+              <div className="bg-gray-900 rounded-lg p-3">
+                <pre className="text-xs text-green-400 font-mono">
+                  {`npm install googleapis express pg
+
+# .env
+GOOGLE_API_KEY=your_google_api_key
+SEARCH_ENGINE_ID=your_custom_search_engine_id
+AI_API_ENDPOINT=待客戶提供
+AI_API_KEY=待客戶提供`}
+                </pre>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ===== KEYWORDS TAB ===== */}
+        {activeTab === 'keywords' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-xl border shadow-sm p-5">
+              <h2 className="text-sm font-bold text-gray-800 mb-1">
+                📋 固定關鍵字庫
+              </h2>
+              <p className="text-xs text-gray-500 mb-4">
+                所有關鍵字以 OR 連接成單一字串，進行一次性搜尋（禁止分批）
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-blue-700 mb-2">
+                    🇬🇧 English Keywords ({EN_KEYWORDS.length})
+                  </h3>
+                  <div className="flex flex-wrap gap-1.5">
+                    {EN_KEYWORDS.map((kw, i) => (
+                      <span
+                        key={i}
+                        className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-lg text-xs font-mono"
+                      >
+                        "{kw}"
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-3 bg-gray-900 rounded-lg p-3 overflow-x-auto">
+                    <code className="text-xs text-green-400 font-mono break-all">
+                      {EN_KEYWORDS.map((k) => `"${k}"`).join(' OR ')}
+                    </code>
+                  </div>
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-red-700 mb-2">
+                    🇨🇳 中文關鍵字 ({ZH_KEYWORDS.length})
+                  </h3>
+                  <div className="flex flex-wrap gap-1.5">
+                    {ZH_KEYWORDS.map((kw, i) => (
+                      <span
+                        key={i}
+                        className="bg-red-50 text-red-700 border border-red-200 px-2 py-1 rounded-lg text-xs font-mono"
+                      >
+                        "{kw}"
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-3 bg-gray-900 rounded-lg p-3 overflow-x-auto">
+                    <code className="text-xs text-green-400 font-mono break-all">
+                      {ZH_KEYWORDS.map((k) => `"${k}"`).join(' OR ')}
+                    </code>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="bg-white rounded-xl border shadow-sm p-5">
+              <h2 className="text-sm font-bold text-gray-800 mb-3">
+                🔎 完整查詢字串預覽
+              </h2>
+              <p className="text-xs text-gray-500 mb-3">
+                以 "<b>{searchEntity}</b>" 為例：
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <div className="text-xs font-bold text-blue-700 mb-1">
+                    🇬🇧 English — 單次查詢
+                  </div>
+                  <div className="bg-gray-900 rounded-lg p-3 overflow-x-auto">
+                    <code className="text-xs text-green-400 font-mono break-all">
+                      {buildQuery(searchEntity, 'en')}
+                    </code>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-red-700 mb-1">
+                    🇨🇳 中文 — 單次查詢
+                  </div>
+                  <div className="bg-gray-900 rounded-lg p-3 overflow-x-auto">
+                    <code className="text-xs text-green-400 font-mono break-all">
+                      {buildQuery(searchEntity, 'zh')}
+                    </code>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="bg-green-50 border-2 border-green-200 rounded-xl p-4">
+              <h2 className="text-sm font-bold text-green-800 mb-2">
+                💡 搜尋策略
+              </h2>
+              <div className="space-y-2">
+                {[
+                  {
+                    t: '單次查詢原則',
+                    d: '所有關鍵字必須用 OR 連接成一個字串，一次 API 呼叫。禁止分組或分批搜尋。',
+                  },
+                  {
+                    t: '精確匹配',
+                    d: 'Entity Name 用雙引號包裹（如 "ABC Holdings Ltd"），確保精確匹配而非拆字。',
+                  },
+                  {
+                    t: '取前 10 筆',
+                    d: 'Google API 參數 num=10，按照 Google 排序順序返回 #1 至 #10。',
+                  },
+                  {
+                    t: '雙語搜尋',
+                    d: 'EN 和 ZH 為兩次獨立查詢，各自返回 10 筆結果，合計最多 20 筆。',
+                  },
+                ].map((s, i) => (
+                  <div
+                    key={i}
+                    className="bg-white rounded-lg p-3 border border-green-100"
+                  >
+                    <b className="text-xs text-green-800">{s.t}：</b>
+                    <span className="text-xs text-green-700">{s.d}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
