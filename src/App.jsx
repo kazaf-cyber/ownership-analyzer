@@ -649,7 +649,7 @@ Return ONLY a JSON array (no markdown, no extra text):
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
     apiKey: apiKey.trim(),
-    model: 'anthropic/claude-3.5-haiku',
+    model: 'google/gemini-2.5-flash-lite-preview-09-2025',
     messages: [{
       role: 'user',
       content: [
@@ -912,7 +912,7 @@ Return ONLY a JSON array (no markdown, no extra text):
                   </div>
                 )}
                 <p className="text-xs text-gray-400 mt-1">
-                  使用 <b>claude-3.5-haiku</b>（經 OpenRouter 中轉，支援香港 IP）。
+                  使用 <b>gemini-2.5-flash-lite-preview-09-2025</b>（經 OpenRouter 中轉，支援香港 IP）。
                   <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline ml-1">
                     取得免費 API Key →
                   </a>
