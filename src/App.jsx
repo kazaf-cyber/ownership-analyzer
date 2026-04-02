@@ -551,45 +551,21 @@ const MOCK_ZH = [
 
 /* ========== 主組件 ========== */
 
-// ===== AMS 配額管理（組件外部定義）=====
-const AMS_QUOTA_LIMIT = 100;
-const AMS_QUOTA_KEY = 'ams_quota';
-const AMS_getQuotaInfo = () => {
-  const today = new Date().toISOString().slice(0, 10);
-  try {
-    const stored = JSON.parse(localStorage.getItem(AMS_QUOTA_KEY) || '{}');
-    if (stored.date !== today) return { used: 0, remaining: AMS_QUOTA_LIMIT, date: today };
-    return { used: stored.count || 0, remaining: AMS_QUOTA_LIMIT - (stored.count || 0), date: today };
-  } catch { return { used: 0, remaining: AMS_QUOTA_LIMIT, date: today }; }
-};
-const AMS_checkAndIncrementQuota = () => {
-  const today = new Date().toISOString().slice(0, 10);
-  try {
-    const stored = JSON.parse(localStorage.getItem(AMS_QUOTA_KEY) || '{}');
-    const count = stored.date === today ? (stored.count || 0) : 0;
-    if (count >= AMS_QUOTA_LIMIT) return false;
-    localStorage.setItem(AMS_QUOTA_KEY, JSON.stringify({ date: today, count: count + 1 }));
-    return true;
-  } catch { return true; }
-};
-// ===== END AMS 配額管理 =====
-
 function AdverseMediaScreening({ entityName: initialEntityName }) {
-  // ===== sessionStorage 持久化（頁面關閉自動清空，切換 Tab 保留）=====
   const AMS_SESSION_KEY = `ams_state_${initialEntityName || 'default'}`;
   const _loadSession = () => {
-    try {
-      const saved = sessionStorage.getItem(AMS_SESSION_KEY);
-      if (saved) return JSON.parse(saved);
-    } catch {}
+    try { const s = sessionStorage.getItem(AMS_SESSION_KEY); if (s) return JSON.parse(s); } catch {}
     return null;
   };
   const _saved = _loadSession();
 
   const [activeTab, setActiveTab] = useState('demo');
   const [searchEntity, setSearchEntity] = useState(_saved?.searchEntity || initialEntityName || 'ABC Holdings Ltd');
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchComplete, setSearchComplete] = useState(_saved?.searchComplete || false);
+  const [pdfFile, setPdfFile] = useState(null);
+  const [geminiKey, setGeminiKey] = useState(_saved?.geminiKey || '');
+  const [showKeyInput, setShowKeyInput] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisComplete, setAnalysisComplete] = useState(_saved?.analysisComplete || false);
   const [results, setResults] = useState(_saved?.results || []);
   const [expandedId, setExpandedId] = useState(null);
   const [filterType, setFilterType] = useState(_saved?.filterType || 'ALL');
@@ -597,266 +573,178 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
   const [stage, setStage] = useState('');
   const [showQuery, setShowQuery] = useState(false);
   const [detectedLang, setDetectedLang] = useState(_saved?.detectedLang || 'en');
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const [quotaInfo, setQuotaInfo] = React.useState(AMS_getQuotaInfo);
-
-  // 每次結果變化時儲存到 sessionStorage
   React.useEffect(() => {
-    if (searchComplete && results.length > 0) {
+    if (analysisComplete && results.length > 0) {
       try {
         sessionStorage.setItem(AMS_SESSION_KEY, JSON.stringify({
-          results,
-          searchEntity,
-          searchComplete,
-          detectedLang,
-          filterType,
+          results, searchEntity, analysisComplete, detectedLang, filterType, geminiKey,
         }));
       } catch {}
     }
-  }, [results, searchComplete, detectedLang, filterType, searchEntity]);
+  }, [results, analysisComplete, detectedLang, filterType, searchEntity, geminiKey]);
 
-  // Timer ref for cleanup (prevents memory leak)
   const timerIdsRef = React.useRef([]);
   const clearAllTimers = () => { timerIdsRef.current.forEach(id => clearTimeout(id)); timerIdsRef.current = []; };
   React.useEffect(() => { return () => clearAllTimers(); }, []);
 
-  // ===== Google CSE API 設定 =====
-  const GOOGLE_API_KEY = 'AIzaSyBfgJgsv_qYDNNVR3YgmBvgQr0xuF4GtTY';
-  const GOOGLE_CX = 'c62ca9df63577497d';
+  const { query: searchQuery } = buildQueryAuto(searchEntity);
+  const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}`;
 
-  // 用關鍵字清單對文章進行本地分類
-  const classifyResult = (item, entityName, keywords, lang) => {
-    const title = (item.title || '').toLowerCase();
-    const snippet = (item.snippet || '').toLowerCase();
-    const fullText = title + ' ' + snippet;
-    const entityLower = entityName.toLowerCase();
-
-    // ML/TF 風險關鍵字（英文）
-    const mltfKeywordsEn = [
-      'money laundering','launder','fraud','sanction','terrorist','terrorism',
-      'bribery','bribe','corruption','corrupt','drug trafficking','human trafficking',
-      'investigation','indictment','arrested','convicted','charged','prosecution',
-      'aml','ctf','ofac','interpol','blacklist','banned','prohibited'
-    ];
-    // ML/TF 風險關鍵字（中文）
-    const mltfKeywordsZh = [
-      '洗錢','欺詐','制裁','恐怖','賄賂','腐敗','販毒','人口販賣',
-      '調查','起訴','逮捕','定罪','檢控','廉署','警方','黑名單'
-    ];
-    const mltfKws = lang === 'zh' ? mltfKeywordsZh : mltfKeywordsEn;
-
-    const matchedKws = mltfKws.filter(kw => fullText.includes(kw));
-    const entityMatch = fullText.includes(entityLower) ||
-      entityLower.split(' ').filter(w => w.length > 2).every(w => fullText.includes(w));
-
-    // 取得文章來源域名
-    const displayLink = item.displayLink || '';
-
-    // FALSE_HIT: 提到實體名稱但明顯是不同實體（不同地區/行業）
-    // 簡單規則：如果搜尋名含 "Ltd" 但結果是 "Pty Ltd" / "Inc" / "LLC"
-    const entityWords = entityName.toLowerCase().split(/\s+/);
-    const titleWords = title.split(/\s+/);
-    let isFalseHit = false;
-    if (entityName.toLowerCase().includes('ltd') && 
-        (title.toLowerCase().includes('pty ltd') || title.toLowerCase().includes(' inc') || title.toLowerCase().includes(' llc'))) {
-      const nameCore = entityWords.filter(w => !['ltd','limited','co','company','holdings'].includes(w));
-      const titleHasCore = nameCore.every(w => title.toLowerCase().includes(w));
-      if (!titleHasCore) isFalseHit = true;
-    }
-
-    let cls, confidence, reason, riskCat;
-
-    if (!entityMatch && matchedKws.length === 0) {
-      cls = 'NO_HIT';
-      confidence = 0.85 + Math.random() * 0.1;
-      reason = lang === 'zh' ? '文章未提及目標實體，且無相關風險關鍵字。' : 'No mention of the target entity and no risk keywords found.';
-      riskCat = 'N/A';
-    } else if (isFalseHit) {
-      cls = 'FALSE_HIT';
-      confidence = 0.80 + Math.random() * 0.1;
-      reason = lang === 'zh' ? '實體名稱相似但為不同實體（不同地區/法律形式）。' : 'Similar name but different entity (different jurisdiction or legal form).';
-      riskCat = 'N/A';
-    } else if (entityMatch && matchedKws.length > 0) {
-      cls = 'TRUE_HIT';
-      confidence = Math.min(0.99, 0.85 + matchedKws.length * 0.03 + Math.random() * 0.05);
-      const cats = [];
-      if (['money laundering','launder','洗錢'].some(k => matchedKws.includes(k))) cats.push(lang === 'zh' ? '洗錢' : 'Money Laundering');
-      if (['fraud','欺詐','fraud'].some(k => matchedKws.includes(k))) cats.push(lang === 'zh' ? '欺詐' : 'Fraud');
-      if (['sanction','制裁'].some(k => matchedKws.includes(k))) cats.push(lang === 'zh' ? '制裁' : 'Sanctions');
-      if (['terrorist','terrorism','恐怖'].some(k => matchedKws.includes(k))) cats.push(lang === 'zh' ? '恐怖融資' : 'Terrorist Financing');
-      if (['bribery','bribe','corruption','賄賂','腐敗'].some(k => matchedKws.includes(k))) cats.push(lang === 'zh' ? '賄賂/腐敗' : 'Bribery/Corruption');
-      riskCat = cats.length > 0 ? cats.join(' / ') : (lang === 'zh' ? '不良新聞' : 'Adverse News');
-      reason = lang === 'zh'
-        ? `實體名稱完全吻合，並發現 ML/TF 相關關鍵字：${matchedKws.slice(0,3).join('、')}。`
-        : `Entity name matched. ML/TF-related keywords found: ${matchedKws.slice(0,3).join(', ')}.`;
-    } else if (entityMatch && matchedKws.length === 0) {
-      cls = 'IRRELEVANT_MLTF';
-      confidence = 0.80 + Math.random() * 0.1;
-      reason = lang === 'zh' ? '實體名稱吻合，但內容與 ML/TF 無關（商業/一般新聞）。' : 'Entity name matched but content is not related to ML/TF (commercial/general news).';
-      riskCat = 'N/A';
-    } else {
-      cls = 'NO_HIT';
-      confidence = 0.75 + Math.random() * 0.1;
-      reason = lang === 'zh' ? '無法確認為目標實體。' : 'Cannot confirm as the target entity.';
-      riskCat = 'N/A';
-    }
-
-    return {
-      rank: 0,
-      title: item.title || '',
-      source: displayLink,
-      date: item.pagemap?.metatags?.[0]?.['article:published_time']?.slice(0,10) ||
-            item.pagemap?.metatags?.[0]?.['og:updated_time']?.slice(0,10) || '',
-      snippet: item.snippet || '',
-      link: item.link || '',
-      matchedKeywords: matchedKws.slice(0, 5),
-      cls,
-      confidence: Math.round(confidence * 100) / 100,
-      reason,
-      riskCat,
-    };
+  const handlePdfUpload = (e) => {
+    const file = e.target.files[0];
+    if (file && file.type === 'application/pdf') { setPdfFile(file); setErrorMsg(''); }
+    else if (file) setErrorMsg('請上傳 PDF 格式文件（.pdf）');
   };
 
-  // 執行搜尋（真實 Google CSE API）
-  const runSearch = async () => {
-    // 配額檢查
-    const qi = AMS_getQuotaInfo();
-    if (qi.remaining <= 0) {
-      alert('今日搜尋次數已達 100 次上限，將於明天 00:00 自動重置。');
-      return;
-    }
-    AMS_checkAndIncrementQuota();
-    setQuotaInfo(AMS_getQuotaInfo());
-    clearAllTimers();
-    setIsSearching(true);
-    setSearchComplete(false);
-    setResults([]);
-    setProgress(0);
-    setFilterType('ALL');
-    setExpandedId(null);
+  const runGeminiAnalysis = async () => {
+    if (!pdfFile) { setErrorMsg('請先上傳搜尋結果 PDF 文件'); return; }
+    if (!geminiKey.trim()) { setErrorMsg('請輸入 Gemini API Key'); return; }
 
-    const { query, detectedLang: lang, keywords } = buildQueryAuto(searchEntity);
+    clearAllTimers();
+    setIsAnalyzing(true); setAnalysisComplete(false); setResults([]);
+    setProgress(0); setErrorMsg(''); setFilterType('ALL'); setExpandedId(null);
+
+    const lang = detectLanguage(searchEntity);
     setDetectedLang(lang);
 
     try {
-      setProgress(20);
-      setStage('正在呼叫 Google Search API...');
+      setProgress(20); setStage('正在讀取 PDF 文件...');
 
-      const url = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${GOOGLE_CX}&q=${encodeURIComponent(query)}&num=10`;
-      const res = await fetch(url);
+      const base64Data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => resolve(ev.target.result.split(',')[1]);
+        reader.onerror = () => reject(new Error('無法讀取 PDF 文件'));
+        reader.readAsDataURL(pdfFile);
+      });
 
-      setProgress(60);
-      setStage('正在分析搜尋結果...');
+      setProgress(40); setStage('正在傳送至 Gemini AI 分析...');
+
+      const prompt = lang === 'zh'
+        ? `你是一位專業的 AML/KYC 合規分析師。請仔細分析此 Google 搜尋結果頁面 PDF，對搜索實體「${searchEntity}」進行不良媒體篩查。
+
+對頁面上每條搜尋結果，按以下標準分類：
+- TRUE_HIT：實體名稱匹配，且內容包含 ML/TF 相關關鍵詞（洗錢、詐騙、制裁、恐怖主義、賄賂、腐敗、人口販賣、調查、起訴、逃稅等）
+- FALSE_HIT：名稱相似但明顯為不同實體（不同司法管轄區 / 法律形式 / 行業）
+- IRRELEVANT_MLTF：實體名稱匹配但內容為商業糾紛或一般新聞，與 ML/TF 無關
+- NO_HIT：未提及實體或無相關關鍵詞
+
+必須只返回 JSON 數組（不得有任何 markdown 格式或前後文字），結構如下：
+[{"rank":1,"title":"文章標題","source":"來源域名","date":"YYYY-MM-DD或空字串","snippet":"簡短摘要","matchedKeywords":["關鍵詞1"],"cls":"TRUE_HIT","confidence":0.92,"reason":"分類原因","riskCat":"洗錢或N/A"}]`
+        : `You are a professional AML/KYC compliance analyst. Analyze this Google search results PDF for adverse media screening of: "${searchEntity}".
+
+Classify each result as ONE of:
+- TRUE_HIT: Entity name matches AND contains ML/TF keywords (money laundering, fraud, sanctions, terrorism, bribery, corruption, trafficking, investigation, indictment, AML, CTF, OFAC, etc.)
+- FALSE_HIT: Similar name but clearly a different entity
+- IRRELEVANT_MLTF: Entity matches but content is NOT ML/TF related
+- NO_HIT: Entity not mentioned or no risk keywords
+
+Return ONLY a JSON array (no markdown):
+[{"rank":1,"title":"Title","source":"domain","date":"YYYY-MM-DD","snippet":"Summary","matchedKeywords":["kw"],"cls":"TRUE_HIT","confidence":0.92,"reason":"Reason","riskCat":"Money Laundering or N/A"}]`;
+
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey.trim()}`;
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [
+            { inline_data: { mime_type: 'application/pdf', data: base64Data } },
+            { text: prompt }
+          ]}],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
+        })
+      });
+
+      setProgress(80); setStage('正在解析 AI 回應...');
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        const msg = errData?.error?.message || `HTTP ${res.status}`;
-        throw new Error(msg);
+        throw new Error(errData?.error?.message || `HTTP ${res.status}`);
       }
 
       const data = await res.json();
-      const items = data.items || [];
+      const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
 
-      setProgress(85);
-      setStage('正在分類與評估風險...');
+      let parsed;
+      try {
+        const cleaned = rawText.replace(/^```jsons*/i,'').replace(/^```s*/i,'').replace(/s*```$/i,'').trim();
+        parsed = JSON.parse(cleaned);
+      } catch { throw new Error('Gemini 回應格式錯誤，請重試'); }
 
-      const classified = items.map((item, i) => {
-        const r = classifyResult(item, searchEntity, keywords, lang);
-        r.rank = i + 1;
-        return r;
-      });
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        parsed = [{ rank:1, title: lang==='zh'?'無分析結果':'No results', source:'', date:'',
+          snippet: lang==='zh'?'AI 未返回有效結果。':'AI returned no valid results.',
+          matchedKeywords:[], cls:'NO_HIT', confidence:1.0,
+          reason: lang==='zh'?'Gemini 返回空結果。':'Empty response.', riskCat:'N/A' }];
+      }
 
-      // 如果沒有結果，顯示一條 NO_HIT
-      const finalResults = classified.length > 0 ? classified : [{
-        rank: 1,
-        title: lang === 'zh' ? `未找到「${searchEntity}」的相關新聞` : `No news found for "${searchEntity}"`,
-        source: '',
-        date: '',
-        snippet: lang === 'zh' ? 'Google 搜尋未返回任何結果。' : 'Google search returned no results.',
-        link: '',
-        matchedKeywords: [],
-        cls: 'NO_HIT',
-        confidence: 1.0,
-        reason: lang === 'zh' ? '搜尋無結果。' : 'No search results returned.',
-        riskCat: 'N/A',
-      }];
+      const VALID_CLS = ['TRUE_HIT','FALSE_HIT','IRRELEVANT_MLTF','NO_HIT'];
+      parsed = parsed.map((r,i) => ({
+        ...r, rank: i+1,
+        cls: VALID_CLS.includes(r.cls) ? r.cls : 'NO_HIT',
+        confidence: typeof r.confidence==='number' ? Math.round(Math.min(1,Math.max(0,r.confidence))*100)/100 : 0.8,
+        matchedKeywords: Array.isArray(r.matchedKeywords) ? r.matchedKeywords.slice(0,5) : [],
+        title: r.title||'', source: r.source||'', date: r.date||'',
+        snippet: r.snippet||'', reason: r.reason||'', riskCat: r.riskCat||'N/A',
+      }));
 
       setProgress(100);
-      setStage('完成');
-
       timerIdsRef.current.push(setTimeout(() => {
-        setIsSearching(false);
-        setSearchComplete(true);
-        setResults(finalResults);
+        setIsAnalyzing(false); setAnalysisComplete(true); setResults(parsed);
       }, 300));
 
     } catch (err) {
-      setIsSearching(false);
-      setSearchComplete(false);
-      setProgress(0);
-      setStage('');
-      alert(`搜尋失敗：${err.message}\n\n請確認 API Key 及 Search Engine ID 是否正確，或稍後再試。`);
+      setIsAnalyzing(false); setProgress(0); setStage('');
+      setErrorMsg(`分析失敗：${err.message}`);
     }
   };
 
   const counts = useMemo(() => {
-    const c = { TRUE_HIT: 0, FALSE_HIT: 0, IRRELEVANT_MLTF: 0, NO_HIT: 0 };
-    results.forEach(r => c[r.cls]++);
+    const c = { TRUE_HIT:0, FALSE_HIT:0, IRRELEVANT_MLTF:0, NO_HIT:0 };
+    results.forEach(r => { if (c[r.cls]!==undefined) c[r.cls]++; });
     return c;
   }, [results]);
 
-  const filteredResults = useMemo(() => {
-    return filterType === 'ALL' ? results : results.filter(r => r.cls === filterType);
-  }, [results, filterType]);
+  const filteredResults = useMemo(() =>
+    filterType==='ALL' ? results : results.filter(r => r.cls===filterType),
+  [results, filterType]);
 
   const ResultCard = ({ r }) => {
-    const c = CLS_CONFIG[r.cls];
+    const c = CLS_CONFIG[r.cls] || CLS_CONFIG['NO_HIT'];
     const Icon = c.icon;
     const isOpen = expandedId === r.rank;
-
     return (
       <div className={`border-2 ${c.border} rounded-xl overflow-hidden bg-white`}>
-        <div
-          className="p-3 cursor-pointer hover:bg-gray-50 flex items-start gap-3"
-          onClick={() => setExpandedId(isOpen ? null : r.rank)}
-        >
+        <div className="p-3 cursor-pointer hover:bg-gray-50 flex items-start gap-3"
+          onClick={() => setExpandedId(isOpen ? null : r.rank)}>
           <div className="flex flex-col items-center gap-1">
-            <span className="text-xs font-bold text-gray-400 w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center">
-              {r.rank}
-            </span>
+            <span className="text-xs font-bold text-gray-400 w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center">{r.rank}</span>
             <Icon className={`w-4 h-4 ${c.text}`} />
           </div>
-
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-1">
               <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${c.badge}`}>
-                {detectedLang === 'zh' ? c.labelZh : c.label}
+                {detectedLang==='zh' ? c.labelZh : c.label}
               </span>
-              <span className="text-xs text-gray-400">{Math.round(r.confidence * 100)}% confidence</span>
-              <span className="text-xs text-gray-400">|</span>
-              <span className="text-xs text-gray-500">{r.source}</span>
+              <span className="text-xs text-gray-400">{Math.round(r.confidence*100)}% confidence</span>
+              <span className="text-xs text-gray-500 ml-1">{r.source}</span>
               <span className="text-xs text-gray-400">{r.date}</span>
             </div>
-
             <h3 className="text-sm font-bold text-gray-800 leading-snug">{r.title}</h3>
             <p className="text-xs text-gray-500 mt-1 line-clamp-2">{r.snippet}</p>
-
             {r.matchedKeywords.length > 0 && (
               <div className="flex gap-1 mt-1.5 flex-wrap">
-                {r.matchedKeywords.map((kw, i) => (
-                  <span key={i} className="bg-red-50 text-red-600 border border-red-200 px-1.5 py-0.5 rounded text-xs">
-                    {kw}
-                  </span>
+                {r.matchedKeywords.map((kw,i) => (
+                  <span key={i} className="bg-red-50 text-red-600 border border-red-200 px-1.5 py-0.5 rounded text-xs">{kw}</span>
                 ))}
               </div>
             )}
           </div>
-
           <div className="text-gray-300 pt-1">
             {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
           </div>
         </div>
-
         {isOpen && (
           <div className="px-3 pb-3">
             <div className={`${c.bg} rounded-lg p-3`}>
@@ -867,21 +755,16 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
               <p className="text-xs text-gray-700">{r.reason}</p>
               <div className="flex gap-3 mt-2 text-xs text-gray-500">
                 <span>Risk: <b className={c.text}>{r.riskCat}</b></span>
-                <span>Confidence: <b>{Math.round(r.confidence * 100)}%</b></span>
+                <span>Confidence: <b>{Math.round(r.confidence*100)}%</b></span>
               </div>
             </div>
-
-            <div className="flex gap-2 mt-2">
-              <button className="bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-blue-100 flex items-center gap-1">
-                <ExternalLink className="w-3 h-3" />
-                查看原文
-              </button>
-              {r.cls === 'TRUE_HIT' && (
+            {r.cls==='TRUE_HIT' && (
+              <div className="flex gap-2 mt-2">
                 <button className="bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-red-100">
                   🚨 標記 STR
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -892,273 +775,270 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
     <div className="min-h-screen bg-gray-50">
       <div className="bg-slate-800 text-white px-4 py-3">
         <h1 className="text-base font-bold flex items-center gap-2">
-          <Shield className="w-5 h-5" />
-          Adverse Media Screening
+          <Shield className="w-5 h-5" /> Adverse Media Screening
         </h1>
         <p className="text-xs text-slate-400 mt-0.5">
-          🔍 自動語言檢測 | Google Search | AI 分類
+          🔍 自動語言檢測 | 手動 Google 搜尋 → PDF 上傳 | Gemini AI 分類
         </p>
       </div>
 
       <div className="bg-white border-b sticky top-0 z-10">
         <div className="max-w-6xl mx-auto flex overflow-x-auto">
-          {[
-            { id: 'demo', label: '🎬 Demo 演示' },
-            { id: 'arch', label: '🏗️ 架構說明' },
-            { id: 'keywords', label: '🔑 關鍵字配置' }
-          ].map(t => (
-            <button
-              key={t.id}
-              onClick={() => setActiveTab(t.id)}
+          {[{id:'demo',label:'🎬 Demo 演示'},{id:'arch',label:'🏗️ 架構說明'},{id:'keywords',label:'🔑 關鍵字配置'}].map(t => (
+            <button key={t.id} onClick={() => setActiveTab(t.id)}
               className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap ${
-                activeTab === t.id
-                  ? 'border-blue-500 text-blue-700 bg-blue-50'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {t.label}
-            </button>
+                activeTab===t.id ? 'border-blue-500 text-blue-700 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}>{t.label}</button>
           ))}
         </div>
       </div>
 
       <div className="max-w-6xl mx-auto p-4">
-        {activeTab === 'demo' && (
+        {activeTab==='demo' && (
           <div className="space-y-4">
+
+            {/* STEP 1 */}
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <div className="flex items-center gap-2 mb-3">
-                <Search className="w-4 h-4 text-blue-600" />
-                <h2 className="text-sm font-bold text-gray-800">搜尋配置</h2>
+                <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">1</span>
+                <h2 className="text-sm font-bold text-gray-800">執行 Google 搜尋</h2>
               </div>
-
-              <div className="flex flex-col sm:flex-row gap-3">
+              <div className="flex flex-col sm:flex-row gap-3 mb-3">
                 <div className="flex-1">
                   <label className="text-xs text-gray-500 mb-1 block">實體名稱</label>
-                  <input
-                    type="text"
-                    value={searchEntity}
-                    onChange={e => setSearchEntity(e.target.value)}
-                    maxLength={200}
-                    className="w-full border-2 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                    placeholder="輸入英文或中文名稱..."
-                  />
+                  <input type="text" value={searchEntity} onChange={e => setSearchEntity(e.target.value)}
+                    maxLength={200} className="w-full border-2 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    placeholder="輸入英文或中文名稱..." />
                 </div>
-
                 <div>
                   <label className="text-xs text-gray-500 mb-1 block">自動檢測語言</label>
                   <div className="h-[42px] px-4 rounded-lg border-2 bg-gray-50 flex items-center gap-2">
                     <Globe className="w-4 h-4 text-gray-400" />
                     <span className="text-sm font-bold">
-                      {searchEntity ? (
-                        detectLanguage(searchEntity) === 'zh' ? (
-                          <span className="text-red-600">🇨🇳 中文</span>
-                        ) : (
-                          <span className="text-blue-600">🇬🇧 英文</span>
-                        )
+                      {searchEntity ? (detectLanguage(searchEntity)==='zh'
+                        ? <span className="text-red-600">🇨🇳 中文</span>
+                        : <span className="text-blue-600">🇬🇧 英文</span>
                       ) : '請輸入名稱'}
                     </span>
                   </div>
                 </div>
-
-                <div className="flex flex-col items-end gap-1">
-                  <button
-                    onClick={runSearch}
-                    disabled={isSearching || !searchEntity || quotaInfo.remaining <= 0}
-                    className="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2 whitespace-nowrap h-[42px]"
-                  >
-                    {isSearching ? (
-                      <>
-                        <Loader className="w-4 h-4 animate-spin" />
-                        搜尋中...
-                      </>
-                    ) : (
-                      <>
-                        <Search className="w-4 h-4" />
-                        執行搜尋
-                      </>
-                    )}
-                  </button>
-                  <div className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border ${
-                    quotaInfo.remaining <= 0
-                      ? 'bg-red-50 text-red-600 border-red-200'
-                      : quotaInfo.remaining <= 20
-                      ? 'bg-amber-50 text-amber-600 border-amber-200'
-                      : 'bg-green-50 text-green-600 border-green-200'
-                  }`}>
-                    {quotaInfo.remaining <= 0 ? '🔴' : quotaInfo.remaining <= 20 ? '🟡' : '🟢'}
-                    今日剩餘：{quotaInfo.remaining} / {AMS_QUOTA_LIMIT}
-                  </div>
-                </div>
               </div>
-
-              <div className="mt-3">
-                <button
-                  onClick={() => setShowQuery(!showQuery)}
-                  className="text-xs text-blue-600 font-bold flex items-center gap-1 hover:underline"
-                >
+              <div className="flex gap-2">
+                <a href={googleSearchUrl} target="_blank" rel="noopener noreferrer"
+                  className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-bold transition ${
+                    searchEntity ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-400 pointer-events-none'
+                  }`}>
+                  <ExternalLink className="w-4 h-4" /> 在 Google 開啟搜尋
+                </a>
+                <button onClick={() => setShowQuery(!showQuery)}
+                  className="text-xs text-blue-600 font-bold flex items-center gap-1 hover:underline px-2">
                   {showQuery ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                  預覽 Google 查詢字串
+                  預覽查詢字串
                 </button>
-                {showQuery && searchEntity && (
-                  <div className="mt-2 bg-gray-900 rounded-lg p-3 overflow-x-auto">
-                    <div className="text-xs text-gray-400 mb-1">
-                      Google Search Query ({detectLanguage(searchEntity) === 'zh' ? '中文' : '英文'}關鍵字)
-                    </div>
-                    <code className="text-xs text-green-400">
-                      {buildQueryAuto(searchEntity).query}
-                    </code>
+              </div>
+              {showQuery && searchEntity && (
+                <div className="mt-2 bg-gray-900 rounded-lg p-3">
+                  <div className="text-xs text-gray-400 mb-1">Google Search Query</div>
+                  <code className="text-xs text-green-400">{buildQueryAuto(searchEntity).query}</code>
+                </div>
+              )}
+              <div className="mt-3 bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800">
+                <b>📋 操作說明：</b> 點擊按鈕開啟 Google 搜尋，使用 <b>Ctrl+P → 另存為 PDF</b> 將第一頁儲存。
+              </div>
+            </div>
+
+            {/* STEP 2 */}
+            <div className="bg-white rounded-xl border shadow-sm p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">2</span>
+                <h2 className="text-sm font-bold text-gray-800">上傳搜尋結果 PDF</h2>
+              </div>
+              <div className="flex gap-3 items-start">
+                <label className="flex-1 cursor-pointer">
+                  <div className={`border-2 border-dashed rounded-lg p-4 text-center transition ${
+                    pdfFile ? 'border-green-400 bg-green-50' : 'border-gray-300 hover:border-blue-400 hover:bg-blue-50'
+                  }`}>
+                    {pdfFile ? (
+                      <div className="flex items-center justify-center gap-2">
+                        <CheckCircle className="w-5 h-5 text-green-500" />
+                        <div className="text-left">
+                          <div className="text-sm font-bold text-green-700">{pdfFile.name}</div>
+                          <div className="text-xs text-green-600">{(pdfFile.size/1024).toFixed(0)} KB · PDF</div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="text-2xl mb-1">📄</div>
+                        <div className="text-sm font-bold text-gray-600">點擊上傳 PDF</div>
+                        <div className="text-xs text-gray-400 mt-0.5">Google 搜尋結果頁面 PDF</div>
+                      </div>
+                    )}
                   </div>
+                  <input type="file" accept="application/pdf" onChange={handlePdfUpload} className="hidden" />
+                </label>
+                {pdfFile && (
+                  <button onClick={() => setPdfFile(null)}
+                    className="text-xs text-gray-400 hover:text-red-500 flex items-center gap-1 px-2 py-1 border rounded-lg">
+                    <XCircle className="w-3 h-3" /> 移除
+                  </button>
                 )}
               </div>
             </div>
 
-            {isSearching && (
-              <div className="bg-blue-50 rounded-lg p-3">
-                <div className="flex justify-between text-xs mb-1.5">
-                  <span className="text-blue-700 font-medium">{stage}</span>
-                  <span className="text-blue-500">{progress}%</span>
+            {/* STEP 3 */}
+            <div className="bg-white rounded-xl border shadow-sm p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">3</span>
+                <h2 className="text-sm font-bold text-gray-800">Gemini AI 分析</h2>
+              </div>
+              <div className="mb-3">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs text-gray-500">Gemini API Key</label>
+                  <button onClick={() => setShowKeyInput(!showKeyInput)} className="text-xs text-blue-500 hover:underline">
+                    {showKeyInput ? '隱藏' : '顯示/修改'}
+                  </button>
                 </div>
-                <div className="h-2 bg-blue-100 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-500 rounded-full transition-all duration-500"
-                    style={{ width: `${progress}%` }}
-                  />
+                {showKeyInput ? (
+                  <input type="text" value={geminiKey} onChange={e => setGeminiKey(e.target.value)}
+                    placeholder="AIza..." className="w-full border-2 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none" />
+                ) : (
+                  <div className="border-2 rounded-lg px-3 py-2 text-sm text-gray-400 bg-gray-50 font-mono">
+                    {geminiKey ? `${geminiKey.slice(0,6)}${'•'.repeat(Math.min(20,geminiKey.length-6))}` : '（未設定）'}
+                  </div>
+                )}
+                <p className="text-xs text-gray-400 mt-1">
+                  使用 <b>Gemini 2.0 Flash</b>。
+                  <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline ml-1">
+                    取得免費 API Key →
+                  </a>
+                </p>
+              </div>
+              {errorMsg && (
+                <div className="mb-3 bg-red-50 border border-red-200 rounded-lg p-2.5 text-xs text-red-700 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />{errorMsg}
+                </div>
+              )}
+              <button onClick={runGeminiAnalysis} disabled={isAnalyzing || !pdfFile || !searchEntity}
+                className="w-full bg-indigo-600 text-white py-2.5 rounded-lg text-sm font-bold hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2">
+                {isAnalyzing ? <><Loader className="w-4 h-4 animate-spin" />AI 分析中...</> : <><Brain className="w-4 h-4" />開始 Gemini AI 分析</>}
+              </button>
+            </div>
+
+            {isAnalyzing && (
+              <div className="bg-indigo-50 rounded-lg p-3">
+                <div className="flex justify-between text-xs mb-1.5">
+                  <span className="text-indigo-700 font-medium">{stage}</span>
+                  <span className="text-indigo-500">{progress}%</span>
+                </div>
+                <div className="h-2 bg-indigo-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{width:`${progress}%`}} />
                 </div>
               </div>
             )}
 
-            {searchComplete && (
+            {analysisComplete && (
               <>
                 <div className="grid grid-cols-5 gap-2">
                   <div className="bg-white rounded-lg border p-3 text-center">
                     <div className="text-xl font-bold text-gray-800">{results.length}</div>
                     <div className="text-xs text-gray-500">Total</div>
                   </div>
-
-                  {Object.entries(CLS_CONFIG).map(([key, c]) => {
+                  {Object.entries(CLS_CONFIG).map(([key,c]) => {
                     const Icon = c.icon;
                     return (
                       <div key={key} className={`${c.bg} rounded-lg border ${c.border} p-3 text-center`}>
                         <div className={`text-xl font-bold ${c.text}`}>{counts[key]}</div>
                         <div className={`text-xs ${c.text} flex items-center justify-center gap-1`}>
-                          <Icon className="w-3 h-3" />
-                          {detectedLang === 'zh' ? c.labelZh : c.label}
+                          <Icon className="w-3 h-3" />{detectedLang==='zh' ? c.labelZh : c.label}
                         </div>
                       </div>
                     );
                   })}
                 </div>
-
-                <div
-                  className={`${
-                    counts.TRUE_HIT > 0 ? 'bg-red-600' : 'bg-green-600'
-                  } rounded-lg p-3 text-white flex items-center justify-between`}
-                >
+                <div className={`${counts.TRUE_HIT>0?'bg-red-600':'bg-green-600'} rounded-lg p-3 text-white flex items-center justify-between`}>
                   <div className="flex items-center gap-2">
                     <Shield className="w-5 h-5" />
                     <span className="font-bold text-sm">Overall Risk Assessment</span>
-                    <span className="text-lg font-black">{counts.TRUE_HIT > 0 ? 'HIGH RISK' : 'LOW RISK'}</span>
+                    <span className="text-lg font-black">{counts.TRUE_HIT>0 ? 'HIGH RISK' : 'LOW RISK'}</span>
                   </div>
                   <span className="text-xs opacity-80">
-                    {counts.TRUE_HIT > 0
-                      ? `${counts.TRUE_HIT} confirmed hits related to ML/TF/Sanctions`
-                      : 'No ML/TF/Sanctions-related hits found'}
+                    {counts.TRUE_HIT>0 ? `${counts.TRUE_HIT} confirmed ML/TF hits` : 'No ML/TF hits found'}
                   </span>
                 </div>
-
                 <div className="flex gap-1.5 flex-wrap">
-                  {[
-                    { k: 'ALL', l: `全部 (${results.length})` },
-                    ...Object.entries(CLS_CONFIG).map(([k, c]) => ({
-                      k,
-                      l: `${detectedLang === 'zh' ? c.labelZh : c.label} (${counts[k]})`
-                    }))
-                  ].map(f => (
-                    <button
-                      key={f.k}
-                      onClick={() => setFilterType(f.k)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition border ${
-                        filterType === f.k
-                          ? 'bg-slate-700 text-white border-slate-700'
-                          : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
-                      }`}
-                    >
-                      {f.l}
-                    </button>
+                  {[{k:'ALL',l:`全部 (${results.length})`},...Object.entries(CLS_CONFIG).map(([k,c])=>({k,l:`${detectedLang==='zh'?c.labelZh:c.label} (${counts[k]})`}))].map(f => (
+                    <button key={f.k} onClick={() => setFilterType(f.k)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${
+                        filterType===f.k ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+                      }`}>{f.l}</button>
                   ))}
                 </div>
-
                 <div className="space-y-2">
-                  {filteredResults.length === 0 ? (
-                    <div className="text-center py-8 text-sm text-gray-400">無結果</div>
-                  ) : (
-                    filteredResults.map(r => <ResultCard key={r.rank} r={r} />)
-                  )}
+                  {filteredResults.length===0
+                    ? <div className="text-center py-8 text-sm text-gray-400">無結果</div>
+                    : filteredResults.map(r => <ResultCard key={r.rank} r={r} />)}
                 </div>
+                <button onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); }}
+                  className="w-full py-2 rounded-lg text-xs text-gray-500 border border-dashed hover:border-gray-400">
+                  🔄 重新分析
+                </button>
               </>
+            )}
+
+            {!analysisComplete && !isAnalyzing && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-lg">🎬</span>
+                  <h3 className="text-sm font-bold text-amber-800">Demo 預覽（Mock 數據）</h3>
+                </div>
+                <p className="text-xs text-amber-700 mb-3">完成步驟 1–3 後可獲取真實 AI 分析結果。</p>
+                <div className="space-y-2">
+                  {(detectLanguage(searchEntity)==='zh' ? MOCK_ZH : MOCK_EN).map(r => <ResultCard key={r.rank} r={r} />)}
+                </div>
+              </div>
             )}
           </div>
         )}
 
-        {activeTab === 'arch' && (
-          <div className="space-y-4">
-            <div className="bg-white rounded-xl border shadow-sm p-5">
-              <h2 className="text-sm font-bold text-gray-800 mb-4">🔄 搜尋流程</h2>
-              {[
-                { n: 1, icon: '📝', t: '輸入實體名稱', d: '用戶輸入實體名稱（英文或中文）' },
-                { n: 2, icon: '🤖', t: '自動檢測語言', d: '系統自動判斷名稱主要語言' },
-                { n: 3, icon: '🔑', t: '選擇關鍵字', d: '根據檢測結果使用對應語言關鍵字' },
-                { n: 4, icon: '🔍', t: 'Google Search API', d: '執行單一語言搜尋' },
-                { n: 5, icon: '🧠', t: 'AI 分類（4 類）', d: 'Claude API 自動分類' },
-                { n: 6, icon: '💾', t: '儲存結果', d: '結果保存至資料庫' },
-                { n: 7, icon: '📊', t: '生成報告', d: '顯示分類結果和風險評估' }
-              ].map(s => (
-                <div key={s.n} className="flex items-start gap-3 pb-3 mb-3 border-b last:border-0">
-                  <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center text-sm font-bold text-blue-700">
-                    {s.n}
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <span>{s.icon}</span>
-                      <span className="font-bold text-gray-800 text-sm">{s.t}</span>
-                    </div>
-                    <p className="text-xs text-gray-600 mt-0.5">{s.d}</p>
-                  </div>
+        {activeTab==='arch' && (
+          <div className="bg-white rounded-xl border shadow-sm p-5">
+            <h2 className="text-sm font-bold text-gray-800 mb-4">🔄 新版流程（Gemini PDF 分析）</h2>
+            {[
+              {n:1,t:'輸入實體名稱',d:'系統自動生成 AML/KYC 搜尋字串'},
+              {n:2,t:'手動 Google 搜尋',d:'點擊按鈕開啟 Google，查看第一頁結果'},
+              {n:3,t:'儲存為 PDF',d:'Ctrl+P → 另存為 PDF'},
+              {n:4,t:'上傳 PDF',d:'在步驟 2 上傳 PDF 文件'},
+              {n:5,t:'Gemini AI 分析',d:'Gemini 2.0 Flash 讀取 PDF，語意分析每條結果'},
+              {n:6,t:'顯示分類結果',d:'TRUE_HIT / FALSE_HIT / IRRELEVANT / NO_HIT'},
+            ].map(s => (
+              <div key={s.n} className="flex items-start gap-3 pb-3 mb-3 border-b last:border-0">
+                <div className="w-7 h-7 rounded-lg bg-indigo-100 flex items-center justify-center text-xs font-bold text-indigo-700 shrink-0">{s.n}</div>
+                <div>
+                  <div className="font-bold text-gray-800 text-sm">{s.t}</div>
+                  <p className="text-xs text-gray-600 mt-0.5">{s.d}</p>
                 </div>
-              ))}
+              </div>
+            ))}
+            <div className="mt-3 bg-indigo-50 border border-indigo-200 rounded-lg p-3 text-xs text-indigo-800">
+              <b>💡 改版原因：</b> Google CSE API 已停止可用。新方案完全免費，Gemini 語意理解準確率更高於舊版關鍵字比對。
             </div>
           </div>
         )}
 
-        {activeTab === 'keywords' && (
-          <div className="space-y-4">
-            <div className="bg-white rounded-xl border shadow-sm p-5">
-              <h2 className="text-sm font-bold text-gray-800 mb-4">🔑 搜尋關鍵字</h2>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <h3 className="text-sm font-bold text-blue-700 mb-2">
-                    🇬🇧 English Keywords ({EN_KEYWORDS.length})
-                  </h3>
-                  <div className="flex flex-wrap gap-1.5">
-                    {EN_KEYWORDS.map((kw, i) => (
-                      <span key={i} className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-lg text-xs">
-                        {kw}
-                      </span>
-                    ))}
-                  </div>
+        {activeTab==='keywords' && (
+          <div className="bg-white rounded-xl border shadow-sm p-5">
+            <h2 className="text-sm font-bold text-gray-800 mb-4">🔑 搜尋關鍵字配置</h2>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <h3 className="text-sm font-bold text-blue-700 mb-2">English ({EN_KEYWORDS.length})</h3>
+                <div className="flex flex-wrap gap-1.5">
+                  {EN_KEYWORDS.map((kw,i) => <span key={i} className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded text-xs">{kw}</span>)}
                 </div>
-
-                <div>
-                  <h3 className="text-sm font-bold text-red-700 mb-2">
-                    🇨🇳 中文關鍵字 ({ZH_KEYWORDS.length})
-                  </h3>
-                  <div className="flex flex-wrap gap-1.5">
-                    {ZH_KEYWORDS.map((kw, i) => (
-                      <span key={i} className="bg-red-50 text-red-700 border border-red-200 px-2 py-1 rounded-lg text-xs">
-                        {kw}
-                      </span>
-                    ))}
-                  </div>
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-red-700 mb-2">中文 ({ZH_KEYWORDS.length})</h3>
+                <div className="flex flex-wrap gap-1.5">
+                  {ZH_KEYWORDS.map((kw,i) => <span key={i} className="bg-red-50 text-red-700 border border-red-200 px-2 py-1 rounded text-xs">{kw}</span>)}
                 </div>
               </div>
             </div>
@@ -1168,8 +1048,6 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
     </div>
   );
 }
-
-/* ========== END ADVERSE MEDIA SCREENING MODULE ========== */
 
 /* =============== MAIN COMPONENT =============== */
 export default function KYCSystem() {
