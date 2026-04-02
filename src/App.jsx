@@ -810,7 +810,20 @@ try {
                 <Brain className={`w-3.5 h-3.5 ${c.text}`} />
                 <span className={`text-xs font-bold ${c.text}`}>AI 分析</span>
               </div>
-              <p className="text-xs text-gray-700">   <span className={`font-bold mr-1 ${     r.cls === 'TRUE_HIT' ? 'text-red-700' :     r.cls === 'FALSE_HIT' ? 'text-amber-700' :     r.cls === 'IRRELEVANT_MLTF' ? 'text-slate-600' :     'text-green-700'   }`}>     {r.cls === 'TRUE_HIT' ? 'TRUE HIT:' :      r.cls === 'FALSE_HIT' ? 'FALSE HIT:' :      r.cls === 'IRRELEVANT_MLTF' ? 'IRRELEVANT ML/TF:' :      'NO HIT:'}   </span>   {r.reason} </p>
+             <p className="text-xs text-gray-700">
+  <span className={`font-bold mr-1 ${
+    r.cls === 'TRUE_HIT' ? 'text-red-700' :
+    r.cls === 'FALSE_HIT' ? 'text-amber-700' :
+    r.cls === 'IRRELEVANT_MLTF' ? 'text-slate-600' :
+    'text-green-700'
+  }`}>
+    {r.cls === 'TRUE_HIT' ? 'TRUE HIT:' :
+     r.cls === 'FALSE_HIT' ? 'FALSE HIT:' :
+     r.cls === 'IRRELEVANT_MLTF' ? 'IRRELEVANT ML/TF:' :
+     'NO HIT:'}
+  </span>
+  {r.reason}
+</p>
               <div className="flex gap-3 mt-2 text-xs text-gray-500">
                 <span>Risk: <b className={c.text}>{r.riskCat}</b></span>
                 <span>Confidence: <b>{Math.round(r.confidence*100)}%</b></span>
