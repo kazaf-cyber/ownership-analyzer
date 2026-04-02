@@ -644,7 +644,14 @@ if (!pdfText.trim()) throw new Error('PDF 無法提取文字（可能是掃描�
 setProgress(45); setStage('Poe AI 分析中...');
 
 // 重新建立含 PDF 文字的 prompt
-const fullPrompt = prompt + '\n\nPDF 文字內容：\n' + pdfText.slice(0, 12000);
+const fullPrompt = `CRITICAL INSTRUCTION: You MUST respond with ONLY a valid JSON array. No explanations, no summaries, no markdown, no text before or after the JSON array. Your entire response must start with [ and end with ].
+
+${prompt}
+
+PDF 文字內容：
+${pdfText.slice(0, 12000)}
+
+REMINDER: Output ONLY the JSON array starting with [ and ending with ]. Nothing else.`;
 
 const res = await fetch('https://api.poe.com/v1/chat/completions', {
   method: 'POST',
@@ -654,7 +661,13 @@ const res = await fetch('https://api.poe.com/v1/chat/completions', {
   },
   body: JSON.stringify({
     model: 'gemini-3.1-flash-lite',
-    messages: [{ role: 'user', content: fullPrompt }],
+    messages: [
+  {
+    role: 'system',
+    content: 'You are a JSON-only API. You must ALWAYS respond with a valid JSON array only. Never add explanations, summaries, or any text outside the JSON array.'
+  },
+  { role: 'user', content: fullPrompt }
+],
     temperature: 0.1,
     max_tokens: 4096
   })
@@ -683,15 +696,18 @@ try {
   parsed = JSON.parse(cleaned);
 } catch {
   try {
-    // 嘗試方法 2：從回應中提取 JSON 陣列（AI 有時加前後說明文字）
-    const match = rawText.match(/\[[\s\S]*\]/);
-    if (!match) throw new Error('no array found');
-    parsed = JSON.parse(match[0]);
-  } catch {
-    // 最後手段：顯示實際回傳內容方便除錯
-    const preview = rawText ? rawText.slice(0, 200) : '(empty)';
-    throw new Error(`AI 回應格式錯誤。實際回傳：${preview}`);
+  // 找出回應中最後一個 [ 和最後一個 ] 之間的內容
+  const firstBracket = rawText.indexOf('[');
+  const lastBracket = rawText.lastIndexOf(']');
+  if (firstBracket === -1 || lastBracket === -1 || lastBracket < firstBracket) {
+    throw new Error('no array found');
   }
+  const jsonStr = rawText.slice(firstBracket, lastBracket + 1);
+  parsed = JSON.parse(jsonStr);
+} catch {
+  const preview = rawText ? rawText.slice(0, 200) : '(empty)';
+  throw new Error(`AI 回應格式錯誤。實際回傳：${preview}`);
+}
 }
       if (!Array.isArray(parsed) || parsed.length === 0) {
         parsed = [{ rank:1, title: lang==='zh'?'無分析結果':'No results', source:'', date:'',
