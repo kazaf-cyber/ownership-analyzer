@@ -562,7 +562,7 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
   const [activeTab, setActiveTab] = useState('demo');
   const [searchEntity, setSearchEntity] = useState(_saved?.searchEntity || initialEntityName || 'ABC Holdings Ltd');
   const [pdfFile, setPdfFile] = useState(null);
-  const [geminiKey, setGeminiKey] = useState(_saved?.geminiKey || '');
+  const [apiKey, setApiKey] = useState(_saved?.apiKey || '');
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisComplete, setAnalysisComplete] = useState(_saved?.analysisComplete || false);
@@ -579,11 +579,11 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
     if (analysisComplete && results.length > 0) {
       try {
         sessionStorage.setItem(AMS_SESSION_KEY, JSON.stringify({
-          results, searchEntity, analysisComplete, detectedLang, filterType, geminiKey,
+          results, searchEntity, analysisComplete, detectedLang, filterType, apiKey,
         }));
       } catch {}
     }
-  }, [results, analysisComplete, detectedLang, filterType, searchEntity, geminiKey]);
+  }, [results, analysisComplete, detectedLang, filterType, searchEntity, apiKey]);
 
   const timerIdsRef = React.useRef([]);
   const clearAllTimers = () => { timerIdsRef.current.forEach(id => clearTimeout(id)); timerIdsRef.current = []; };
@@ -598,9 +598,9 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
     else if (file) setErrorMsg('請上傳 PDF 格式文件（.pdf）');
   };
 
-  const runGeminiAnalysis = async () => {
+  const runAnalysis = async () => {
     if (!pdfFile) { setErrorMsg('請先上傳搜尋結果 PDF 文件'); return; }
-    if (!geminiKey.trim()) { setErrorMsg('請輸入 Gemini API Key'); return; }
+    if (!apiKey.trim()) { setErrorMsg('請輸入 OpenRouter API Key'); return; }
 
     clearAllTimers();
     setIsAnalyzing(true); setAnalysisComplete(false); setResults([]);
@@ -619,7 +619,7 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
         reader.readAsDataURL(pdfFile);
       });
 
-      setProgress(40); setStage('正在傳送至 Gemini AI 分析...');
+      setProgress(40); setStage('正在傳送至 OpenRouter AI 分析...');
 
       const prompt = lang === 'zh'
         ? `你是一位專業的 AML/KYC 合規分析師。請仔細分析此 Google 搜尋結果頁面 PDF，對搜索實體「${searchEntity}」進行不良媒體篩查。
@@ -635,24 +635,35 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
         : `You are a professional AML/KYC compliance analyst. Analyze this Google search results PDF for adverse media screening of: "${searchEntity}".
 
 Classify each result as ONE of:
-- TRUE_HIT: Entity name matches AND contains ML/TF keywords (money laundering, fraud, sanctions, terrorism, bribery, corruption, trafficking, investigation, indictment, AML, CTF, OFAC, etc.)
-- FALSE_HIT: Similar name but clearly a different entity
-- IRRELEVANT_MLTF: Entity matches but content is NOT ML/TF related
-- NO_HIT: Entity not mentioned or no risk keywords
+- TRUE_HIT: Entity name matches AND content contains ML/TF keywords (money laundering, fraud, sanctions, terrorism, bribery, corruption, trafficking, investigation, indictment, prosecution, AML, CTF, OFAC, etc.)
+- FALSE_HIT: Similar name but clearly a different entity (different jurisdiction / legal form / industry)
+- IRRELEVANT_MLTF: Entity matches but content is commercial dispute or general news—NOT ML/TF related
+- NO_HIT: Entity not mentioned or no risk keywords found
 
-Return ONLY a JSON array (no markdown):
-[{"rank":1,"title":"Title","source":"domain","date":"YYYY-MM-DD","snippet":"Summary","matchedKeywords":["kw"],"cls":"TRUE_HIT","confidence":0.92,"reason":"Reason","riskCat":"Money Laundering or N/A"}]`;
+Return ONLY a JSON array (no markdown, no extra text):
+[{"rank":1,"title":"Article title","source":"source domain","date":"YYYY-MM-DD or empty","snippet":"Brief summary","matchedKeywords":["keyword1"],"cls":"TRUE_HIT","confidence":0.92,"reason":"Classification reason","riskCat":"Money Laundering / Fraud / etc or N/A"}]`;
 
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey.trim()}`;
-      const res = await fetch(apiUrl, {
+      // ✅ OpenRouter API（支援香港 IP，呼叫 Gemini 2.5 Flash）
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey.trim()}`,
+          'HTTP-Referer': 'https://kyc-aml-system.app',
+          'X-Title': 'KYC AML Compliance System'
+        },
         body: JSON.stringify({
-          contents: [{ parts: [
-            { inline_data: { mime_type: 'application/pdf', data: base64Data } },
-            { text: prompt }
-          ]}],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
+          model: 'google/gemini-2.5-flash-preview',
+          messages: [{
+            role: 'user',
+            content: [
+              {
+                type: 'image_url',
+                image_url: { url: `data:application/pdf;base64,${base64Data}` }
+              },
+              { type: 'text', text: prompt }
+            ]
+          }]
         })
       });
 
@@ -664,19 +675,20 @@ Return ONLY a JSON array (no markdown):
       }
 
       const data = await res.json();
-      const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+      // ✅ OpenRouter 回應格式（OpenAI 相容格式，非 Gemini 原生格式）
+      const rawText = data?.choices?.[0]?.message?.content || '[]';
 
       let parsed;
       try {
         const cleaned = rawText.replace(/^```jsons*/i,'').replace(/^```s*/i,'').replace(/s*```$/i,'').trim();
         parsed = JSON.parse(cleaned);
-      } catch { throw new Error('Gemini 回應格式錯誤，請重試'); }
+      } catch { throw new Error('AI 回應格式錯誤，請重試'); }
 
       if (!Array.isArray(parsed) || parsed.length === 0) {
         parsed = [{ rank:1, title: lang==='zh'?'無分析結果':'No results', source:'', date:'',
-          snippet: lang==='zh'?'AI 未返回有效結果。':'AI returned no valid results.',
+          snippet: lang==='zh'?'AI未返回有效結果。':'AI returned no valid results.',
           matchedKeywords:[], cls:'NO_HIT', confidence:1.0,
-          reason: lang==='zh'?'Gemini 返回空結果。':'Empty response.', riskCat:'N/A' }];
+          reason: lang==='zh'?'返回空結果。':'Returned empty results.', riskCat:'N/A' }];
       }
 
       const VALID_CLS = ['TRUE_HIT','FALSE_HIT','IRRELEVANT_MLTF','NO_HIT'];
@@ -728,7 +740,8 @@ Return ONLY a JSON array (no markdown):
                 {detectedLang==='zh' ? c.labelZh : c.label}
               </span>
               <span className="text-xs text-gray-400">{Math.round(r.confidence*100)}% confidence</span>
-              <span className="text-xs text-gray-500 ml-1">{r.source}</span>
+              <span className="text-xs text-gray-400">|</span>
+              <span className="text-xs text-gray-500">{r.source}</span>
               <span className="text-xs text-gray-400">{r.date}</span>
             </div>
             <h3 className="text-sm font-bold text-gray-800 leading-snug">{r.title}</h3>
@@ -778,7 +791,7 @@ Return ONLY a JSON array (no markdown):
           <Shield className="w-5 h-5" /> Adverse Media Screening
         </h1>
         <p className="text-xs text-slate-400 mt-0.5">
-          🔍 自動語言檢測 | 手動 Google 搜尋 → PDF 上傳 | Gemini AI 分類
+          🔍 自動語言檢測 | 手動 Google 搜尋 → PDF 上傳 | OpenRouter（Gemini 2.5 Flash）分類
         </p>
       </div>
 
@@ -796,7 +809,6 @@ Return ONLY a JSON array (no markdown):
       <div className="max-w-6xl mx-auto p-4">
         {activeTab==='demo' && (
           <div className="space-y-4">
-
             {/* STEP 1 */}
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <div className="flex items-center gap-2 mb-3">
@@ -823,9 +835,9 @@ Return ONLY a JSON array (no markdown):
                   </div>
                 </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-col sm:flex-row gap-2">
                 <a href={googleSearchUrl} target="_blank" rel="noopener noreferrer"
-                  className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-bold transition ${
+                  className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-bold transition ${
                     searchEntity ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-400 pointer-events-none'
                   }`}>
                   <ExternalLink className="w-4 h-4" /> 在 Google 開啟搜尋
@@ -837,13 +849,13 @@ Return ONLY a JSON array (no markdown):
                 </button>
               </div>
               {showQuery && searchEntity && (
-                <div className="mt-2 bg-gray-900 rounded-lg p-3">
+                <div className="mt-2 bg-gray-900 rounded-lg p-3 overflow-x-auto">
                   <div className="text-xs text-gray-400 mb-1">Google Search Query</div>
                   <code className="text-xs text-green-400">{buildQueryAuto(searchEntity).query}</code>
                 </div>
               )}
               <div className="mt-3 bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800">
-                <b>📋 操作說明：</b> 點擊按鈕開啟 Google 搜尋，使用 <b>Ctrl+P → 另存為 PDF</b> 將第一頁儲存。
+                <b>📋 操作說明：</b> 點擊上方按鈕開啟 Google 搜尋頁面，確認結果後用 <b>Ctrl+P（Cmd+P）→ 另存為 PDF</b> 儲存第一頁。
               </div>
             </div>
 
@@ -853,7 +865,7 @@ Return ONLY a JSON array (no markdown):
                 <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">2</span>
                 <h2 className="text-sm font-bold text-gray-800">上傳搜尋結果 PDF</h2>
               </div>
-              <div className="flex gap-3 items-start">
+              <div className="flex flex-col sm:flex-row gap-3 items-start">
                 <label className="flex-1 cursor-pointer">
                   <div className={`border-2 border-dashed rounded-lg p-4 text-center transition ${
                     pdfFile ? 'border-green-400 bg-green-50' : 'border-gray-300 hover:border-blue-400 hover:bg-blue-50'
@@ -870,7 +882,7 @@ Return ONLY a JSON array (no markdown):
                       <div>
                         <div className="text-2xl mb-1">📄</div>
                         <div className="text-sm font-bold text-gray-600">點擊上傳 PDF</div>
-                        <div className="text-xs text-gray-400 mt-0.5">Google 搜尋結果頁面 PDF</div>
+                        <div className="text-xs text-gray-400 mt-0.5">支援 Google 搜尋結果頁面 PDF</div>
                       </div>
                     )}
                   </div>
@@ -889,38 +901,40 @@ Return ONLY a JSON array (no markdown):
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <div className="flex items-center gap-2 mb-3">
                 <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">3</span>
-                <h2 className="text-sm font-bold text-gray-800">Gemini AI 分析</h2>
+                <h2 className="text-sm font-bold text-gray-800">OpenRouter AI 分析</h2>
               </div>
               <div className="mb-3">
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs text-gray-500">Gemini API Key</label>
+                  <label className="text-xs text-gray-500">OpenRouter API Key</label>
                   <button onClick={() => setShowKeyInput(!showKeyInput)} className="text-xs text-blue-500 hover:underline">
                     {showKeyInput ? '隱藏' : '顯示/修改'}
                   </button>
                 </div>
                 {showKeyInput ? (
-                  <input type="text" value={geminiKey} onChange={e => setGeminiKey(e.target.value)}
-                    placeholder="AIza..." className="w-full border-2 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none" />
+                  <input type="text" value={apiKey} onChange={e => setApiKey(e.target.value)}
+                    placeholder="sk-or-v1-..." className="w-full border-2 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none" />
                 ) : (
                   <div className="border-2 rounded-lg px-3 py-2 text-sm text-gray-400 bg-gray-50 font-mono">
-                    {geminiKey ? `${geminiKey.slice(0,6)}${'•'.repeat(Math.min(20,geminiKey.length-6))}` : '（未設定）'}
+                    {apiKey ? `${apiKey.slice(0,10)}${'•'.repeat(Math.min(20,apiKey.length-10))}` : '（未設定）'}
                   </div>
                 )}
                 <p className="text-xs text-gray-400 mt-1">
-                  使用 <b>Gemini 2.5 Flash</b>。
-                  <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline ml-1">
+                  使用 <b>Gemini 2.5 Flash</b>（經 OpenRouter 中轉，支援香港 IP）。
+                  <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline ml-1">
                     取得免費 API Key →
                   </a>
                 </p>
               </div>
+
               {errorMsg && (
                 <div className="mb-3 bg-red-50 border border-red-200 rounded-lg p-2.5 text-xs text-red-700 flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0" />{errorMsg}
                 </div>
               )}
-              <button onClick={runGeminiAnalysis} disabled={isAnalyzing || !pdfFile || !searchEntity}
+
+              <button onClick={runAnalysis} disabled={isAnalyzing || !pdfFile || !searchEntity}
                 className="w-full bg-indigo-600 text-white py-2.5 rounded-lg text-sm font-bold hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2">
-                {isAnalyzing ? <><Loader className="w-4 h-4 animate-spin" />AI 分析中...</> : <><Brain className="w-4 h-4" />開始 Gemini AI 分析</>}
+                {isAnalyzing ? <><Loader className="w-4 h-4 animate-spin" />AI 分析中...</> : <><Brain className="w-4 h-4" />開始 AI 分析</>}
               </button>
             </div>
 
@@ -962,13 +976,13 @@ Return ONLY a JSON array (no markdown):
                     <span className="text-lg font-black">{counts.TRUE_HIT>0 ? 'HIGH RISK' : 'LOW RISK'}</span>
                   </div>
                   <span className="text-xs opacity-80">
-                    {counts.TRUE_HIT>0 ? `${counts.TRUE_HIT} confirmed ML/TF hits` : 'No ML/TF hits found'}
+                    {counts.TRUE_HIT>0 ? `${counts.TRUE_HIT} confirmed hits related to ML/TF/Sanctions` : 'No ML/TF/Sanctions-related hits found'}
                   </span>
                 </div>
                 <div className="flex gap-1.5 flex-wrap">
                   {[{k:'ALL',l:`全部 (${results.length})`},...Object.entries(CLS_CONFIG).map(([k,c])=>({k,l:`${detectedLang==='zh'?c.labelZh:c.label} (${counts[k]})`}))].map(f => (
                     <button key={f.k} onClick={() => setFilterType(f.k)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition border ${
                         filterType===f.k ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
                       }`}>{f.l}</button>
                   ))}
@@ -979,19 +993,20 @@ Return ONLY a JSON array (no markdown):
                     : filteredResults.map(r => <ResultCard key={r.rank} r={r} />)}
                 </div>
                 <button onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); }}
-                  className="w-full py-2 rounded-lg text-xs text-gray-500 border border-dashed hover:border-gray-400">
-                  🔄 重新分析
+                  className="w-full py-2 rounded-lg text-xs text-gray-500 border border-dashed hover:border-gray-400 hover:text-gray-700">
+                  🔄 重新分析（清除結果）
                 </button>
               </>
             )}
 
             {!analysisComplete && !isAnalyzing && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-                <div className="flex items-center gap-2 mb-2">
+                <div className="flex items-center gap-2 mb-3">
                   <span className="text-lg">🎬</span>
-                  <h3 className="text-sm font-bold text-amber-800">Demo 預覽（Mock 數據）</h3>
+                  <h3 className="text-sm font-bold text-amber-800">Demo 預覽</h3>
+                  <span className="text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full border border-amber-200">使用 Mock 數據</span>
                 </div>
-                <p className="text-xs text-amber-700 mb-3">完成步驟 1–3 後可獲取真實 AI 分析結果。</p>
+                <p className="text-xs text-amber-700 mb-3">以下為模擬分析結果。完成步驟 1-3 後可獲取真實分析結果。</p>
                 <div className="space-y-2">
                   {(detectLanguage(searchEntity)==='zh' ? MOCK_ZH : MOCK_EN).map(r => <ResultCard key={r.rank} r={r} />)}
                 </div>
@@ -1001,44 +1016,49 @@ Return ONLY a JSON array (no markdown):
         )}
 
         {activeTab==='arch' && (
-          <div className="bg-white rounded-xl border shadow-sm p-5">
-            <h2 className="text-sm font-bold text-gray-800 mb-4">🔄 新版流程（Gemini PDF 分析）</h2>
-            {[
-              {n:1,t:'輸入實體名稱',d:'系統自動生成 AML/KYC 搜尋字串'},
-              {n:2,t:'手動 Google 搜尋',d:'點擊按鈕開啟 Google，查看第一頁結果'},
-              {n:3,t:'儲存為 PDF',d:'Ctrl+P → 另存為 PDF'},
-              {n:4,t:'上傳 PDF',d:'在步驟 2 上傳 PDF 文件'},
-              {n:5,t:'Gemini AI 分析',d:'Gemini 2.5 Flash 讀取 PDF，語意分析每條結果'},
-              {n:6,t:'顯示分類結果',d:'TRUE_HIT / FALSE_HIT / IRRELEVANT / NO_HIT'},
-            ].map(s => (
-              <div key={s.n} className="flex items-start gap-3 pb-3 mb-3 border-b last:border-0">
-                <div className="w-7 h-7 rounded-lg bg-indigo-100 flex items-center justify-center text-xs font-bold text-indigo-700 shrink-0">{s.n}</div>
-                <div>
-                  <div className="font-bold text-gray-800 text-sm">{s.t}</div>
-                  <p className="text-xs text-gray-600 mt-0.5">{s.d}</p>
+          <div className="space-y-4">
+            <div className="bg-white rounded-xl border shadow-sm p-5">
+              <h2 className="text-sm font-bold text-gray-800 mb-4">🔄 搜尋流程（OpenRouter + PDF 分析）</h2>
+              {[
+                {n:1,icon:'📝',t:'輸入實體名稱',d:'系統自動生成 Google 搜尋查詢字串'},
+                {n:2,icon:'🔍',t:'手動執行 Google 搜尋',d:'點擊按鈕在瀏覽器中查看第一頁搜尋結果'},
+                {n:3,icon:'📄',t:'儲存為 PDF',d:'使用 Ctrl+P → 另存為 PDF'},
+                {n:4,icon:'⬆️',t:'上傳 PDF',d:'在步驟 2 上傳剛儲存的 PDF 文件'},
+                {n:5,icon:'🤖',t:'OpenRouter AI 分析',d:'透過 OpenRouter 中轉呼叫 Gemini 2.5 Flash（支援香港 IP），AI 讀取 PDF 並分類'},
+                {n:6,icon:'📊',t:'顯示分類結果',d:'按 True Hit / False Hit / Irrelevant / No Hit 分類展示'}
+              ].map(s => (
+                <div key={s.n} className="flex items-start gap-3 pb-3 mb-3 border-b last:border-0">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center text-sm font-bold text-indigo-700 shrink-0">{s.n}</div>
+                  <div>
+                    <div className="flex items-center gap-1.5"><span>{s.icon}</span><span className="font-bold text-gray-800 text-sm">{s.t}</span></div>
+                    <p className="text-xs text-gray-600 mt-0.5">{s.d}</p>
+                  </div>
                 </div>
-              </div>
-            ))}
-            <div className="mt-3 bg-indigo-50 border border-indigo-200 rounded-lg p-3 text-xs text-indigo-800">
-              <b>💡 改版原因：</b> Google CSE API 已停止可用。新方案完全免費，Gemini 語意理解準確率更高於舊版關鍵字比對。
+              ))}
+            </div>
+            <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 text-xs text-indigo-800">
+              <b>💡 為何使用 OpenRouter？</b><br/>
+              Google Gemini API 直接呼叫不支援香港 IP。OpenRouter 是 AI API 中繼服務，完全支援香港 IP，並提供 Gemini 2.5 Flash 存取，免費額度充足。
             </div>
           </div>
         )}
 
         {activeTab==='keywords' && (
-          <div className="bg-white rounded-xl border shadow-sm p-5">
-            <h2 className="text-sm font-bold text-gray-800 mb-4">🔑 搜尋關鍵字配置</h2>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <h3 className="text-sm font-bold text-blue-700 mb-2">English ({EN_KEYWORDS.length})</h3>
-                <div className="flex flex-wrap gap-1.5">
-                  {EN_KEYWORDS.map((kw,i) => <span key={i} className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded text-xs">{kw}</span>)}
+          <div className="space-y-4">
+            <div className="bg-white rounded-xl border shadow-sm p-5">
+              <h2 className="text-sm font-bold text-gray-800 mb-4">🔑 搜尋關鍵字</h2>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-blue-700 mb-2">🇬🇧 English Keywords ({EN_KEYWORDS.length})</h3>
+                  <div className="flex flex-wrap gap-1.5">
+                    {EN_KEYWORDS.map((kw,i) => <span key={i} className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-lg text-xs">{kw}</span>)}
+                  </div>
                 </div>
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-red-700 mb-2">中文 ({ZH_KEYWORDS.length})</h3>
-                <div className="flex flex-wrap gap-1.5">
-                  {ZH_KEYWORDS.map((kw,i) => <span key={i} className="bg-red-50 text-red-700 border border-red-200 px-2 py-1 rounded text-xs">{kw}</span>)}
+                <div>
+                  <h3 className="text-sm font-bold text-red-700 mb-2">🇨🇳 中文關鍵字 ({ZH_KEYWORDS.length})</h3>
+                  <div className="flex flex-wrap gap-1.5">
+                    {ZH_KEYWORDS.map((kw,i) => <span key={i} className="bg-red-50 text-red-700 border border-red-200 px-2 py-1 rounded-lg text-xs">{kw}</span>)}
+                  </div>
                 </div>
               </div>
             </div>
