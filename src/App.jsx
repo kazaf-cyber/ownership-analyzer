@@ -666,7 +666,8 @@ Return ONLY a JSON array (no markdown, no extra text):
   }],
   temperature: 0.1,
   max_tokens: 4096
-})
+ })
+});
       setProgress(80); setStage('正在解析 AI 回應...');
 
       if (!res.ok) {
