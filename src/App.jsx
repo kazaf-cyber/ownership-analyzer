@@ -653,19 +653,24 @@ Return ONLY a JSON array (no markdown, no extra text):
           'X-Title': 'KYC AML Compliance System'
         },
         body: JSON.stringify({
-          model: 'google/gemini-2.5-flash-lite',
-          messages: [{
-            role: 'user',
-            content: [
-              {
-                type: 'image_url',
-                image_url: { url: `data:application/pdf;base64,${base64Data}` }
-              },
-              { type: 'text', text: prompt }
-            ]
-          }]
-        })
-      });
+  model: 'anthropic/claude-opus-4-5',
+  messages: [{
+    role: 'user',
+    content: [
+      {
+        type: 'text',
+        text: prompt
+      },
+      {
+        type: 'image_url',
+        image_url: {
+          url: `data:application/pdf;base64,${base64Data}`
+        }
+      }
+    ]
+  }],
+  max_tokens: 4096
+})
 
       setProgress(80); setStage('正在解析 AI 回應...');
 
@@ -919,7 +924,7 @@ Return ONLY a JSON array (no markdown, no extra text):
                   </div>
                 )}
                 <p className="text-xs text-gray-400 mt-1">
-                  使用 <b>Gemini 2.5 Flash</b>（經 OpenRouter 中轉，支援香港 IP）。
+                  使用 <b>claude-3.5-haiku</b>（經 OpenRouter 中轉，支援香港 IP）。
                   <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline ml-1">
                     取得免費 API Key →
                   </a>
