@@ -646,36 +646,31 @@ setProgress(45); setStage('Poe AI 分析中...');
 // 先數出 PDF 裡有多少條搜尋結果
 const resultCount = (pdfText.match(/https?:\/\//g) || []).length;
 
-const fullPrompt = `CRITICAL INSTRUCTION: You MUST respond with ONLY a valid JSON array. No explanations, no summaries, no markdown, no text before or after the JSON array. Your entire response must start with [ and end with ].
+const fullPrompt = `CRITICAL INSTRUCTION: You MUST respond with ONLY a valid JSON array. No explanations, no markdown, no text before or after. Start with [ end with ].
 
-IMPORTANT: This PDF contains approximately ${resultCount} search results. You MUST analyze and include EVERY SINGLE result in your JSON array. Do NOT skip, merge, or omit any result.
+IMPORTANT: This PDF has approximately ${resultCount} search results. Analyze EVERY result. Do NOT skip any.
 
-You are an AML/KYC compliance analyst. Analyze this Google search results PDF for adverse media screening of the entity: "${searchEntity}".
+Entity to screen: "${searchEntity}"
 
-For EACH search result, classify as ONE of:
-- TRUE_HIT: Entity name matches AND content contains ML/TF keywords
-- FALSE_HIT: Similar name but clearly a different entity
-- IRRELEVANT_MLTF: Entity matches but content is NOT ML/TF related
+Classify each result as ONE of: TRUE_HIT / FALSE_HIT / IRRELEVANT_MLTF / NO_HIT
+
+REQUIRED JSON format (all fields mandatory):
+[{"rank":1,"title":"Exact title","source":"domain.com","date":"YYYY-MM-DD","snippet":"Copy actual snippet text verbatim (2-3 sentences)","matchedKeywords":["exact keyword from text"],"cls":"TRUE_HIT","confidence":0.92,"reason":"TRUE_HIT: [Why entity name matches AND which specific ML/TF keywords triggered. Min 2 sentences.]","riskCat":"Money Laundering / Tax Evasion / Sanctions / Fraud / Criminal Investigation / N/A"}]
+
+CLASSIFICATION RULES:
+- TRUE_HIT: Entity name matches AND content contains ML/TF keywords (laundering, fraud, sanctions, terrorism, bribery, corruption, trafficking, investigation, prosecution, AML, CTF, OFAC etc.)
+  → reason format: "TRUE_HIT: [match explanation]. [keyword explanation]. [ML/TF relevance]."
+- FALSE_HIT: Similar name but clearly different entity (different jurisdiction/industry/legal form)
+  → reason format: "FALSE_HIT: [Why this is a different entity]. [Differences in jurisdiction/industry/type]."
+- IRRELEVANT_MLTF: Entity matches but content is commercial dispute or general news — NOT ML/TF
+  → reason format: "IRRELEVANT_MLTF: [Entity match confirmed]. [Why content is not ML/TF related]."
 - NO_HIT: Entity not mentioned or no risk keywords
+  → reason format: "NO_HIT: [Why no match or no keywords found]."
 
-Required JSON format — each item MUST include all fields:
-[{
-  "rank": 1,
-  "title": "Exact article title from search result",
-  "source": "source domain (e.g. scmp.com)",
-  "date": "YYYY-MM-DD or empty string",
-  "snippet": "Copy the actual snippet text shown in the search result (2-3 sentences, do NOT summarize)",
-  "matchedKeywords": ["exact keyword found in the text"],
-  "cls": "TRUE_HIT",
-  "confidence": 0.92,
-  "reason": "Detailed explanation: (1) Why entity name matches or does not match. (2) Which specific keywords triggered this classification. (3) Why this is or is not ML/TF related. Minimum 2 sentences.",
-  "riskCat": "Money Laundering / Tax Evasion / Sanctions / Fraud / Criminal Investigation / N/A"
-}]
-
-PDF content to analyze:
+PDF content:
 ${pdfText.slice(0, 30000)}
 
-REMINDER: Output ${resultCount} items in the JSON array, one per search result. Start with [ and end with ]. Nothing else.`;
+REMINDER: Output ${resultCount} JSON items. Start with [ end with ]. Nothing else.`;
 
 const res = await fetch('https://api.poe.com/v1/chat/completions', {
   method: 'POST',
