@@ -671,6 +671,7 @@ Return ONLY a JSON array (no markdown, no extra text):
   }],
   max_tokens: 4096
 })
+});
 
       setProgress(80); setStage('正在解析 AI 回應...');
 
