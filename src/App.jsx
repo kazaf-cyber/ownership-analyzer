@@ -659,13 +659,13 @@ REQUIRED JSON format (all fields mandatory):
 
 CLASSIFICATION RULES:
 - TRUE_HIT: Entity name matches AND content contains ML/TF keywords (laundering, fraud, sanctions, terrorism, bribery, corruption, trafficking, investigation, prosecution, AML, CTF, OFAC etc.)
-  → reason format: "TRUE_HIT: [match explanation]. [keyword explanation]. [ML/TF relevance]."
+  → reason format: "TRUE HIT: [match explanation]. [keyword explanation]. [ML/TF relevance]."
 - FALSE_HIT: Similar name but clearly different entity (different jurisdiction/industry/legal form)
-  → reason format: "FALSE_HIT: [Why this is a different entity]. [Differences in jurisdiction/industry/type]."
+  → reason format: "FALSE HIT: [Why this is a different entity]. [Specific differences]."
 - IRRELEVANT_MLTF: Entity matches but content is commercial dispute or general news — NOT ML/TF
-  → reason format: "IRRELEVANT_MLTF: [Entity match confirmed]. [Why content is not ML/TF related]."
-- NO_HIT: Entity not mentioned or no risk keywords
-  → reason format: "NO_HIT: [Why no match or no keywords found]."
+  → reason format: "IRRELEVANT ML/TF: [Entity match confirmed]. [Why content is not ML/TF related]."
+- NO_HIT: Entity not mentioned or no risk keywords found
+  → reason format: "NO HIT: [Why no match or no keywords found]."
 
 PDF content:
 ${pdfText.slice(0, 30000)}
@@ -814,15 +814,12 @@ try {
   <span className={`font-bold mr-1 ${
     r.cls === 'TRUE_HIT' ? 'text-red-700' :
     r.cls === 'FALSE_HIT' ? 'text-amber-700' :
-    r.cls === 'IRRELEVANT_MLTF' ? 'text-slate-600' :
-    'text-green-700'
+    r.cls === 'IRRELEVANT_MLTF' ? 'text-slate-600' : 'text-green-700'
   }`}>
-    {r.cls === 'TRUE_HIT' ? 'TRUE HIT:' :
-     r.cls === 'FALSE_HIT' ? 'FALSE HIT:' :
-     r.cls === 'IRRELEVANT_MLTF' ? 'IRRELEVANT ML/TF:' :
-     'NO HIT:'}
+    {r.cls === 'TRUE_HIT' ? 'TRUE HIT' : r.cls === 'FALSE_HIT' ? 'FALSE HIT' : r.cls === 'IRRELEVANT_MLTF' ? 'IRRELEVANT ML/TF' : 'NO HIT'}:
   </span>
-  {r.reason}
+  {/* 移除 reason 中重複的標籤前綴再顯示 */}
+  {r.reason.replace(/^(TRUE HIT|FALSE HIT|IRRELEVANT ML\/TF|NO HIT):\s*/i, '')}
 </p>
               <div className="flex gap-3 mt-2 text-xs text-gray-500">
                 <span>Risk: <b className={c.text}>{r.riskCat}</b></span>
