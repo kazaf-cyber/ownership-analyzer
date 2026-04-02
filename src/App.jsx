@@ -578,8 +578,8 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
   React.useEffect(() => {
     if (analysisComplete && results.length > 0) {
       try {
-        sessionStorage.setItem(AMS_SESSION_KEY, JSON.stringify({
-  results, searchEntity, analysisComplete, detectedLang, filterType, poeKey,
+       sessionStorage.setItem(AMS_SESSION_KEY, JSON.stringify({
+  results, searchEntity, analysisComplete, detectedLang, filterType, apiKey,
 }));
       } catch {}
     }
@@ -612,52 +612,51 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
     try {
       setProgress(20); setStage('正在讀取 PDF 文件...');
 
-      const base64Data = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (ev) => resolve(ev.target.result.split(',')[1]);
-        reader.onerror = () => reject(new Error('無法讀取 PDF 文件'));
-        reader.readAsDataURL(pdfFile);
-      });
+      await new Promise((resolve, reject) => {
+  if (window.pdfjsLib) return resolve();
+  const s = document.createElement('script');
+  s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+  s.onload = () => {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    resolve();
+  };
+  s.onerror = () => reject(new Error('無法載入 PDF.js'));
+  document.head.appendChild(s);
+});
 
-      setProgress(40); setStage('正在傳送至 OpenRouter AI 分析...');
+const arrayBuf = await new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = ev => resolve(ev.target.result);
+  reader.onerror = () => reject(new Error('無法讀取 PDF'));
+  reader.readAsArrayBuffer(pdfFile);
+});
 
-      const prompt = lang === 'zh'
-        ? `你是一位專業的 AML/KYC 合規分析師。請仔細分析此 Google 搜尋結果頁面 PDF，對搜索實體「${searchEntity}」進行不良媒體篩查。
+const pdf = await window.pdfjsLib.getDocument({ data: arrayBuf }).promise;
+let pdfText = '';
+for (let i = 1; i <= Math.min(pdf.numPages, 3); i++) {
+  const page = await pdf.getPage(i);
+  const content = await page.getTextContent();
+  pdfText += content.items.map(x => x.str).join(' ') + '\n';
+}
+if (!pdfText.trim()) throw new Error('PDF 無法提取文字（可能是掃描圖片格式，請嘗試複製貼上模式）');
 
-對頁面上每條搜尋結果，按以下標準分類：
-- TRUE_HIT：實體名稱匹配，且內容包含 ML/TF 相關關鍵詞（洗錢、詐騙、制裁、恐怖主義、賄賂、腐敗、人口販賣、調查、起訴、逃稅等）
-- FALSE_HIT：名稱相似但明顯為不同實體（不同司法管轄區 / 法律形式 / 行業）
-- IRRELEVANT_MLTF：實體名稱匹配但內容為商業糾紛或一般新聞，與 ML/TF 無關
-- NO_HIT：未提及實體或無相關關鍵詞
+setProgress(45); setStage('Poe AI 分析中...');
 
-必須只返回 JSON 數組（不得有任何 markdown 格式或前後文字），結構如下：
-[{"rank":1,"title":"文章標題","source":"來源域名","date":"YYYY-MM-DD或空字串","snippet":"簡短摘要","matchedKeywords":["關鍵詞1"],"cls":"TRUE_HIT","confidence":0.92,"reason":"分類原因","riskCat":"洗錢或N/A"}]`
-        : `You are a professional AML/KYC compliance analyst. Analyze this Google search results PDF for adverse media screening of: "${searchEntity}".
-
-Classify each result as ONE of:
-- TRUE_HIT: Entity name matches AND content contains ML/TF keywords (money laundering, fraud, sanctions, terrorism, bribery, corruption, trafficking, investigation, indictment, prosecution, AML, CTF, OFAC, etc.)
-- FALSE_HIT: Similar name but clearly a different entity (different jurisdiction / legal form / industry)
-- IRRELEVANT_MLTF: Entity matches but content is commercial dispute or general news—NOT ML/TF related
-- NO_HIT: Entity not mentioned or no risk keywords found
-
-Return ONLY a JSON array (no markdown, no extra text):
-[{"rank":1,"title":"Article title","source":"source domain","date":"YYYY-MM-DD or empty","snippet":"Brief summary","matchedKeywords":["keyword1"],"cls":"TRUE_HIT","confidence":0.92,"reason":"Classification reason","riskCat":"Money Laundering / Fraud / etc or N/A"}]`;
-
-      // ✅ OpenRouter API（支援香港 IP，呼叫 Gemini 2.5 Flash）
-      
-      setProgress(45); setStage('正在傳送至 Poe AI 分析...');
+// 重新建立含 PDF 文字的 prompt
+const fullPrompt = prompt + '\n\nPDF 文字內容：\n' + pdfText.slice(0, 12000);
 
 const res = await fetch('https://api.poe.com/v1/chat/completions', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
-    'Authorization': `Bearer ${openrouterKey.trim()}`,
+    'Authorization': `Bearer ${apiKey.trim()}`,
   },
   body: JSON.stringify({
-    model: 'Gemini-2.5-Flash',
-    messages: [{ role: 'user', content: prompt }],
+    model: 'gemini-3.1-flash-lite',
+    messages: [{ role: 'user', content: fullPrompt }],
     temperature: 0.1,
-    max_tokens: 4096,
+    max_tokens: 4096
   })
 });
 
