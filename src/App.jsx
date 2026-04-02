@@ -654,12 +654,19 @@ Return ONLY a JSON array (no markdown, no extra text):
       role: 'user',
       content: [
         { type: 'text', text: prompt },
-        { type: 'image_url', image_url: { url: `data:application/pdf;base64,${base64Data}` } }
-      ]
-    }]
-  })
-});
-
+        { type: 'file', file: { filename: 'search-results.pdf',
+          file_data: `data:application/pdf;base64,${base64Data}`
+        }
+      }
+    ]
+  }],
+  plugins: [{
+    id: 'file-parser',
+    pdf: { engine: 'cloudflare-ai' }  // ← 免費引擎
+  }],
+  temperature: 0.1,
+  max_tokens: 4096
+})
       setProgress(80); setStage('正在解析 AI 回應...');
 
       if (!res.ok) {
