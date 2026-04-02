@@ -650,12 +650,32 @@ const fullPrompt = `CRITICAL INSTRUCTION: You MUST respond with ONLY a valid JSO
 
 IMPORTANT: This PDF contains approximately ${resultCount} search results. You MUST analyze and include EVERY SINGLE result in your JSON array. Do NOT skip, merge, or omit any result.
 
-${prompt}
+You are an AML/KYC compliance analyst. Analyze this Google search results PDF for adverse media screening of the entity: "${searchEntity}".
 
-PDF 文字內容：
+For EACH search result, classify as ONE of:
+- TRUE_HIT: Entity name matches AND content contains ML/TF keywords
+- FALSE_HIT: Similar name but clearly a different entity
+- IRRELEVANT_MLTF: Entity matches but content is NOT ML/TF related
+- NO_HIT: Entity not mentioned or no risk keywords
+
+Required JSON format — each item MUST include all fields:
+[{
+  "rank": 1,
+  "title": "Exact article title from search result",
+  "source": "source domain (e.g. scmp.com)",
+  "date": "YYYY-MM-DD or empty string",
+  "snippet": "Copy the actual snippet text shown in the search result (2-3 sentences, do NOT summarize)",
+  "matchedKeywords": ["exact keyword found in the text"],
+  "cls": "TRUE_HIT",
+  "confidence": 0.92,
+  "reason": "Detailed explanation: (1) Why entity name matches or does not match. (2) Which specific keywords triggered this classification. (3) Why this is or is not ML/TF related. Minimum 2 sentences.",
+  "riskCat": "Money Laundering / Tax Evasion / Sanctions / Fraud / Criminal Investigation / N/A"
+}]
+
+PDF content to analyze:
 ${pdfText.slice(0, 30000)}
 
-REMINDER: Output ${resultCount} items in the JSON array, one for each search result. Start with [ and end with ]. Nothing else.`;
+REMINDER: Output ${resultCount} items in the JSON array, one per search result. Start with [ and end with ]. Nothing else.`;
 
 const res = await fetch('https://api.poe.com/v1/chat/completions', {
   method: 'POST',
@@ -931,7 +951,7 @@ try {
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <div className="flex items-center gap-2 mb-3">
                 <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">3</span>
-                <h2 className="text-sm font-bold text-gray-800">OpenRouter AI 分析</h2>
+                <h2 className="text-sm font-bold text-gray-800">AI 分析</h2>
               </div>
               <div className="mb-3">
                 <div className="flex items-center justify-between mb-1">
@@ -1058,7 +1078,7 @@ try {
                 {n:2,icon:'🔍',t:'手動執行 Google 搜尋',d:'點擊按鈕在瀏覽器中查看第一頁搜尋結果'},
                 {n:3,icon:'📄',t:'儲存為 PDF',d:'使用 Ctrl+P → 另存為 PDF'},
                 {n:4,icon:'⬆️',t:'上傳 PDF',d:'在步驟 2 上傳剛儲存的 PDF 文件'},
-                {n:5,icon:'🤖',t:'OpenRouter AI 分析',d:'透過 OpenRouter 中轉呼叫 Gemini 2.5 Flash（支援香港 IP），AI 讀取 PDF 並分類'},
+                {n:5,icon:'🤖',t:'AI 分析',d:'透過 AI 讀取 PDF 並分類'},
                 {n:6,icon:'📊',t:'顯示分類結果',d:'按 True Hit / False Hit / Irrelevant / No Hit 分類展示'}
               ].map(s => (
                 <div key={s.n} className="flex items-start gap-3 pb-3 mb-3 border-b last:border-0">
