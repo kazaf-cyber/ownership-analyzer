@@ -644,33 +644,20 @@ Return ONLY a JSON array (no markdown, no extra text):
 [{"rank":1,"title":"Article title","source":"source domain","date":"YYYY-MM-DD or empty","snippet":"Brief summary","matchedKeywords":["keyword1"],"cls":"TRUE_HIT","confidence":0.92,"reason":"Classification reason","riskCat":"Money Laundering / Fraud / etc or N/A"}]`;
 
       // ✅ OpenRouter API（支援香港 IP，呼叫 Gemini 2.5 Flash）
-      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey.trim()}`,
-          'HTTP-Referer': 'https://kyc-aml-system.app',
-          'X-Title': 'KYC AML Compliance System'
-        },
-        body: JSON.stringify({
-  model: 'anthropic/claude-opus-4-5',
-  messages: [{
-    role: 'user',
-    content: [
-      {
-        type: 'text',
-        text: prompt
-      },
-      {
-        type: 'image_url',
-        image_url: {
-          url: `data:application/pdf;base64,${base64Data}`
-        }
-      }
-    ]
-  }],
-  max_tokens: 4096
-})
+      const res = await fetch('/api/analyze', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    apiKey: apiKey.trim(),
+    model: 'anthropic/claude-3.5-haiku',
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: `data:application/pdf;base64,${base64Data}` } }
+      ]
+    }]
+  })
 });
 
       setProgress(80); setStage('正在解析 AI 回應...');
