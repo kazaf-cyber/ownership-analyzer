@@ -579,8 +579,8 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
     if (analysisComplete && results.length > 0) {
       try {
         sessionStorage.setItem(AMS_SESSION_KEY, JSON.stringify({
-          results, searchEntity, analysisComplete, detectedLang, filterType, apiKey,
-        }));
+  results, searchEntity, analysisComplete, detectedLang, filterType, poeKey,
+}));
       } catch {}
     }
   }, [results, analysisComplete, detectedLang, filterType, searchEntity, apiKey]);
@@ -912,11 +912,15 @@ const rawText = data?.choices?.[0]?.message?.content || '[]';
                   </div>
                 )}
                 <p className="text-xs text-gray-400 mt-1">
-                  使用 <b>gemini-2.5-flash-lite-preview-09-2025</b>（經 OpenRouter 中轉，支援香港 IP）。
-                  <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline ml-1">
-                    取得免費 API Key →
-                  </a>
-                </p>
+               使用 <b>Gemini-2.5-Flash</b>（via Poe API）。
+               <a href="https://poe.com/api_key" target="_blank" rel="noopener noreferrer"
+             className="text-blue-500 hover:underline ml-1">
+             取得 Poe API Key →
+  </a>
+</p>
+<p className="text-xs text-amber-600 mt-1">
+  ⚠️ 若 CORS 限制，系統自動改用 PDF 文字提取模式（功能相同）
+</p>
               </div>
 
               {errorMsg && (
