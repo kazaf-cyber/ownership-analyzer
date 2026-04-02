@@ -600,7 +600,7 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
 
   const runAnalysis = async () => {
     if (!pdfFile) { setErrorMsg('請先上傳搜尋結果 PDF 文件'); return; }
-    if (!apiKey.trim()) { setErrorMsg('請輸入 OpenRouter API Key'); return; }
+    if (!apiKey.trim()) { setErrorMsg('請輸入 POE API Key'); return; }
 
     clearAllTimers();
     setIsAnalyzing(true); setAnalysisComplete(false); setResults([]);
@@ -960,7 +960,7 @@ try {
               </div>
               <div className="mb-3">
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs text-gray-500">OpenRouter API Key</label>
+                  <label className="text-xs text-gray-500">POE API Key</label>
                   <button onClick={() => setShowKeyInput(!showKeyInput)} className="text-xs text-blue-500 hover:underline">
                     {showKeyInput ? '隱藏' : '顯示/修改'}
                   </button>
