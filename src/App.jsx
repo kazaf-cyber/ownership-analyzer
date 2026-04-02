@@ -644,40 +644,32 @@ Return ONLY a JSON array (no markdown, no extra text):
 [{"rank":1,"title":"Article title","source":"source domain","date":"YYYY-MM-DD or empty","snippet":"Brief summary","matchedKeywords":["keyword1"],"cls":"TRUE_HIT","confidence":0.92,"reason":"Classification reason","riskCat":"Money Laundering / Fraud / etc or N/A"}]`;
 
       // ✅ OpenRouter API（支援香港 IP，呼叫 Gemini 2.5 Flash）
-      const res = await fetch('/api/analyze', {
+      
+      setProgress(45); setStage('正在傳送至 Poe AI 分析...');
+
+const res = await fetch('https://api.poe.com/v1/chat/completions', {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${openrouterKey.trim()}`,
+  },
   body: JSON.stringify({
-    apiKey: apiKey.trim(),
-    model: 'google/gemini-2.5-flash-lite-preview-09-2025',
-    messages: [{
-      role: 'user',
-      content: [
-        { type: 'text', text: prompt },
-        { type: 'file', file: { filename: 'search-results.pdf',
-          file_data: `data:application/pdf;base64,${base64Data}`
-        }
-      }
-    ]
-  }],
-  plugins: [{
-    id: 'file-parser',
-    pdf: { engine: 'cloudflare-ai' }  // ← 免費引擎
-  }],
-  temperature: 0.1,
-  max_tokens: 4096
- })
+    model: 'Gemini-2.5-Flash',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.1,
+    max_tokens: 4096,
+  })
 });
-      setProgress(80); setStage('正在解析 AI 回應...');
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData?.error?.message || `HTTP ${res.status}`);
-      }
+setProgress(80); setStage('正在解析 AI 回應...');
 
-      const data = await res.json();
-      // ✅ OpenRouter 回應格式（OpenAI 相容格式，非 Gemini 原生格式）
-      const rawText = data?.choices?.[0]?.message?.content || '[]';
+if (!res.ok) {
+  const errData = await res.json().catch(() => ({}));
+  throw new Error(errData?.error?.message || `HTTP ${res.status}`);
+}
+
+const data = await res.json();
+const rawText = data?.choices?.[0]?.message?.content || '[]';
 
       let parsed;
       try {
