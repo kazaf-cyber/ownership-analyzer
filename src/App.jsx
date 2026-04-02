@@ -643,7 +643,7 @@ Classify each result as ONE of:
 Return ONLY a JSON array (no markdown):
 [{"rank":1,"title":"Title","source":"domain","date":"YYYY-MM-DD","snippet":"Summary","matchedKeywords":["kw"],"cls":"TRUE_HIT","confidence":0.92,"reason":"Reason","riskCat":"Money Laundering or N/A"}]`;
 
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey.trim()}`;
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey.trim()}`;
       const res = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -907,7 +907,7 @@ Return ONLY a JSON array (no markdown):
                   </div>
                 )}
                 <p className="text-xs text-gray-400 mt-1">
-                  使用 <b>Gemini 2.0 Flash</b>。
+                  使用 <b>Gemini 2.5 Flash</b>。
                   <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline ml-1">
                     取得免費 API Key →
                   </a>
@@ -1008,7 +1008,7 @@ Return ONLY a JSON array (no markdown):
               {n:2,t:'手動 Google 搜尋',d:'點擊按鈕開啟 Google，查看第一頁結果'},
               {n:3,t:'儲存為 PDF',d:'Ctrl+P → 另存為 PDF'},
               {n:4,t:'上傳 PDF',d:'在步驟 2 上傳 PDF 文件'},
-              {n:5,t:'Gemini AI 分析',d:'Gemini 2.0 Flash 讀取 PDF，語意分析每條結果'},
+              {n:5,t:'Gemini AI 分析',d:'Gemini 2.5 Flash 讀取 PDF，語意分析每條結果'},
               {n:6,t:'顯示分類結果',d:'TRUE_HIT / FALSE_HIT / IRRELEVANT / NO_HIT'},
             ].map(s => (
               <div key={s.n} className="flex items-start gap-3 pb-3 mb-3 border-b last:border-0">
