@@ -670,12 +670,29 @@ if (!res.ok) {
 const data = await res.json();
 const rawText = data?.choices?.[0]?.message?.content || '[]';
 
-      let parsed;
-      try {
-        const cleaned = rawText.replace(/^```jsons*/i,'').replace(/^```s*/i,'').replace(/s*```$/i,'').trim();
-        parsed = JSON.parse(cleaned);
-      } catch { throw new Error('AI 回應格式錯誤，請重試'); }
+ console.log('[AMS] Poe rawText:', rawText);
 
+let parsed;
+try {
+  // 嘗試方法 1：直接清理後解析
+  const cleaned = rawText
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+  parsed = JSON.parse(cleaned);
+} catch {
+  try {
+    // 嘗試方法 2：從回應中提取 JSON 陣列（AI 有時加前後說明文字）
+    const match = rawText.match(/\[[\s\S]*\]/);
+    if (!match) throw new Error('no array found');
+    parsed = JSON.parse(match[0]);
+  } catch {
+    // 最後手段：顯示實際回傳內容方便除錯
+    const preview = rawText ? rawText.slice(0, 200) : '(empty)';
+    throw new Error(`AI 回應格式錯誤。實際回傳：${preview}`);
+  }
+}
       if (!Array.isArray(parsed) || parsed.length === 0) {
         parsed = [{ rank:1, title: lang==='zh'?'無分析結果':'No results', source:'', date:'',
           snippet: lang==='zh'?'AI未返回有效結果。':'AI returned no valid results.',
