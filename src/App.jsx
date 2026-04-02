@@ -841,7 +841,7 @@ try {
           <Shield className="w-5 h-5" /> Adverse Media Screening
         </h1>
         <p className="text-xs text-slate-400 mt-0.5">
-          🔍 自動語言檢測 | 手動 Google 搜尋 → PDF 上傳 | OpenRouter（Gemini 2.5 Flash）分類
+          🔍 自動語言檢測 | 手動 Google 搜尋 → PDF 上傳 | AI分類
         </p>
       </div>
 
