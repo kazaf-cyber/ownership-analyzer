@@ -653,7 +653,7 @@ Return ONLY a JSON array (no markdown, no extra text):
           'X-Title': 'KYC AML Compliance System'
         },
         body: JSON.stringify({
-          model: 'google/gemini-2.5-flash',
+          model: 'google/gemini-2.5-flash-lite',
           messages: [{
             role: 'user',
             content: [
