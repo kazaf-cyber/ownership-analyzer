@@ -2081,6 +2081,15 @@ export default function KYCSystem() {
       </div>
       {view === 'workspace' ? (<div className="flex-1 flex flex-col overflow-hidden p-3">{renderWorkspace()}</div>) : (<div className="flex-1 overflow-y-auto p-5">{view === 'dashboard' && renderDashboard()}{view === 'search' && renderSearch()}{view === 'snapshots' && renderSnapshots()}{view === 'settings' && renderSettings()}{view === 'report' && renderReport()}</div>)}
       {renderModals()}
+      {/* ── 版權頁腳 ── */}
+<div className="fixed bottom-0 left-0 right-0 bg-gray-900 text-center py-1.5 z-50"
+  style={{ borderTop: '1px solid #374151' }}>
+  <p className="text-xs text-gray-500">
+    © 2026 Designed & Developed by{' '}
+    <span className="text-blue-400 font-semibold">Kan Tsui</span>
+    {' '}· KYC Compliance Management System · All Rights Reserved
+  </p>
+</div>
     </div>
   );
 }
