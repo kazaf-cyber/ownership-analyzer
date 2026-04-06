@@ -2090,14 +2090,14 @@ export default function KYCSystem() {
           left: 0,
           right: 0,
           zIndex: 9999,
-          background: 'rgba(15, 23, 42, 0.95)',
+          background: 'rgba(15,23,42,0.95)',
           borderTop: '1px solid #334155',
           textAlign: 'center',
           padding: '5px 0',
         }}>
           <p style={{ margin: 0, fontSize: 11, color: '#94a3b8' }}>
             © 2026 Designed &amp; Developed by{' '}
-            <span style={{ color: '#60a5fa', fontWeight: 700 }}>Kazaf Tsui</span>
+            <span style={{ color: '#60a5fa', fontWeight: 700 }}>Kan Tsui</span>
             {' '}· KYC/AML Compliance Management System · All Rights Reserved
           </p>
         </div>,
