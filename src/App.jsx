@@ -2097,7 +2097,7 @@ export default function KYCSystem() {
         }}>
           <p style={{ margin: 0, fontSize: 11, color: '#94a3b8' }}>
             © 2026 Designed &amp; Developed by{' '}
-            <span style={{ color: '#60a5fa', fontWeight: 700 }}>Kan Tsui</span>
+            <span style={{ color: '#60a5fa', fontWeight: 700 }}>Kazaf Tsui</span>
             {' '}· KYC/AML Compliance Management System · All Rights Reserved
           </p>
         </div>,
