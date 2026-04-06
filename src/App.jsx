@@ -2086,7 +2086,7 @@ export default function KYCSystem() {
   style={{ borderTop: '1px solid #374151' }}>
   <p className="text-xs text-gray-500">
     © 2026 Designed & Developed by{' '}
-    <span className="text-blue-400 font-semibold">Kan Tsui</span>
+    <span className="text-blue-400 font-semibold">Kazaf Tsui</span>
     {' '}· KYC Compliance Management System · All Rights Reserved
   </p>
 </div>
