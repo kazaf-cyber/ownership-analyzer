@@ -2082,14 +2082,17 @@ export default function KYCSystem() {
       {view === 'workspace' ? (<div className="flex-1 flex flex-col overflow-hidden p-3">{renderWorkspace()}</div>) : (<div className="flex-1 overflow-y-auto p-5 pb-6">{view === 'dashboard' && renderDashboard()}{view === 'search' && renderSearch()}{view === 'snapshots' && renderSnapshots()}{view === 'settings' && renderSettings()}{view === 'report' && renderReport()}</div>)}
       {renderModals()}
       {/* ── 版權頁腳 ── */}
-<div className="fixed bottom-0 left-0 right-0 bg-gray-900 text-center py-1.5 z-50"
-  style={{ borderTop: '1px solid #374151' }}>
-  <p className="text-xs text-gray-500">
-    © 2026 Designed & Developed by{' '}
-    <span className="text-blue-400 font-semibold">Kazaf Tsui</span>
-    {' '}· KYC Compliance Management System · All Rights Reserved
-  </p>
-</div>
+ <div
+      className="fixed bottom-0 left-0 right-0 text-center py-1 z-[200]"
+      style={{ background: 'rgba(15,23,42,0.92)', borderTop: '1px solid #334155' }}
+    >
+      <p className="text-xs" style={{ color: '#94a3b8' }}>
+        © 2026 Designed &amp; Developed by{' '}
+        <span style={{ color: '#60a5fa', fontWeight: 700 }}>Kazaf Tsui</span>
+        {' '}· KYC/AML Compliance Management System · All Rights Reserved
+      </p>
+    </div>
+      
     </div>
   );
 }
