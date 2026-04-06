@@ -17,7 +17,8 @@
  * - 數據準確性：修正時區和編碼問題
  */
 
-import React, { useState, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useRef, useCallback } from 'react'
+import { createPortal } from 'react-dom';
 import { PieChart, Pie, Cell, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer } from 'recharts';
 import { Search, Brain, AlertTriangle, CheckCircle, XCircle, Info, ChevronDown, ChevronRight, Globe, ExternalLink, Loader, Shield } from 'lucide-react';
 
@@ -2082,16 +2083,26 @@ export default function KYCSystem() {
       {view === 'workspace' ? (<div className="flex-1 flex flex-col overflow-hidden p-3">{renderWorkspace()}</div>) : (<div className="flex-1 overflow-y-auto p-5 pb-6">{view === 'dashboard' && renderDashboard()}{view === 'search' && renderSearch()}{view === 'snapshots' && renderSnapshots()}{view === 'settings' && renderSettings()}{view === 'report' && renderReport()}</div>)}
       {renderModals()}
       {/* ── 版權頁腳 ── */}
- <div
-      className="fixed bottom-0 left-0 right-0 text-center py-1 z-[200]"
-      style={{ background: 'rgba(15,23,42,0.92)', borderTop: '1px solid #334155' }}
-    >
-      <p className="text-xs" style={{ color: '#94a3b8' }}>
-        © 2026 Designed &amp; Developed by{' '}
-        <span style={{ color: '#60a5fa', fontWeight: 700 }}>Kazaf Tsui</span>
-        {' '}· KYC/AML Compliance Management System · All Rights Reserved
-      </p>
-    </div>
+ {createPortal(
+        <div style={{
+          position: 'fixed',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          zIndex: 9999,
+          background: 'rgba(15, 23, 42, 0.95)',
+          borderTop: '1px solid #334155',
+          textAlign: 'center',
+          padding: '5px 0',
+        }}>
+          <p style={{ margin: 0, fontSize: 11, color: '#94a3b8' }}>
+            © 2026 Designed &amp; Developed by{' '}
+            <span style={{ color: '#60a5fa', fontWeight: 700 }}>Kan Tsui</span>
+            {' '}· KYC/AML Compliance Management System · All Rights Reserved
+          </p>
+        </div>,
+        document.body
+      )}
       
     </div>
   );
