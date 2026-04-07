@@ -1729,6 +1729,7 @@ export default function KYCSystem() {
           </div>
         </div>
       </div>
+     </div>
     );
   };
 
