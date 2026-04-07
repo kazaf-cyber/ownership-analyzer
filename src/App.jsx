@@ -1145,6 +1145,7 @@ export default function KYCSystem() {
   const [contextMenu, setContextMenu] = useState(null);
   const [dagSelected, setDagSelected] = useState(null);
   const [dragMode, setDragMode] = useState(false);
+  const [workspaceTab, setWorkspaceTab] = useState('list');
   const [mobileSideOpen, setMobileSideOpen] = useState(false);
   const [dragState, setDragState] = useState(null);
   const [entityFilter, setEntityFilter] = useState('');
@@ -1618,8 +1619,34 @@ export default function KYCSystem() {
       { label: lang === 'zh' ? '🗑️ 刪除' : '🗑️ Del', action: (id) => openModal('confirmDeleteSingle', { entityId: id }) },
     ];
     return (
-      <div className="flex gap-3 h-full">
-        <div className="flex flex-col bg-white rounded-xl border overflow-hidden" style={{ width: '290px', minWidth: '250px' }}>
+  <div className="flex flex-col gap-2 h-full">
+
+    {/* 手機切換 Tab（電腦隱藏）*/}
+    <div className="md:hidden flex rounded-xl overflow-hidden border shrink-0">
+      <button
+        onClick={() => setWorkspaceTab('list')}
+        className={`flex-1 py-2 text-xs font-bold transition-colors ${
+          workspaceTab === 'list' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500'
+        }`}
+      >
+        📋 {t.entityList}
+      </button>
+      <button
+        onClick={() => setWorkspaceTab('diagram')}
+        className={`flex-1 py-2 text-xs font-bold transition-colors ${
+          workspaceTab === 'diagram' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500'
+        }`}
+      >
+        🔗 {t.structureDiagram}
+      </button>
+    </div>
+
+    {/* 主體：電腦並排 / 手機按 Tab 切換 */}
+    <div className="flex gap-3 flex-1 overflow-hidden">
+        <div
+  className={`flex-col bg-white rounded-xl border overflow-hidden ${workspaceTab === 'diagram' ? 'hidden md:flex' : 'flex'}`}
+  style={{ width: '290px', minWidth: '250px' }}
+>
           <div className="p-2 border-b flex items-center justify-between shrink-0">
             <span className="text-sm font-bold text-gray-700">{t.entityList} ({entities.length})</span>
             <div className="flex gap-1">
@@ -1650,7 +1677,7 @@ export default function KYCSystem() {
             })}
           </div>
         </div>
-        <div className="flex-1 flex flex-col bg-white rounded-xl border overflow-hidden">
+        <div className={`flex-1 flex-col bg-white rounded-xl border overflow-hidden ${workspaceTab === 'list' ? 'hidden md:flex' : 'flex'}`}>
           <div className="p-2 border-b flex items-center gap-2 shrink-0 flex-wrap">
             <span className="text-sm font-bold text-gray-700">{t.structureDiagram}</span><div className="flex-1" />
             <button onClick={() => setDragMode(!dragMode)} className={`px-2 py-1 rounded text-xs font-medium ${dragMode ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-600'}`}>{dragMode ? t.dragModeOn : t.dragMode}</button>
