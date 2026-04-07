@@ -1145,6 +1145,7 @@ export default function KYCSystem() {
   const [contextMenu, setContextMenu] = useState(null);
   const [dagSelected, setDagSelected] = useState(null);
   const [dragMode, setDragMode] = useState(false);
+  const [mobileSideOpen, setMobileSideOpen] = useState(false);
   const [dragState, setDragState] = useState(null);
   const [entityFilter, setEntityFilter] = useState('');
   const [modalType, setModalType] = useState(null);
@@ -1585,7 +1586,7 @@ export default function KYCSystem() {
     const KPI = ({ label, value, color, sub }) => (<div className="bg-white rounded-xl shadow-sm border p-3"><div className="text-xs text-gray-500">{label}</div><div className={`text-xl font-bold ${color || 'text-gray-800'} mt-1`}>{value}</div>{sub && <div className="text-xs text-gray-400 mt-0.5">{sub}</div>}</div>);
     return (<div>
       <div className="flex items-center justify-between mb-3"><h2 className="text-lg font-bold text-gray-800">{t.dashboard}</h2><div className="flex gap-2"><button onClick={exportCSV} className="text-xs bg-green-600 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-green-700">{t.exportCSV}</button><button onClick={() => openModal('confirmClearAll')} className="text-xs text-gray-400 hover:text-red-500">{t.clearAll}</button></div></div>
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
         <KPI label={t.totalEntities} value={entities.length} sub={`${entities.filter(e => e.type === 'company').length} ${t.companies}, ${entities.filter(e => e.type === 'person').length} ${t.persons}`} />
         <KPI label={t.highRisk} value={riskDist.High} color="text-red-600" sub={t.entitiesRatedHigh} />
         <KPI label={t.overdueReviews} value={overdue} color={overdue > 0 ? 'text-orange-600' : 'text-green-600'} />
@@ -1593,7 +1594,7 @@ export default function KYCSystem() {
         <KPI label={t.strFlagged} value={entities.filter(e => e.str?.flagged).length} />
         <KPI label={t.dueDiligenceLevel} value={`S:${ddDist.SDD} C:${ddDist.CDD} E:${ddDist.EDD}`} sub="SDD / CDD / EDD" />
       </div>
-      <div className="grid grid-cols-2 gap-3 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
         <div className="bg-white rounded-xl shadow-sm border p-3"><h3 className="text-xs font-semibold text-gray-600 mb-1">{t.riskDistribution}</h3><ResponsiveContainer width="100%" height={150}><PieChart><Pie data={pieData} cx="50%" cy="50%" innerRadius={35} outerRadius={60} dataKey="value" label={({ name, value }) => `${name}:${value}`}>{pieData.map((e, i) => <Cell key={i} fill={RISK_COLORS[e.key] || PIE_COLORS[i]} />)}</Pie></PieChart></ResponsiveContainer></div>
         <div className="bg-white rounded-xl shadow-sm border p-3"><h3 className="text-xs font-semibold text-gray-600 mb-1">{t.entityTypes}</h3><ResponsiveContainer width="100%" height={150}><BarChart data={barData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" tick={{ fontSize: 8 }} /><YAxis /><Bar dataKey="count" fill="#6366f1" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div>
       </div>
@@ -2074,13 +2075,24 @@ export default function KYCSystem() {
 
   return (
     <div className="flex h-screen bg-gray-50 text-gray-800 overflow-hidden" style={{ fontSize: '13px' }}>
+      {/* 手機頂部導航欄 */}
+<div className="md:hidden fixed top-0 left-0 right-0 h-10 bg-slate-800 text-white flex items-center px-3 z-30 shrink-0">
+  <button
+    onClick={() => setMobileSideOpen(!mobileSideOpen)}
+    className="text-white p-1 text-lg leading-none"
+  >
+    ☰
+  </button>
+  <span className="text-sm font-bold ml-2">🛡️ KYC/AML</span>
+  <span className="text-xs text-slate-400 ml-1">{t.appSub}</span>
+</div>
       {toastMsg && <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg text-sm font-medium animate-pulse">{toastMsg}</div>}
-      <div className="w-44 bg-slate-800 text-white flex flex-col shrink-0">
+      {/* 手機背景遮罩 */} {mobileSideOpen && (   <div     className="fixed inset-0 bg-black/50 z-40 md:hidden"     onClick={() => setMobileSideOpen(false)}   /> )}  {/* 側欄 */} <div className={`   fixed md:relative left-0 top-0 bottom-0 z-50   w-44 bg-slate-800 text-white flex flex-col shrink-0   transition-transform duration-200   ${mobileSideOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 `}>
         <div className="p-3 border-b border-slate-700"><div className="text-base font-bold">🛡️ {t.appTitle}</div><div className="text-xs text-slate-400">{t.appSub}</div><button onClick={() => setLang(l => l === 'zh' ? 'en' : 'zh')} className="mt-2 flex items-center gap-1 px-2 py-1 rounded text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200">{lang === 'zh' ? '🇬🇧 EN' : '🇹🇼 中文'}</button></div>
         <nav className="flex-1 py-1">{navItems.map(item => (<button key={item.id} onClick={() => setView(item.id)} className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${view === item.id ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><span>{item.icon}</span>{item.label}{item.id === 'snapshots' && snapshots.length > 0 && <span className="ml-auto bg-slate-600 text-slate-200 px-1.5 py-0.5 rounded-full text-xs leading-none">{snapshots.length}</span>}</button>))}</nav>
         {autoTodos.filter(td => td.priority === 'critical' || td.priority === 'high').length > 0 && <div className="p-2 border-t border-slate-700 text-xs text-red-400">🔔 {autoTodos.filter(td => td.priority === 'critical' || td.priority === 'high').length} {t.urgentItems}</div>}
       </div>
-      {view === 'workspace' ? (<div className="flex-1 flex flex-col overflow-hidden p-3 pb-8">{renderWorkspace()}</div>) : (<div className="flex-1 overflow-y-auto p-5 pb-8">{view === 'dashboard' && renderDashboard()}{view === 'search' && renderSearch()}{view === 'snapshots' && renderSnapshots()}{view === 'settings' && renderSettings()}{view === 'report' && renderReport()}</div>)}
+      {view === 'workspace' ? (<div className="flex-1 flex flex-col overflow-hidden p-3 pb-8 pt-10 md:pt-0">{renderWorkspace()}</div>) : (<div className="flex-1 overflow-y-auto p-5 pb-8 pt-10 md:pt-0">{view === 'dashboard' && renderDashboard()}{view === 'search' && renderSearch()}{view === 'snapshots' && renderSnapshots()}{view === 'settings' && renderSettings()}{view === 'report' && renderReport()}</div>)}
       {renderModals()}
       {/* ── 版權頁腳 ── */}
  {createPortal(
