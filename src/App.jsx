@@ -592,7 +592,7 @@ RESPONSE FORMAT — JSON array only, no other text:
 Analyze ALL ~${resultCount} results from this PDF. Start with [ end with ].
 
 PDF content:
-${pdfText.slice(0, 30000)}`;
+${pdfText.slice(0, 30000)}
 
 REMINDER: Output ${resultCount} JSON items. Start with [ end with ]. Nothing else.`;
 
