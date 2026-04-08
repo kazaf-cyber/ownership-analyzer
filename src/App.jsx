@@ -526,40 +526,97 @@ function AdverseMediaScreening({ entityName: initialEntityName }) {
       if (!pdfText.trim()) throw new Error('PDF 無法提取文字（可能是掃描圖片格式，請嘗試複製貼上模式）');
       setProgress(45); setStage('Poe AI 分析中...');
       const resultCount = (pdfText.match(/https?:\/\//g) || []).length;
-      const fullPrompt = `CRITICAL INSTRUCTION: You MUST respond with ONLY a valid JSON array. No explanations, no markdown, no text before or after. Start with [ end with ].
+      const fullPrompt = `You are a senior compliance analyst performing Adverse Media Screening for KYC/AML purposes.
 
-IMPORTANT: This PDF has approximately ${resultCount} search results. Analyze EVERY result. Do NOT skip any.
+TASK: Analyze each Google search result from the PDF and classify it using a strict TWO-STAGE process.
 
-Entity to screen: "${searchEntity}"
+═══════════════════════════════════════════
+ENTITY UNDER SCREENING: "${searchEntity}"
+═══════════════════════════════════════════
 
-Classify each result as ONE of: TRUE_HIT / FALSE_HIT / IRRELEVANT_MLTF / NO_HIT
+STAGE 1 — NAME VERIFICATION:
+• Does the search result refer to the EXACT same entity (not a similarly named one)?
+• Check: jurisdiction, industry, legal form, key persons mentioned.
+• If different entity → FALSE_HIT (stop here).
 
-REQUIRED JSON format (all fields mandatory):
-[{"rank":1,"title":"Exact title","source":"domain.com","date":"YYYY-MM-DD","snippet":"Copy actual snippet text verbatim (2-3 sentences)","matchedKeywords":["exact keyword from text"],"cls":"TRUE_HIT","confidence":0.92,"reason":"TRUE_HIT: [Why entity name matches AND which specific ML/TF keywords triggered. Min 2 sentences.]","riskCat":"Money Laundering / Tax Evasion / Sanctions / Fraud / Criminal Investigation / N/A"}]
+STAGE 2 — ML/TF RELEVANCE (only if Stage 1 passes):
+• Is the content DIRECTLY related to ANY of the following predicate offences or regulatory concerns?
+  ✅ RELEVANT (→ TRUE_HIT):
+    - Money laundering / proceeds of crime
+    - Terrorist financing / CFT
+    - Sanctions violations (OFAC, EU, UN)
+    - Bribery / corruption of public officials
+    - Tax evasion / tax fraud (criminal, not civil disputes)
+    - Drug trafficking / human trafficking
+    - Fraud with criminal prosecution (not civil breach of contract)
+    - Proliferation financing
+    - Regulatory enforcement actions by financial regulators (HKMA, MAS, FCA, SEC, FinCEN, etc.)
+    - Designated / listed by government agencies
+  
+  ❌ NOT RELEVANT (→ IRRELEVANT_MLTF):
+    - Civil lawsuits / breach of contract / commercial disputes
+    - Employment disputes / labour issues
+    - Product liability / consumer complaints
+    - General corporate news (IPO, merger, earnings)
+    - Keyword appears but in unrelated context (e.g. "investigation into product defects")
+    - Article merely mentions AML/sanctions as industry background
+    - Regulatory news that does NOT name the entity as a subject
 
-CLASSIFICATION RULES:
-- TRUE_HIT: Entity name matches AND content contains ML/TF keywords (laundering, fraud, sanctions, terrorism, bribery, corruption, trafficking, investigation, prosecution, AML, CTF, OFAC etc.)
-- FALSE_HIT: Similar name but clearly different entity (different jurisdiction/industry/legal form)
-- IRRELEVANT_MLTF: Entity matches but content is commercial dispute or general news — NOT ML/TF
-- NO_HIT: Entity not mentioned or no risk keywords found
+CLASSIFICATION OUTPUT:
+- TRUE_HIT: Stage 1 ✅ AND Stage 2 ✅ — entity confirmed AND content is directly ML/TF related
+- FALSE_HIT: Stage 1 ❌ — different entity with similar name
+- IRRELEVANT_MLTF: Stage 1 ✅ but Stage 2 ❌ — correct entity but NOT ML/TF related
+- NO_HIT: Entity not mentioned at all, or no meaningful content
+
+CRITICAL ANTI-FALSE-POSITIVE RULES:
+1. A keyword match alone is NEVER sufficient for TRUE_HIT. The keyword must be used in DIRECT connection with the screened entity's alleged involvement.
+2. "sued for breach of contract" = IRRELEVANT_MLTF, even if the word "fraud" appears nearby.
+3. "under investigation" is TRUE_HIT ONLY if the investigation is by law enforcement or financial regulators for ML/TF predicate offences.
+4. News articles about general regulatory changes that mention the entity only as a market participant = NO_HIT.
+5. If uncertain between TRUE_HIT and IRRELEVANT_MLTF, classify as IRRELEVANT_MLTF and set confidence < 0.7.
+
+RESPONSE FORMAT — JSON array only, no other text:
+[{
+  "rank": 1,
+  "title": "Exact article title",
+  "source": "publication name",
+  "date": "YYYY-MM-DD",
+  "snippet": "Verbatim 2-3 sentence excerpt",
+  "matchedKeywords": ["only keywords used in ML/TF context"],
+  "cls": "TRUE_HIT",
+  "confidence": 0.92,
+  "reason": "STAGE 1: [name verification reasoning]. STAGE 2: [ML/TF relevance reasoning with specific predicate offence identified].",
+  "riskCat": "Money Laundering / Sanctions Evasion / Bribery / Tax Evasion (Criminal) / Terrorist Financing / Fraud (Criminal) / Regulatory Action / N/A"
+}]
+
+Analyze ALL ~${resultCount} results from this PDF. Start with [ end with ].
 
 PDF content:
-${pdfText.slice(0, 30000)}
+${pdfText.slice(0, 30000)}`;
 
 REMINDER: Output ${resultCount} JSON items. Start with [ end with ]. Nothing else.`;
 
       const res = await fetch('https://api.poe.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
-        body: JSON.stringify({
-          model: 'gemini-3.1-flash-lite',
-          messages: [
-            { role: 'system', content: 'You are a JSON-only API. You must ALWAYS respond with a valid JSON array only. Never add explanations, summaries, or any text outside the JSON array.' },
-            { role: 'user', content: fullPrompt }
-          ],
-          temperature: 0.1, max_tokens: 8192
-        })
-      });
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
+  body: JSON.stringify({
+    model: 'gemini-3.1-flash-lite',
+    messages: [
+      { 
+        role: 'system', 
+        content: `You are a KYC/AML compliance analyst AI. You output ONLY valid JSON arrays.
+Your primary goal is ACCURACY over quantity of hits.
+FALSE POSITIVES are worse than false negatives in compliance screening.
+When in doubt, classify as IRRELEVANT_MLTF rather than TRUE_HIT.
+A keyword appearing in text does NOT automatically make it a TRUE_HIT — 
+the keyword must describe the screened entity's DIRECT involvement in ML/TF predicate offences.` 
+      },
+      { role: 'user', content: fullPrompt }
+    ],
+    temperature: 0.05,
+    max_tokens: 8192
+  })
+});
       setProgress(80); setStage('正在解析 AI 回應...');
       if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData?.error?.message || `HTTP ${res.status}`); }
       const data = await res.json();
