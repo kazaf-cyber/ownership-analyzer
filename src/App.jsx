@@ -901,7 +901,12 @@ export default function KYCSystem() {
   const svgRef = useRef(null);
 
   const tR = (r) => t[r] || r;
-  const showToast = (msg) => { setToastMsg(msg); setTimeout(() => setToastMsg(null), 2500); };
+  const toastTimerRef = useRef(null);
+  const showToast = (msg) => {
+  if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+  setToastMsg(msg);
+  toastTimerRef.current = setTimeout(() => setToastMsg(null), 2500);
+};
   const openModal = useCallback((type, data = {}) => { setModalType(type); setModalData(data); }, []);
   const closeModal = useCallback(() => { setModalType(null); setModalData({}); }, []);
   const setD = useCallback((k, v) => setModalData(prev => ({ ...prev, [k]: v })), []);
