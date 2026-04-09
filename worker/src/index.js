@@ -1,189 +1,242 @@
-import puppeteer from "@cloudflare/puppeteer";
+import puppeteer from '@cloudflare/puppeteer';
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, X-Worker-Key",
-          "Access-Control-Max-Age": "86400",
-        },
-      });
+    // CORS preflight
+    if (request.method === 'OPTIONS') {
+      return corsResponse(null, 204);
     }
 
-    if (env.WORKER_KEY) {
-      const clientKey = request.headers.get("X-Worker-Key");
-      if (clientKey !== env.WORKER_KEY) {
-        return jsonResponse({ error: "Unauthorized" }, 401);
+    // 健康檢查
+    if (url.pathname === '/api/health') {
+      return corsResponse(JSON.stringify({ 
+        status: 'ok', 
+        timestamp: new Date().toISOString(),
+        hasBrowser: !!env.BROWSER 
+      }));
+    }
+
+    // 單一 URL 抓取（全文）
+    if (url.pathname === '/api/scrape' && request.method === 'POST') {
+      return handleScrape(request, env);
+    }
+
+    // 批次 URL 抓取
+    if (url.pathname === '/api/batch-scrape' && request.method === 'POST') {
+      return handleBatchScrape(request, env);
+    }
+
+    return corsResponse(JSON.stringify({ error: 'Not found' }), 404);
+  }
+};
+
+/**
+ * 單一 URL 全文抓取
+ */
+async function handleScrape(request, env) {
+  try {
+    const { url, maxChars = 3000, extractText = true } = await request.json();
+
+    if (!url) {
+      return corsResponse(JSON.stringify({ error: 'Missing url' }), 400);
+    }
+
+    const browser = await puppeteer.launch(env.BROWSER);
+    const page = await browser.newPage();
+
+    // 設定合理的 viewport 和 user agent
+    await page.setViewport({ width: 1280, height: 800 });
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    );
+
+    // 阻止載入圖片和字體（加速）
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const type = req.resourceType();
+      if (['image', 'font', 'media'].includes(type)) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+
+    await page.goto(url, { 
+      waitUntil: 'domcontentloaded', 
+      timeout: 20000 
+    });
+
+    // 等待主要內容載入
+    await page.waitForTimeout(2000);
+
+    // 提取頁面文字
+    const result = await page.evaluate((maxLen) => {
+      // 移除不需要的元素
+      const removeSelectors = [
+        'script', 'style', 'noscript', 'iframe',
+        'nav', 'footer', 'header', 
+        '.nav', '.footer', '.header', '.sidebar',
+        '.ad', '.ads', '.advertisement', '.cookie-banner',
+        '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]'
+      ];
+      
+      removeSelectors.forEach(sel => {
+        document.querySelectorAll(sel).forEach(el => el.remove());
+      });
+
+      // 嘗試找主要內容區域
+      const mainContent = 
+        document.querySelector('article') ||
+        document.querySelector('main') ||
+        document.querySelector('[role="main"]') ||
+        document.querySelector('.content') ||
+        document.querySelector('.article-body') ||
+        document.querySelector('#content') ||
+        document.body;
+
+      const text = (mainContent?.innerText || '').trim();
+      const title = document.title || '';
+      const metaDesc = document.querySelector('meta[name="description"]')?.content || '';
+      const lang = document.documentElement.lang || '';
+
+      return {
+        title,
+        text: text.substring(0, maxLen),
+        metaDescription: metaDesc,
+        language: lang,
+        textLength: text.length
+      };
+    }, maxChars);
+
+    await page.close();
+    await browser.close();
+
+    return corsResponse(JSON.stringify({
+      url,
+      title: result.title,
+      text: result.text,
+      metaDescription: result.metaDescription,
+      language: result.language,
+      textLength: result.textLength,
+      truncated: result.textLength > maxChars,
+      success: true
+    }));
+
+  } catch (error) {
+    return corsResponse(JSON.stringify({
+      success: false,
+      error: error.message
+    }), 500);
+  }
+}
+
+/**
+ * 批次抓取（一次請求處理多個 URL）
+ */
+async function handleBatchScrape(request, env) {
+  try {
+    const { urls, maxChars = 3000 } = await request.json();
+
+    if (!urls || !Array.isArray(urls) || urls.length === 0) {
+      return corsResponse(JSON.stringify({ error: 'Missing urls array' }), 400);
+    }
+
+    // 限制最多 10 個 URL
+    const targetUrls = urls.slice(0, 10);
+
+    const browser = await puppeteer.launch(env.BROWSER);
+    const results = [];
+
+    for (const targetUrl of targetUrls) {
+      try {
+        const page = await browser.newPage();
+        
+        await page.setViewport({ width: 1280, height: 800 });
+        await page.setUserAgent(
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        );
+
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+          const type = req.resourceType();
+          if (['image', 'font', 'media'].includes(type)) {
+            req.abort();
+          } else {
+            req.continue();
+          }
+        });
+
+        await page.goto(targetUrl, { 
+          waitUntil: 'domcontentloaded', 
+          timeout: 15000 
+        });
+
+        await page.waitForTimeout(1500);
+
+        const data = await page.evaluate((maxLen) => {
+          ['script','style','noscript','iframe','nav','footer','header','.ad','.ads','.sidebar']
+            .forEach(sel => document.querySelectorAll(sel).forEach(el => el.remove()));
+
+          const main = document.querySelector('article') ||
+                       document.querySelector('main') ||
+                       document.querySelector('[role="main"]') ||
+                       document.body;
+
+          return {
+            title: document.title || '',
+            text: (main?.innerText || '').trim().substring(0, maxLen),
+          };
+        }, maxChars);
+
+        await page.close();
+
+        results.push({
+          url: targetUrl,
+          title: data.title,
+          text: data.text,
+          success: true
+        });
+
+      } catch (err) {
+        results.push({
+          url: targetUrl,
+          title: '',
+          text: '',
+          success: false,
+          error: err.message
+        });
       }
     }
 
-    try {
-      if (url.pathname === "/api/health") return handleHealth(env);
-      if (url.pathname === "/api/screenshot" && request.method === "POST")
-        return handleScreenshot(request, env);
-      if (url.pathname === "/api/scrape" && request.method === "POST")
-        return handleScrape(request);
-      if (url.pathname === "/")
-        return jsonResponse({
-          name: "KYC/AML Compliance Worker",
-          status: "running",
-        });
-      return jsonResponse({ error: "Not Found" }, 404);
-    } catch (e) {
-      return jsonResponse({ error: e.message }, 500);
-    }
-  },
-};
-
-function handleHealth(env) {
-  const hasBrowser = !!env.BROWSER;
-  return jsonResponse({
-    ok: true,
-    timestamp: new Date().toISOString(),
-    version: "2.1.0",
-    capabilities: { screenshot: hasBrowser, scrape: true },
-    message: hasBrowser
-      ? "✅ 所有功能可用（截圖 + 網頁抓取）"
-      : "⚠️ 截圖不可用，網頁抓取可用",
-  });
-}
-
-async function handleScreenshot(request, env) {
-  if (!env.BROWSER) {
-    return jsonResponse({ error: "Browser Rendering not configured" }, 500);
-  }
-
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ error: '需要 JSON body：{ "url": "..." }' }, 400);
-  }
-
-  const { url: targetUrl, hl = "en" } = body;
-  if (!targetUrl) return jsonResponse({ error: "url is required" }, 400);
-
-  let browser;
-  try {
-    browser = await puppeteer.launch(env.BROWSER);
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 900 });
-    await page.setExtraHTTPHeaders({
-      "Accept-Language": hl === "zh" ? "zh-TW,zh;q=0.9" : "en-US,en;q=0.9",
-    });
-
-    await page.goto(targetUrl, { waitUntil: "networkidle0", timeout: 15000 });
-    await new Promise((r) => setTimeout(r, 2000));
-
-    const screenshot = await page.screenshot({
-      type: "jpeg",
-      quality: 80,
-      fullPage: false,
-    });
     await browser.close();
 
-    const base64 = bufferToBase64(screenshot);
-    return jsonResponse({
-      image: `data:image/jpeg;base64,${base64}`,
-      timestamp: new Date().toISOString(),
-      url: targetUrl,
-      sizeKB: Math.round(screenshot.byteLength / 1024),
-    });
-  } catch (e) {
-    if (browser)
-      try {
-        await browser.close();
-      } catch {}
-    return jsonResponse(
-      {
-        error: `截圖失敗：${e.message}`,
-        possibleReasons: ["Google CAPTCHA", "載入超時", "配額用完"],
-      },
-      500
-    );
+    return corsResponse(JSON.stringify({ 
+      results,
+      total: targetUrls.length,
+      successful: results.filter(r => r.success).length
+    }));
+
+  } catch (error) {
+    return corsResponse(JSON.stringify({
+      success: false,
+      error: error.message
+    }), 500);
   }
 }
 
-async function handleScrape(request) {
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ error: '需要 JSON body：{ "url": "..." }' }, 400);
-  }
-
-  const { url: targetUrl, maxLength = 3000 } = body;
-  if (!targetUrl) return jsonResponse({ error: "url is required" }, 400);
-
-  try {
-    const resp = await fetch(targetUrl, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml",
-        "Accept-Language": "en-US,en;q=0.9,zh-TW;q=0.8",
-      },
-      redirect: "follow",
-      signal: AbortSignal.timeout(8000),
-    });
-
-    if (!resp.ok) {
-      return jsonResponse({
-        error: `HTTP ${resp.status}`,
-        text: null,
-        sourceUrl: targetUrl,
-      });
-    }
-
-    const html = await resp.text();
-    const text = html
-      .replace(/<script[\s\S]*?<\/script>/gi, "")
-      .replace(/<style[\s\S]*?<\/style>/gi, "")
-      .replace(/<nav[\s\S]*?<\/nav>/gi, "")
-      .replace(/<footer[\s\S]*?<\/footer>/gi, "")
-      .replace(/<header[\s\S]*?<\/header>/gi, "")
-      .replace(/<aside[\s\S]*?<\/aside>/gi, "")
-      .replace(/<!--[\s\S]*?-->/g, "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, maxLength);
-
-    return jsonResponse({ text, length: text.length, sourceUrl: targetUrl });
-  } catch (e) {
-    return jsonResponse({ error: e.message, text: null, sourceUrl: targetUrl });
-  }
-}
-
-function jsonResponse(data, status = 200) {
-  return new Response(JSON.stringify(data, null, 2), {
+/**
+ * CORS 包裝
+ */
+function corsResponse(body, status = 200) {
+  return new Response(body, {
     status,
     headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, X-Worker-Key",
-    },
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    }
   });
 }
-
-function bufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
