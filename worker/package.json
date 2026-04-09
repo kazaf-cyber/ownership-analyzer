@@ -1,0 +1,12 @@
+{
+  "name": "kyc-ams-proxy",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.99.0",
+    "@cloudflare/puppeteer": "^0.0.15"
+  }
+}
+
