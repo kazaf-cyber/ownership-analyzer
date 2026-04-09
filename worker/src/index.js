@@ -16,13 +16,8 @@ export default {
         status: 'ok', 
         timestamp: new Date().toISOString(),
         hasBrowser: !!env.BROWSER,
-        routes: ['/api/health', '/api/screenshot', '/api/scrape', '/api/batch-scrape']
+        routes: ['/api/health', '/api/scrape', '/api/batch-scrape']
       }));
-    }
-
-    // 📸 SERP 截圖
-    if (url.pathname === '/api/screenshot' && request.method === 'POST') {
-      return handleScreenshot(request, env);
     }
 
     // 單一 URL 抓取（全文）
@@ -38,80 +33,6 @@ export default {
     return corsResponse(JSON.stringify({ error: 'Not found' }), 404);
   }
 };
-
-/**
- * 📸 Google SERP 截圖
- */
-async function handleScreenshot(request, env) {
-  try {
-    const { url, hl = 'en' } = await request.json();
-
-    if (!url) {
-      return corsResponse(JSON.stringify({ error: 'Missing url' }), 400);
-    }
-
-    const browser = await puppeteer.launch(env.BROWSER);
-    const page = await browser.newPage();
-
-    const viewportWidth = 1280;
-    const viewportHeight = 900;
-
-    await page.setViewport({ width: viewportWidth, height: viewportHeight });
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    );
-
-    // 設定語言偏好
-    await page.setExtraHTTPHeaders({
-      'Accept-Language': hl === 'zh-TW' ? 'zh-TW,zh;q=0.9,en;q=0.8' : 'en-US,en;q=0.9'
-    });
-
-    await page.goto(url, { 
-      waitUntil: 'networkidle0', 
-      timeout: 25000 
-    });
-
-    // 等待搜尋結果載入
-    await page.waitForTimeout(2000);
-
-    // 嘗試關閉 Google Cookie 同意彈窗
-    try {
-      const consentButton = await page.$('button[id="L2AGLb"]');
-      if (consentButton) await consentButton.click();
-      await page.waitForTimeout(500);
-    } catch {}
-
-    // 截圖（全頁 or 視窗）
-    const screenshotBuffer = await page.screenshot({
-      type: 'jpeg',
-      quality: 85,
-      fullPage: false
-    });
-
-    await page.close();
-    await browser.close();
-
-    // 轉為 base64 data URL
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(screenshotBuffer)));
-    const dataUrl = `data:image/jpeg;base64,${base64}`;
-    const sizeKB = Math.round(screenshotBuffer.byteLength / 1024);
-
-    return corsResponse(JSON.stringify({
-      success: true,
-      image: dataUrl,
-      url: url,
-      timestamp: new Date().toISOString(),
-      sizeKB: sizeKB,
-      viewport: { width: viewportWidth, height: viewportHeight }
-    }));
-
-  } catch (error) {
-    return corsResponse(JSON.stringify({
-      success: false,
-      error: error.message
-    }), 500);
-  }
-}
 
 /**
  * 單一 URL 全文抓取
