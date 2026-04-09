@@ -4,9 +4,10 @@
   "scripts": {
     "deploy": "wrangler deploy"
   },
-  "devDependencies": {
-    "wrangler": "^3.99.0",
+  "dependencies": {
     "@cloudflare/puppeteer": "^0.0.15"
+  },
+  "devDependencies": {
+    "wrangler": "^3.99.0"
   }
 }
-
