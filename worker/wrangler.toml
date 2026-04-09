@@ -1,8 +1,6 @@
 name = "kyc-ams-proxy"
 main = "src/index.js"
-compatibility_date = "2024-09-23"
-compatibility_flags = ["nodejs_compat"]
-account_id = "82d712f5959f850237df8a14d5249137"
+compatibility_date = "2024-01-01"
 
 [browser]
 binding = "BROWSER"
