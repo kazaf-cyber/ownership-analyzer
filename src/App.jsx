@@ -1277,7 +1277,8 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
               )}          
           </div>        
         )}              
-      </div>            
+      </div>
+    </div> 
     );                  
   }                     
         
