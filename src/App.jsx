@@ -397,28 +397,102 @@ const MOCK_ZH = [
 
 
 /* ========== SANCTION SCREENING MODULE (NEW) ========== */
-/* 📌 關鍵字 Placeholder — 等客戶提供後替換 */
+/* ========== SANCTION SCREENING MODULE ========== */
 
-const SANCTION_EN_KEYWORDS = [
-  'sanction', 'sanctioned', 'OFAC', 'SDN list', 'designated',
-  'asset freeze', 'travel ban', 'embargo', 'blocked person',
-  'UN sanctions', 'EU sanctions', 'restricted party',
-  'proliferation financing', 'specially designated national',
-  'sanctions evasion', 'sanctions violation'
+/* ── 制裁篩查：國家關鍵字（3 Parts × 3 Languages）── */
+
+// Part 1 — Comprehensive Sanctions / Highest Risk
+const SANCTION_EN_PART1 = [
+  "Syria", "Cuba", "Iran", "North Korea", "Crimea",
+  "Democratic People's Republic of Korea", "DPRK",
+  "DONETSK", "LUHANSK REGIONS", "Zaporizhzhia", "Kherson"
+];
+const SANCTION_ZH_TW_PART1 = [
+  "敘利亞", "古巴", "伊朗", "北韓", "克里米亞",
+  "朝鮮民主主義人民共和國", "頓內茨克", "盧甘斯克",
+  "札波羅熱", "赫爾松"
+];
+const SANCTION_ZH_CN_PART1 = [
+  "叙利亚", "古巴", "伊朗", "朝鲜", "克里米亚",
+  "朝鲜民主主义人民共和国", "顿涅茨克", "卢甘斯克",
+  "扎波罗热", "赫尔松"
 ];
 
-const SANCTION_ZH_KEYWORDS = [
-  '制裁', '被制裁', '制裁名單', '資產凍結', '旅行禁令',
-  '禁運', '聯合國制裁', '歐盟制裁', '受限制人士',
-  '擴散融資', '特別指定國民', '制裁規避', '違反制裁'
+// Part 2 — Second Tier
+const SANCTION_EN_PART2 = [
+  "Afghanistan", "Albania", "Belarus", "Bosnia and Herzegovina",
+  "Bulgaria", "Central African Republic", "Congo", "Croatia",
+  "Ethiopia", "Guinea-Bissau", "Haiti", "Iraq",
+  "Kosovo", "Kyrgyzstan", "Lebanon", "Libya"
+];
+const SANCTION_ZH_TW_PART2 = [
+  "阿富汗", "阿爾巴尼亞", "白俄羅斯", "波士尼亞與赫塞哥維納",
+  "保加利亞", "中非共和國", "剛果", "克羅埃西亞",
+  "衣索比亞", "幾內亞比紹", "海地", "伊拉克",
+  "科索沃", "吉爾吉斯斯坦", "黎巴嫩", "利比亞"
+];
+const SANCTION_ZH_CN_PART2 = [
+  "阿富汗", "阿尔巴尼亚", "白俄罗斯", "波斯尼亚和黑塞哥维那",
+  "保加利亚", "中非共和国", "刚果", "克罗地亚",
+  "埃塞俄比亚", "几内亚比绍", "海地", "伊拉克",
+  "科索沃", "吉尔吉斯斯坦", "黎巴嫩", "利比亚"
 ];
 
+// Part 3 — Third Tier
+const SANCTION_EN_PART3 = [
+  "Macedonia", "Mali", "Montenegro", "Myanmar", "Nicaragua",
+  "Romania", "Russia", "Serbia", "Slovenia", "Somalia",
+  "South Sudan", "Sudan", "Ukraine", "Venezuela", "Yemen"
+];
+const SANCTION_ZH_TW_PART3 = [
+  "馬其頓", "馬裡", "蒙特內哥羅", "緬甸", "尼加拉瓜",
+  "羅馬尼亞", "俄羅斯", "塞爾維亞", "斯洛維尼亞",
+  "索馬利亞", "南蘇丹", "蘇丹", "烏克蘭", "委內瑞拉", "葉門"
+];
+const SANCTION_ZH_CN_PART3 = [
+  "马其顿", "马里", "黑山", "缅甸", "尼加拉瓜",
+  "罗马尼亚", "俄罗斯", "塞尔维亚", "斯洛文尼亚",
+  "索马里", "南苏丹", "苏丹", "乌克兰", "委内瑞拉", "也门"
+];
+
+/* ── 繁簡體中文偵測 ── */
+function detectLanguageDetail(text) {
+  const chineseChars = text.match(/[\u4e00-\u9fa5]/g);
+  const chineseCount = chineseChars ? chineseChars.length : 0;
+  const totalChars = text.replace(/[\s\p{P}]/gu, '').length;
+  if (totalChars === 0 || chineseCount / totalChars <= 0.3) return 'en';
+  // 常見簡體字（有別於繁體的字形）
+  const simpOnly = '国会们说这对开时问过机经还总从关动应实际认让产业专严临义书买亿仅仓价众优传伤亩';
+  let simpScore = 0;
+  for (const ch of text) { if (simpOnly.includes(ch)) simpScore++; }
+  return simpScore > 0 ? 'zh_cn' : 'zh_tw';
+}
+
+/* ── 按語言取得 3 Parts 關鍵字 ── */
+function getSanctionKeywordsByPart(lang) {
+  const m = {
+    en:    { part1: SANCTION_EN_PART1,    part2: SANCTION_EN_PART2,    part3: SANCTION_EN_PART3 },
+    zh_tw: { part1: SANCTION_ZH_TW_PART1, part2: SANCTION_ZH_TW_PART2, part3: SANCTION_ZH_TW_PART3 },
+    zh_cn: { part1: SANCTION_ZH_CN_PART1, part2: SANCTION_ZH_CN_PART2, part3: SANCTION_ZH_CN_PART3 },
+  };
+  return m[lang] || m.en;
+}
+
+/* ── 為指定 Part 組建 Google 搜尋查詢 ── */
+function buildSanctionQueryForPart(entityName, part) {
+  const lang = detectLanguageDetail(entityName);
+  const kws = getSanctionKeywordsByPart(lang)[part];
+  const kString = kws.map(k => `"${k}"`).join(' OR ');
+  return { query: `"${entityName}" (${kString})`, detectedLang: lang, keywords: kws };
+}
+
+/* ── 保留舊 API（合併全部 Parts，供 Mock / 向下相容）── */
 function buildSanctionQueryAuto(entityName) {
-  const detectedLang = detectLanguage(entityName);
-  const keywords = detectedLang === 'zh' ? SANCTION_ZH_KEYWORDS : SANCTION_EN_KEYWORDS;
-  const keywordString = keywords.map(k => `"${k}"`).join(' OR ');
-  const query = `"${entityName}" (${keywordString})`;
-  return { query, detectedLang, keywords };
+  const lang = detectLanguageDetail(entityName);
+  const all = getSanctionKeywordsByPart(lang);
+  const keywords = [...all.part1, ...all.part2, ...all.part3];
+  const kString = keywords.map(k => `"${k}"`).join(' OR ');
+  return { query: `"${entityName}" (${kString})`, detectedLang: lang === 'zh_cn' ? 'zh' : lang === 'zh_tw' ? 'zh' : 'en', keywords };
 }
 
 const SANCTION_MOCK_EN = [
@@ -469,6 +543,7 @@ function ScreeningModule({ entityName: initialEntityName, mode }) {
   const [workerUrl, setWorkerUrl] = useState(_saved?.workerUrl || '');
   const [workerKey, setWorkerKey] = useState(_saved?.workerKey || '');
   const [showWorkerConfig, setShowWorkerConfig] = useState(false);
+  const [sanctionPart, setSanctionPart] = useState('part1');
   const [workerStatus, setWorkerStatus] = useState('');
 
   React.useEffect(() => {
@@ -487,10 +562,13 @@ function ScreeningModule({ entityName: initialEntityName, mode }) {
   React.useEffect(() => { return () => clearAllTimers(); }, []);
 
   const buildQuery = isSanction ? buildSanctionQueryAuto : buildQueryAuto;
-  const currentKeywordsEN = isSanction ? SANCTION_EN_KEYWORDS : EN_KEYWORDS;
-  const currentKeywordsZH = isSanction ? SANCTION_ZH_KEYWORDS : ZH_KEYWORDS;
+  const sanctionLang = isSanction ? detectLanguageDetail(searchEntity) : null;
+  const sanctionParts = isSanction ? getSanctionKeywordsByPart(sanctionLang || 'en') : null;
+  const currentKeywordsEN = EN_KEYWORDS;          // adverse media 用
+  const currentKeywordsZH = ZH_KEYWORDS;          // adverse media 用
   const mockEN = isSanction ? SANCTION_MOCK_EN : MOCK_EN;
   const mockZH = isSanction ? SANCTION_MOCK_ZH : MOCK_ZH;
+
 
   const moduleTitle = isSanction ? 'Sanction Screening' : 'Adverse Media Screening';
   const moduleSubtitle = isSanction
@@ -499,8 +577,16 @@ function ScreeningModule({ entityName: initialEntityName, mode }) {
   const moduleIcon = isSanction ? <Shield className="w-5 h-5 text-orange-300" /> : <Shield className="w-5 h-5" />;
   const headerBg = isSanction ? 'bg-orange-800' : 'bg-slate-800';
 
-  const { query: searchQuery } = buildQuery(searchEntity);
+  const searchQuery = isSanction
+    ? buildSanctionQueryForPart(searchEntity, sanctionPart).query
+    : buildQueryAuto(searchEntity).query;
   const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}`;
+  // 制裁篩查 3 Parts 的 URL
+  const sanctionPartUrls = isSanction ? {
+    part1: `https://www.google.com/search?q=${encodeURIComponent(buildSanctionQueryForPart(searchEntity, 'part1').query)}`,
+    part2: `https://www.google.com/search?q=${encodeURIComponent(buildSanctionQueryForPart(searchEntity, 'part2').query)}`,
+    part3: `https://www.google.com/search?q=${encodeURIComponent(buildSanctionQueryForPart(searchEntity, 'part3').query)}`,
+  } : null;
 
   const callWorker = async (path, body) => {
     const base = workerUrl.replace(/\/+$/, '');
@@ -953,11 +1039,85 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
                   </div>
                 </div>
               </div>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <a href={googleSearchUrl} target="_blank" rel="noopener noreferrer" className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-bold transition ${searchEntity ? (isSanction ? 'bg-orange-600 text-white hover:bg-orange-700' : 'bg-blue-600 text-white hover:bg-blue-700') : 'bg-gray-200 text-gray-400 pointer-events-none'}`}><ExternalLink className="w-4 h-4" /> 在 Google 開啟搜尋</a>
-                <button onClick={() => setShowQuery(!showQuery)} className="text-xs text-blue-600 font-bold flex items-center gap-1 hover:underline px-2">{showQuery ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}預覽查詢字串</button>
-              </div>
-              {showQuery && searchEntity && (<div className="mt-2 bg-gray-900 rounded-lg p-3 overflow-x-auto"><div className="text-xs text-gray-400 mb-1">{isSanction ? 'Sanction Search Query' : 'Google Search Query'}</div><code className="text-xs text-green-400">{buildQuery(searchEntity).query}</code></div>)}
+                            {/* ── 制裁篩查：3 Part 搜尋按鈕 ── */}
+              {isSanction && sanctionParts ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs font-bold text-gray-600">選擇 Part：</span>
+                    {['part1', 'part2', 'part3'].map((p, idx) => (
+                      <button key={p} onClick={() => setSanctionPart(p)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition border ${
+                          sanctionPart === p
+                            ? 'bg-orange-600 text-white border-orange-600'
+                            : 'bg-white text-gray-600 border-gray-300 hover:border-orange-400'
+                        }`}>
+                        Part {idx + 1} ({sanctionParts[p].length})
+                      </button>
+                    ))}
+                    {sanctionLang && (
+                      <span className="text-xs text-gray-400 ml-2">
+                        {sanctionLang === 'en' ? '🇬🇧 EN' : sanctionLang === 'zh_tw' ? '🇹🇼 繁中' : '🇨🇳 简中'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {['part1', 'part2', 'part3'].map((p, idx) => (
+                      <a key={p} href={sanctionPartUrls[p]} target="_blank" rel="noopener noreferrer"
+                        className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold transition ${
+                          searchEntity
+                            ? (sanctionPart === p
+                              ? 'bg-orange-600 text-white hover:bg-orange-700 ring-2 ring-orange-300'
+                              : 'bg-orange-100 text-orange-700 hover:bg-orange-200 border border-orange-300')
+                            : 'bg-gray-200 text-gray-400 pointer-events-none'
+                        }`}>
+                        <ExternalLink className="w-4 h-4" />
+                        Part {idx + 1}
+                      </a>
+                    ))}
+                  </div>
+                  <button onClick={() => setShowQuery(!showQuery)}
+                    className="text-xs text-orange-600 font-bold flex items-center gap-1 hover:underline px-2">
+                    {showQuery ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                    預覽全部查詢字串
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <a href={googleSearchUrl} target="_blank" rel="noopener noreferrer"
+                    className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-bold transition ${
+                      searchEntity ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-400 pointer-events-none'
+                    }`}>
+                    <ExternalLink className="w-4 h-4" /> 在 Google 開啟搜尋
+                  </a>
+                  <button onClick={() => setShowQuery(!showQuery)}
+                    className="text-xs text-blue-600 font-bold flex items-center gap-1 hover:underline px-2">
+                    {showQuery ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                    預覽查詢字串
+                  </button>
+                </div>
+              )}
+
+              {/* ── 查詢字串預覽 ── */}
+              {showQuery && searchEntity && (
+                <div className="mt-2 bg-gray-900 rounded-lg p-3 overflow-x-auto space-y-2">
+                  {isSanction && sanctionParts ? (
+                    ['part1', 'part2', 'part3'].map((p, idx) => (
+                      <div key={p}>
+                        <div className="text-xs text-orange-400 mb-0.5 font-bold">Part {idx + 1} ({sanctionParts[p].length} keywords)</div>
+                        <code className="text-xs text-green-400 break-all">
+                          {buildSanctionQueryForPart(searchEntity, p).query}
+                        </code>
+                      </div>
+                    ))
+                  ) : (
+                    <>
+                      <div className="text-xs text-gray-400 mb-1">Google Search Query</div>
+                      <code className="text-xs text-green-400">{searchQuery}</code>
+                    </>
+                  )}
+                </div>
+              )}
+
               <div className={`mt-3 ${isSanction ? 'bg-orange-50 border-orange-200' : 'bg-blue-50 border-blue-200'} border rounded-lg p-3 text-xs ${isSanction ? 'text-orange-800' : 'text-blue-800'}`}>
                 <b>📋 操作說明：</b> 點擊「在 Google 開啟搜尋」，確認結果後用 <b>Ctrl+P（Cmd+P）→ 另存為 PDF</b> 儲存第一頁。
               </div>
@@ -1040,22 +1200,83 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
           </div>
         )}
 
-        {activeTab === 'keywords' && (
+                {activeTab === 'keywords' && (
           <div className="space-y-4">
-            <div className="bg-white rounded-xl border shadow-sm p-5">
-              <h2 className="text-sm font-bold text-gray-800 mb-2">🔑 {isSanction ? '制裁篩查' : '搜尋'}關鍵字</h2>
-              {isSanction && <div className="bg-orange-50 border border-orange-200 rounded-lg p-2.5 text-xs text-orange-700 mb-4">📌 <b>Placeholder 關鍵字</b> — 等客戶提供指定關鍵字後替換下方列表。</div>}
-              <div className="grid grid-cols-2 gap-4">
-                <div><h3 className={`text-sm font-bold ${isSanction ? 'text-orange-700' : 'text-blue-700'} mb-2`}>🇬🇧 English Keywords ({currentKeywordsEN.length})</h3><div className="flex flex-wrap gap-1.5">{currentKeywordsEN.map((kw, i) => <span key={i} className={`${isSanction ? 'bg-orange-50 text-orange-700 border-orange-200' : 'bg-blue-50 text-blue-700 border-blue-200'} border px-2 py-1 rounded-lg text-xs`}>{kw}</span>)}</div></div>
-                <div><h3 className={`text-sm font-bold ${isSanction ? 'text-orange-700' : 'text-red-700'} mb-2`}>🇨🇳 中文關鍵字 ({currentKeywordsZH.length})</h3><div className="flex flex-wrap gap-1.5">{currentKeywordsZH.map((kw, i) => <span key={i} className={`${isSanction ? 'bg-orange-50 text-orange-700 border-orange-200' : 'bg-red-50 text-red-700 border-red-200'} border px-2 py-1 rounded-lg text-xs`}>{kw}</span>)}</div></div>
+            {isSanction ? (
+              /* ── 制裁篩查：3 Parts × 3 Languages ── */
+              <>
+                {['part1', 'part2', 'part3'].map((p, idx) => {
+                  const en  = [SANCTION_EN_PART1, SANCTION_EN_PART2, SANCTION_EN_PART3][idx];
+                  const tw  = [SANCTION_ZH_TW_PART1, SANCTION_ZH_TW_PART2, SANCTION_ZH_TW_PART3][idx];
+                  const cn  = [SANCTION_ZH_CN_PART1, SANCTION_ZH_CN_PART2, SANCTION_ZH_CN_PART3][idx];
+                  return (
+                    <div key={p} className="bg-white rounded-xl border shadow-sm p-5">
+                      <h2 className="text-sm font-bold text-orange-700 mb-3">
+                        Part {idx + 1} — {en.length} countries
+                      </h2>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                          <h3 className="text-xs font-bold text-blue-700 mb-2">🇬🇧 English</h3>
+                          <div className="flex flex-wrap gap-1.5">
+                            {en.map((kw, i) => (
+                              <span key={i} className="bg-orange-50 text-orange-700 border-orange-200 border px-2 py-1 rounded-lg text-xs">{kw}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <h3 className="text-xs font-bold text-red-700 mb-2">🇹🇼 繁體中文</h3>
+                          <div className="flex flex-wrap gap-1.5">
+                            {tw.map((kw, i) => (
+                              <span key={i} className="bg-red-50 text-red-700 border-red-200 border px-2 py-1 rounded-lg text-xs">{kw}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <h3 className="text-xs font-bold text-green-700 mb-2">🇨🇳 简体中文</h3>
+                          <div className="flex flex-wrap gap-1.5">
+                            {cn.map((kw, i) => (
+                              <span key={i} className="bg-green-50 text-green-700 border-green-200 border px-2 py-1 rounded-lg text-xs">{kw}</span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-xs text-orange-700">
+                  📊 <b>合計：</b>
+                  Part 1 = {SANCTION_EN_PART1.length} | 
+                  Part 2 = {SANCTION_EN_PART2.length} | 
+                  Part 3 = {SANCTION_EN_PART3.length} | 
+                  <b>Total = {SANCTION_EN_PART1.length + SANCTION_EN_PART2.length + SANCTION_EN_PART3.length} countries</b>
+                </div>
+              </>
+            ) : (
+              /* ── Adverse Media：原有關鍵字顯示 ── */
+              <div className="bg-white rounded-xl border shadow-sm p-5">
+                <h2 className="text-sm font-bold text-gray-800 mb-2">🔑 搜尋關鍵字</h2>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-blue-700 mb-2">🇬🇧 English Keywords ({EN_KEYWORDS.length})</h3>
+                    <div className="flex flex-wrap gap-1.5">
+                      {EN_KEYWORDS.map((kw, i) => (
+                        <span key={i} className="bg-blue-50 text-blue-700 border-blue-200 border px-2 py-1 rounded-lg text-xs">{kw}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-red-700 mb-2">🇨🇳 中文關鍵字 ({ZH_KEYWORDS.length})</h3>
+                    <div className="flex flex-wrap gap-1.5">
+                      {ZH_KEYWORDS.map((kw, i) => (
+                        <span key={i} className="bg-red-50 text-red-700 border-red-200 border px-2 py-1 rounded-lg text-xs">{kw}</span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
-      </div>
-    </div>
-  );
-}
 
 /* ── Wrapper Components（保持 API 不變）── */
 function AdverseMediaScreening({ entityName }) {
