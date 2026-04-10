@@ -706,7 +706,7 @@ RESPONSE FORMAT — JSON array only, no other text:
   "matchedKeywords": ["only keywords in sanctions context"],
   "cls": "TRUE_HIT",
   "confidence": 0.95,
-  "reason": "STAGE 1: [name verification]. STAGE 2: [sanctions relevance with specific list/regime identified].",
+  "reason": "Write a fluent, natural paragraph combining name verification and sanctions relevance reasoning. Do NOT use 'STAGE 1' or 'STAGE 2' labels.",
   "riskCat": "OFAC SDN / EU Sanctions / UN Sanctions / Sanctions Evasion / Asset Freeze / Proliferation / N/A"
 }]
 
@@ -787,7 +787,7 @@ RESPONSE FORMAT — JSON array only, no other text:
   "matchedKeywords": ["only keywords used in ML/TF context"],
   "cls": "TRUE_HIT",
   "confidence": 0.92,
-  "reason": "STAGE 1: [name verification reasoning]. STAGE 2: [ML/TF relevance reasoning with specific predicate offence identified].",
+  "reason": "Write a fluent, natural paragraph combining name verification and ML/TF relevance reasoning. Do NOT use 'STAGE 1' or 'STAGE 2' labels.",
   "riskCat": "Money Laundering / Sanctions Evasion / Bribery / Tax Evasion (Criminal) / Terrorist Financing / Fraud (Criminal) / Regulatory Action / N/A"
 }]
 
