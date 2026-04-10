@@ -1200,7 +1200,7 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
           </div>
         )}
 
-                {activeTab === 'keywords' && (
+          {activeTab === 'keywords' && (
           <div className="space-y-4">
             {isSanction ? (
               /* ── 制裁篩查：3 Parts × 3 Languages ── */
