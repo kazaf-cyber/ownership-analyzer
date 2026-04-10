@@ -1277,7 +1277,8 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
             )}
           </div>
         )}
-
+      }
+        
 /* ── Wrapper Components（保持 API 不變）── */
 function AdverseMediaScreening({ entityName }) {
   return <ScreeningModule entityName={entityName} mode="adverseMedia" />;
