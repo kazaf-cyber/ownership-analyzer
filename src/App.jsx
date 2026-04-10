@@ -545,6 +545,7 @@ function ScreeningModule({ entityName: initialEntityName, mode }) {
   const [showWorkerConfig, setShowWorkerConfig] = useState(false);
   const [sanctionPart, setSanctionPart] = useState('part1');
   const [workerStatus, setWorkerStatus] = useState('');
+  const [copied, setCopied] = useState(false);
 
   React.useEffect(() => {
     if (analysisComplete && results.length > 0) {
@@ -925,6 +926,20 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
   }, [results]);
 
   const filteredResults = useMemo(() => filterType === 'ALL' ? results : results.filter(r => r.cls === filterType), [results, filterType]);
+    const summaryText = useMemo(() => {
+    if (!results.length) return '';
+    const header = `${isSanction ? 'Sanction Screening' : 'Adverse Media Screening'} — ${searchEntity}\nDate: ${new Date().toISOString().slice(0,10)}\nTotal: ${results.length} | TRUE_HIT: ${counts.TRUE_HIT} | FALSE_HIT: ${counts.FALSE_HIT} | IRRELEVANT: ${counts.IRRELEVANT_MLTF} | NO_HIT: ${counts.NO_HIT}\n${'═'.repeat(60)}`;
+    const items = results.map(r => [
+      `#${r.rank} [${r.cls}] (${Math.round(r.confidence*100)}%)`,
+      `Title: ${r.title}`,
+      `Source: ${r.source} | Date: ${r.date}`,
+      `Snippet: ${r.snippet}`,
+      `Keywords: ${r.matchedKeywords.join(', ') || 'None'}`,
+      `AI Analysis: ${r.reason}`,
+      `Risk Category: ${r.riskCat}`,
+    ].join('\n'));
+    return header + '\n\n' + items.join('\n\n' + '─'.repeat(60) + '\n\n');
+  }, [results, counts, searchEntity, isSanction]);
 
   const ResultCard = ({ r }) => {
     const c = CLS_CONFIG[r.cls] || CLS_CONFIG['NO_HIT'];
@@ -1169,7 +1184,30 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
               </div>
               <div className="flex gap-1.5 flex-wrap">{[{ k: 'ALL', l: `全部 (${results.length})` }, ...Object.entries(CLS_CONFIG).map(([k, c]) => ({ k, l: `${detectedLang === 'zh' ? c.labelZh : c.label} (${counts[k]})` }))].map(f => (<button key={f.k} onClick={() => setFilterType(f.k)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition border ${filterType === f.k ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>{f.l}</button>))}</div>
               <div className="space-y-2">{filteredResults.length === 0 ? <div className="text-center py-8 text-sm text-gray-400">無結果</div> : filteredResults.map(r => <ResultCard key={r.rank} r={r} />)}</div>
-              <button onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); }} className="w-full py-2 rounded-lg text-xs text-gray-500 border border-dashed hover:border-gray-400 hover:text-gray-700">🔄 重新分析（清除結果）</button>
+              <button onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); }} className="w-full py-2 rounded-lg text-xs text-gray-500 border border-dashed hover:border-gray-400 hover:text-gray-700">🔄 重新分析（清除結果）            
+              {/* 📋 分析結果摘要（可複製）*/}
+              <div className="bg-gray-50 rounded-xl border p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-bold text-gray-700">📋 分析結果摘要（可複製）</h3>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(summaryText).then(() => {
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                      });
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      copied ? 'bg-green-600 text-white' : 'bg-slate-700 text-white hover:bg-slate-600'
+                    }`}
+                  >
+                    {copied ? '✅ 已複製' : '📋 複製全部'}
+                  </button>
+                </div>
+                <pre className="w-full max-h-96 overflow-y-auto text-xs font-mono bg-white border rounded-lg p-3 whitespace-pre-wrap text-gray-700 select-all">
+                  {summaryText}
+                </pre>
+              </div>
+          </button>
             </>)}
 
             {!analysisComplete && !isAnalyzing && (
