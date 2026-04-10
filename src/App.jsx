@@ -928,18 +928,11 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
   const filteredResults = useMemo(() => filterType === 'ALL' ? results : results.filter(r => r.cls === filterType), [results, filterType]);
     const summaryText = useMemo(() => {
     if (!results.length) return '';
-    const header = `${isSanction ? 'Sanction Screening' : 'Adverse Media Screening'} — ${searchEntity}\nDate: ${new Date().toISOString().slice(0,10)}\nTotal: ${results.length} | TRUE_HIT: ${counts.TRUE_HIT} | FALSE_HIT: ${counts.FALSE_HIT} | IRRELEVANT: ${counts.IRRELEVANT_MLTF} | NO_HIT: ${counts.NO_HIT}\n${'═'.repeat(60)}`;
-    const items = results.map(r => [
-      `#${r.rank} [${r.cls}] (${Math.round(r.confidence*100)}%)`,
-      `Title: ${r.title}`,
-      `Source: ${r.source} | Date: ${r.date}`,
-      `Snippet: ${r.snippet}`,
-      `Keywords: ${r.matchedKeywords.join(', ') || 'None'}`,
-      `AI Analysis: ${r.reason}`,
-      `Risk Category: ${r.riskCat}`,
-    ].join('\n'));
-    return header + '\n\n' + items.join('\n\n' + '─'.repeat(60) + '\n\n');
-  }, [results, counts, searchEntity, isSanction]);
+    const clsLabel = (cls) => CLS_CONFIG[cls]?.label || cls;
+    return results.map((r, i) =>
+      `${i + 1}. ${clsLabel(r.cls)}: ${r.reason}`
+    ).join('\n');
+  }, [results]);
 
   const ResultCard = ({ r }) => {
     const c = CLS_CONFIG[r.cls] || CLS_CONFIG['NO_HIT'];
