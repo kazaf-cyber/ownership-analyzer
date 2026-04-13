@@ -1626,7 +1626,7 @@ export default function KYCSystem() {
         <h3 className="text-lg font-bold text-gray-700 mb-2">{t.emptyStateTitle}</h3>
         <p className="text-sm text-gray-500 mb-6">{t.emptyStateDesc}</p>
         <div className="flex flex-col gap-3 items-center">
-          <button onClick={() => openModal('addEntity', { name: '', type: 'company', subType: '', jurisdiction: 'USA', totalShares: '', companyCategory: 'private' })} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium shadow-sm hover:bg-blue-700 w-full">{t.addEntity}</button>
+          <button onClick={() => openModal('addEntity', { name: '', type: 'company', subType: '', jurisdiction: 'USA', totalShares: '', companyCategory: 'private', industry: '' })} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium shadow-sm hover:bg-blue-700 w-full">{t.addEntity}</button>
           <button onClick={loadSampleData} className="bg-white border-2 border-dashed border-gray-300 text-gray-600 px-5 py-2.5 rounded-xl text-sm font-medium hover:border-blue-400 hover:text-blue-600 w-full"><div>{t.loadSample}</div><div className="text-xs text-gray-400 mt-0.5">{t.loadSampleDesc}</div></button>
         </div>
       </div>
@@ -1683,7 +1683,7 @@ export default function KYCSystem() {
     const toggleAll = () => { if (allChecked) { const s = new Set(batchSelected); filteredEntities.forEach(e => s.delete(e.id)); setBatchSelected(s); } else { const s = new Set(batchSelected); filteredEntities.forEach(e => s.add(e.id)); setBatchSelected(s); } };
     const ctxItems = [
       { label: lang === 'zh' ? '📋 詳情' : '📋 Details', action: (id) => { setSelectedId(id); setDetailTab('overview'); } },
-      { label: t.editEntity, action: (id) => { const ent = entities.find(e => e.id === id); if (ent) openModal('editEntity', { ...ent, totalShares: ent.totalShares != null ? String(ent.totalShares) : '' }); } },
+      { label: t.editEntity, action: (id) => { const ent = entities.find(e => e.id === id); if (ent) openModal('editEntity', { ...ent, totalShares: ent.totalShares != null ? String(ent.totalShares) : '', industry: ent.industry || '' }); } },
       { label: lang === 'zh' ? '📋 CDD' : '📋 CDD', action: (id) => { setSelectedId(id); setDetailTab('cdd'); } },
       { label: lang === 'zh' ? '🗑️ 刪除' : '🗑️ Del', action: (id) => openModal('confirmDeleteSingle', { entityId: id }) },
     ];
@@ -1698,12 +1698,12 @@ export default function KYCSystem() {
             <div className="p-2 border-b flex items-center justify-between shrink-0">
               <span className="text-sm font-bold text-gray-700">{t.entityList} ({entities.length})</span>
               <div className="flex gap-1">
-                <button onClick={() => openModal('addEntity', { name: '', type: 'company', subType: '', jurisdiction: 'USA', totalShares: '', companyCategory: 'private' })} className="bg-blue-600 text-white px-2 py-1 rounded text-xs">{t.addEntity}</button>
+                <button onClick={() => openModal('addEntity', { name: '', type: 'company', subType: '', jurisdiction: 'USA', totalShares: '', companyCategory: 'private', industry: '' })} className="bg-blue-600 text-white px-2 py-1 rounded text-xs">{t.addEntity}</button>
                 <button onClick={exportCSV} className="text-xs text-gray-400 hover:text-green-600 px-1" title={t.exportCSV}>📥</button>
               </div>
             </div>
             <div className="px-2 py-1.5 border-b shrink-0"><input value={entityFilter} onChange={e => setEntityFilter(e.target.value)} placeholder={t.filterPlaceholder} className="w-full border rounded px-2 py-1 text-xs focus:ring-1 focus:ring-blue-400 focus:outline-none" /></div>
-            {batchSelected.size > 0 && (<div className="px-2 py-2 bg-blue-50 border-b shrink-0"><div className="flex items-center justify-between mb-1.5"><span className="text-xs text-blue-700 font-bold">{batchSelected.size} {t.selected}</span><button onClick={() => setBatchSelected(new Set())} className="text-xs text-gray-400 hover:text-gray-600">✕ {t.clear}</button></div><div className="flex gap-1 flex-wrap">{batchSelected.size === 1 && <button onClick={() => { const id = [...batchSelected][0]; const ent = entities.find(e => e.id === id); if (ent) openModal('editEntity', { ...ent, totalShares: ent.totalShares != null ? String(ent.totalShares) : '' }); }} className="text-xs bg-white border border-blue-300 text-blue-700 px-2 py-1 rounded hover:bg-blue-100 font-medium">{t.editEntity}</button>}{batchSelected.size > 1 && <button onClick={() => openModal('batchEdit', { jurisdiction: '', subType: '' })} className="text-xs bg-white border border-blue-300 text-blue-700 px-2 py-1 rounded hover:bg-blue-100 font-medium">{t.batchEdit}</button>}<button onClick={() => openModal('confirmDeleteBatch')} className="text-xs bg-white border border-red-300 text-red-600 px-2 py-1 rounded hover:bg-red-50 font-medium">{t.deleteSelected}</button><button onClick={() => openModal('batchReview', { date: '' })} className="text-xs bg-white border border-gray-300 text-gray-600 px-2 py-1 rounded hover:bg-gray-100">{t.batchReview}</button></div></div>)}
+            {batchSelected.size > 0 && (<div className="px-2 py-2 bg-blue-50 border-b shrink-0"><div className="flex items-center justify-between mb-1.5"><span className="text-xs text-blue-700 font-bold">{batchSelected.size} {t.selected}</span><button onClick={() => setBatchSelected(new Set())} className="text-xs text-gray-400 hover:text-gray-600">✕ {t.clear}</button></div><div className="flex gap-1 flex-wrap">{batchSelected.size === 1 && <button onClick={() => { const id = [...batchSelected][0]; const ent = entities.find(e => e.id === id); if (ent) openModal('editEntity', { ...ent, totalShares: ent.totalShares != null ? String(ent.totalShares) : '', industry: ent.industry ||'' }); }} className="text-xs bg-white border border-blue-300 text-blue-700 px-2 py-1 rounded hover:bg-blue-100 font-medium">{t.editEntity}</button>}{batchSelected.size > 1 && <button onClick={() => openModal('batchEdit', { jurisdiction: '', subType: '' })} className="text-xs bg-white border border-blue-300 text-blue-700 px-2 py-1 rounded hover:bg-blue-100 font-medium">{t.batchEdit}</button>}<button onClick={() => openModal('confirmDeleteBatch')} className="text-xs bg-white border border-red-300 text-red-600 px-2 py-1 rounded hover:bg-red-50 font-medium">{t.deleteSelected}</button><button onClick={() => openModal('batchReview', { date: '' })} className="text-xs bg-white border border-gray-300 text-gray-600 px-2 py-1 rounded hover:bg-gray-100">{t.batchReview}</button></div></div>)}
             <div className="px-2 py-1 border-b bg-gray-50 flex items-center gap-2 shrink-0"><input type="checkbox" checked={allChecked} ref={el => { if (el) el.indeterminate = someChecked && !allChecked; }} onChange={toggleAll} className="shrink-0" /><span className="text-xs text-gray-500 font-medium">{t.selectAll}</span></div>
             <div className="flex-1 overflow-y-auto">
               {filteredEntities.map(ent => {
@@ -1727,12 +1727,22 @@ export default function KYCSystem() {
           <div className={`flex-1 flex-col bg-white rounded-xl border overflow-hidden ${workspaceTab === 'list' ? 'hidden md:flex' : 'flex'}`}>
             <div className="p-2 border-b flex items-center gap-2 shrink-0 flex-wrap">
               <span className="text-sm font-bold text-gray-700">{t.structureDiagram}</span><div className="flex-1" />
+{/* ★ NEW: Zoom controls */}
+<button onClick={() => setSvgTransform(p => ({ ...p, scale: Math.min(3, +(p.scale + 0.2).toFixed(1)) }))} className="bg-gray-200 text-gray-600 px-2 py-1 rounded text-xs" title={t.zoomIn}>🔍+</button>
+<button onClick={() => setSvgTransform(p => ({ ...p, scale: Math.max(0.3, +(p.scale - 0.2).toFixed(1)) }))} className="bg-gray-200 text-gray-600 px-2 py-1 rounded text-xs" title={t.zoomOut}>🔍−</button>
+<button onClick={() => setSvgTransform({ x: 0, y: 0, scale: 1 })} className="bg-gray-200 text-gray-600 px-2 py-1 rounded text-xs" title={t.resetView}>↺</button>
+<span className="text-xs text-gray-400">{Math.round(svgTransform.scale * 100)}%</span>
+{/* ★ END NEW */}
+<button onClick={() => setDragMode(!dragMode)} className={`px-2 py-1 rounded text-xs font-medium ${dragMode ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-600'}`}>{dragMode ? t.dragModeOn : t.dragMode}</button>
               <button onClick={() => setDragMode(!dragMode)} className={`px-2 py-1 rounded text-xs font-medium ${dragMode ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-600'}`}>{dragMode ? t.dragModeOn : t.dragMode}</button>
               <button onClick={() => openModal('addRel', { sourceId: '', targetId: '', type: 'ownership', percentage: '', shares: '', description: '', inputMode: 'shares' })} className="bg-blue-600 text-white px-2 py-1 rounded text-xs">{t.addRelationship}</button>
               {dagSelected && <button onClick={() => setDagSelected(null)} className="bg-gray-200 text-gray-600 px-2 py-1 rounded text-xs">{t.clearSelection}</button>}
             </div>
             <div className="flex-1 overflow-auto relative" onClick={() => setContextMenu(null)}>
               <svg ref={svgRef} width={W} height={Math.max(H, 350)}
+  onWheel={e => { e.preventDefault(); setSvgTransform(p => ({ ...p, scale: Math.max(0.3, Math.min(3, +(p.scale + (e.deltaY > 0 ? -0.1 : 0.1)).toFixed(1))) })); }}
+  onMouseMove={e => { if (dragState && svgRef.current) { const rect = svgRef.current.getBoundingClientRect(); setDragState(prev => prev ? { ...prev, mx: e.clientX - rect.left, my: e.clientY - rect.top } : null); } }}
+  onMouseUp={() => setDragState(null)}>
                 onMouseMove={e => { if (dragState && svgRef.current) { const rect = svgRef.current.getBoundingClientRect(); setDragState(prev => prev ? { ...prev, mx: e.clientX - rect.left, my: e.clientY - rect.top } : null); } }}
                 onMouseUp={() => setDragState(null)}>
                 <defs>
@@ -1740,6 +1750,7 @@ export default function KYCSystem() {
                   <marker id="arrH" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#3b82f6" /></marker>
                   <marker id="arrR" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#a855f7" /></marker>
                 </defs>
+                <g transform={`translate(${svgTransform.x}, ${svgTransform.y}) scale(${svgTransform.scale})`}>
                 {relationships.map(r => {
                   const sp = positions[r.sourceId], tp = positions[r.targetId]; if (!sp || !tp) return null;
                   const isRCA = r.type === 'rca' || r.type === 'association';
@@ -1766,6 +1777,7 @@ export default function KYCSystem() {
                   </g>);
                 })}
                 {dragState && dragState.mx && <line x1={positions[dragState.sourceId]?.x + 65} y1={positions[dragState.sourceId]?.y + 20} x2={dragState.mx} y2={dragState.my} stroke="#3b82f6" strokeWidth={2} strokeDasharray="5 3" />}
+                </g>
               </svg>
               {contextMenu && (<div className="absolute bg-white rounded-lg shadow-lg border py-1 z-40" style={{ left: contextMenu.x, top: contextMenu.y, minWidth: '140px' }}>{ctxItems.map(item => (<button key={item.label} onClick={() => { item.action(contextMenu.entityId); setContextMenu(null); }} className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-100">{item.label}</button>))}</div>)}
             </div>
@@ -1963,7 +1975,8 @@ export default function KYCSystem() {
       <FormField label={t.industryLabel}><select value={d.industry || ''} onChange={e => setD('industry', e.target.value)} className="w-full border rounded px-3 py-2 text-sm"><option value="">{t.selectIndustry}</option>{ALL_INDUSTRIES.map(ind => <option key={ind} value={ind}>{ind}{HIGH_RISK_INDUSTRIES.includes(ind) ? ' 🔴' : MEDIUM_RISK_INDUSTRIES.includes(ind) ? ' 🟡' : ''}</option>)}</select></FormField>
       {HIGH_RISK_INDUSTRIES.includes(d.industry) && (<div className="bg-orange-50 border border-orange-300 rounded-lg p-2.5 text-xs text-orange-700">🏭 {t.autoEDDIndustry}</div>)}
       {(d.type || 'company') === 'company' && (<div className="bg-blue-50 rounded-lg p-3"><FormField label={t.totalSharesLabel}><input type="number" value={d.totalShares || ''} onChange={e => setD('totalShares', e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></FormField></div>)}
-      <button onClick={() => { if (!d.name) { setD('_touched', true); return; } const isAHR = AUTO_HIGH_RISK_SUBTYPES.includes(d.subType); const nextReview = isAHR ? new Date(new Date().getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) : ''; setEntities(prev => [...prev, { id: gid(), name: d.name, type: d.type || 'company', subType: d.subType || '', companyCategory: (d.type || 'company') === 'company' ? (d.companyCategory || 'private') : null, jurisdiction: d.jurisdiction || 'USA', totalShares: d.totalShares ? parseInt(d.totalShares) : null, isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: today, score: 0, rating: 'Low' }], lastReviewDate: today, nextReviewDate: nextReview, documents: [], screeningLogs: [], str: null, notes: [], cddRecords: [] }]); closeModal(); }} className="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium mt-2">{t.addEntity}</button>
+      <button onClick={() => { if (!d.name) { setD('_touched', true); return; } const isAHR = AUTO_HIGH_RISK_SUBTYPES.includes(d.subType); const nextReview = isAHR ? new Date(new Date().getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) : ''; setEntities(prev => [...prev, { id: gid(), name: d.name, type: d.type || 'company', subType: d.subType || '', companyCategory: (d.type || 'company') === 'company' ? (d.companyCategory || 'private') : null, jurisdiction: d.jurisdiction || 'USA', totalShares: d.totalShares ? parseInt(d.totalShares) : null, industry: d.industry || '', isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null,
+      , type: d.type || 'company', subType: d.subType || '', companyCategory: (d.type || 'company') === 'company' ? (d.companyCategory || 'private') : null, jurisdiction: d.jurisdiction || 'USA', totalShares: d.totalShares ? parseInt(d.totalShares) : null, isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: today, score: 0, rating: 'Low' }], lastReviewDate: today, nextReviewDate: nextReview, documents: [], screeningLogs: [], str: null, notes: [], cddRecords: [] }]); closeModal(); }} className="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium mt-2">{t.addEntity}</button>
     </div></ModalShell>)}
 
     {modalType === 'editEntity' && (<ModalShell title={t.editEntityTitle} onClose={closeModal}><div className="space-y-3">
@@ -1979,7 +1992,8 @@ export default function KYCSystem() {
       <FormField label={t.industryLabel}><select value={d.industry || ''} onChange={e => setD('industry', e.target.value)} className="w-full border rounded px-3 py-2 text-sm"><option value="">{t.selectIndustry}</option>{ALL_INDUSTRIES.map(ind => <option key={ind} value={ind}>{ind}{HIGH_RISK_INDUSTRIES.includes(ind) ? ' 🔴' : MEDIUM_RISK_INDUSTRIES.includes(ind) ? ' 🟡' : ''}</option>)}</select></FormField>
       {HIGH_RISK_INDUSTRIES.includes(d.industry) && (<div className="bg-orange-50 border border-orange-300 rounded-lg p-2.5 text-xs text-orange-700">🏭 {t.autoEDDIndustry}</div>)}
       {(d.type || 'company') === 'company' && (<div className="bg-blue-50 rounded-lg p-3"><FormField label={t.totalSharesLabel}><input type="number" value={d.totalShares != null ? d.totalShares : ''} onChange={e => setD('totalShares', e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></FormField></div>)}
-      <button onClick={() => { if (!d.name || !d.id) return; const isAHR = AUTO_HIGH_RISK_SUBTYPES.includes(d.subType); const up = { name: d.name, type: d.type, subType: d.subType || '', companyCategory: (d.type || 'company') === 'company' ? (d.companyCategory || 'private') : null, jurisdiction: d.jurisdiction, totalShares: d.totalShares ? parseInt(d.totalShares) : null }; if (isAHR) { const ent = entities.find(e => e.id === d.id); if (ent && !ent.nextReviewDate) up.nextReviewDate = new Date(new Date().getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10); } updateEntity(d.id, up); closeModal(); }} className="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium mt-2">{t.saveChanges}</button>
+      <button onClick={() => { if (!d.name || !d.id) return; const isAHR = AUTO_HIGH_RISK_SUBTYPES.includes(d.subType); const up = { name: d.name, type: d.type, subType: d.subType || '', companyCategory: (d.type || 'company') === 'company' ? (d.companyCategory || 'private') : null, jurisdiction: d.jurisdiction, totalShares: d.totalShares ? parseInt(d.totalShares) : null, industry: d.industry || '' };
+, companyCategory: (d.type || 'company') === 'company' ? (d.companyCategory || 'private') : null, jurisdiction: d.jurisdiction, totalShares: d.totalShares ? parseInt(d.totalShares) : null }; if (isAHR) { const ent = entities.find(e => e.id === d.id); if (ent && !ent.nextReviewDate) up.nextReviewDate = new Date(new Date().getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10); } updateEntity(d.id, up); closeModal(); }} className="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium mt-2">{t.saveChanges}</button>
     </div></ModalShell>)}
 
     {modalType === 'batchEdit' && (<ModalShell title={`${t.batchEdit} (${batchSelected.size} ${t.selected})`} onClose={closeModal}><div className="space-y-3">
@@ -2064,7 +2078,7 @@ export default function KYCSystem() {
   ];
 
   return (
-    <div className="flex h-screen bg-gray-50 text-gray-800 overflow-hidden" style={{ fontSize: '13px' }}>
+    <div className={`flex h-screen ${darkMode ? 'bg-gray-900 text-gray-100' : 'bg-gray-50 text-gray-800'} overflow-hidden`} style={{ fontSize: '13px' }}>
       <div className="md:hidden fixed top-0 left-0 right-0 h-10 bg-slate-800 text-white flex items-center px-3 z-30 shrink-0">
         <button onClick={() => setMobileSideOpen(!mobileSideOpen)} className="text-white p-1 text-lg leading-none">☰</button>
         <span className="text-sm font-bold ml-2">🛡️ KYC/AML</span>
@@ -2073,7 +2087,11 @@ export default function KYCSystem() {
       {toastMsg && <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg text-sm font-medium animate-pulse">{toastMsg}</div>}
       {mobileSideOpen && (<div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setMobileSideOpen(false)} />)}
       <div className={`fixed md:relative left-0 top-0 bottom-0 z-50 w-44 bg-slate-800 text-white flex flex-col shrink-0 transition-transform duration-200 ${mobileSideOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}>
-        <div className="p-3 border-b border-slate-700"><div className="text-base font-bold">🛡️ {t.appTitle}</div><div className="text-xs text-slate-400">{t.appSub}</div><button onClick={() => setLang(l => l === 'zh' ? 'en' : 'zh')} className="mt-2 flex items-center gap-1 px-2 py-1 rounded text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200">{lang === 'zh' ? 'EN' : '中文'}</button></div>
+        <div className="p-3 border-b border-slate-700"><div className="text-base font-bold">🛡️ {t.appTitle}</div><div className="text-xs text-slate-400">{t.appSub}</div><div className="mt-2 flex gap-1">
+  <button onClick={() => setLang(l => l === 'zh' ? 'en' : 'zh')} className="flex items-center gap-1 px-2 py-1 rounded text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200">{lang === 'zh' ? 'EN' : '中文'}</button>
+  <button onClick={() => setDarkMode(dm => !dm)} className="flex items-center gap-1 px-2 py-1 rounded text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200">{darkMode ? '☀️' : '🌙'}</button>
+</div>
+ gap-1 px-2 py-1 rounded text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200">{lang === 'zh' ? 'EN' : '中文'}</button></div>
         <nav className="flex-1 py-1">{navItems.map(item => (<button key={item.id} onClick={() => setView(item.id)} className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${view === item.id ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><span>{item.icon}</span>{item.label}{item.id === 'snapshots' && snapshots.length > 0 && <span className="ml-auto bg-slate-600 text-slate-200 px-1.5 py-0.5 rounded-full text-xs leading-none">{snapshots.length}</span>}</button>))}</nav>
         {autoTodos.filter(td => td.priority === 'critical' || td.priority === 'high').length > 0 && <div className="p-2 border-t border-slate-700 text-xs text-red-400">🔔 {autoTodos.filter(td => td.priority === 'critical' || td.priority === 'high').length} {t.urgentItems}</div>}
       </div>
