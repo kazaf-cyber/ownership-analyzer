@@ -1,32 +1,12 @@
-/**
+',/**
  * KYC/AML Compliance Management System
  * 
- * 修正日誌 (2026-04-01):
- * ✅ 1. 修正日期生成的時區問題（使用本地時間而非 UTC）
- * ✅ 2. 修正 CSV 導出的換行符編碼錯誤
- * ✅ 3. 修正 calcCRR 函數中 PEP 強制提升的執行順序
- * ✅ 4. 修正 findUBOs 函數中 control 關係的百分比累積邏輯
- * ✅ 5. 為循環檢測函數增加說明註釋
- * ✅ 6. 改進 showToast 避免快速點擊時的競態條件
- * ✅ 7. 實作 PEP Category 的風險等級差異化
- * ✅ 8. 改進 openModal 確保狀態獨立性
- * 
- * 修正日誌 (2026-04-08):
- * ❌ 9. [已移除] SERP 截圖功能（Google 會攔截 Worker IP）
- * 
- * 修正日誌 (2026-04-09):
- * ✅ 10. 新增網頁內容抓取（Worker /api/scrape），AI 基於全文分析而非僅 snippet
- * ✅ 11. 新增後處理自動降級：低信心度 / 無關鍵字的 TRUE_HIT 自動降為 IRRELEVANT_MLTF
- * ✅ 12. AI Prompt 加入 enrichedContent，max_tokens 提升至 12288
- * ✅ 13. 移除 SERP 截圖功能及相關 UI（Google 對 Worker IP 進行攔截）
- * ✅ 14. 新增 Sanction Screening Tab（獨立於 Adverse Media，聚焦制裁名單命中）
- * 
- * 主要修正重點：
- * - UBO 計算邏輯：區分 control（控制權）與 ownership（經濟權益）
- * - 風險評級邏輯：PEP 強制提升現在會在 sanction 檢查前處理
- * - 數據準確性：修正時區和編碼問題
- * - 網頁全文抓取：AI 分析前先抓取搜尋結果的實際網頁內容，大幅提升分類準確度
- * - 制裁篩查：獨立 Tab，AI Prompt 聚焦制裁名單命中
+ * 修正日誌 (2026-04-01~04-09): [原有]
+ * 修正日誌 (2026-04-13):
+ * ✅ 15. 新增行業風險因子 (Industry Risk Factor)
+ * ✅ 16. 新增暗黑模式 (Dark Mode)
+ * ✅ 17. 結構圖升級：Zoom/Pan + Bezier 曲線 + Hover Tooltip
+ * ✅ 18. 新增地理風險熱力圖 (Dashboard)
  */
 
 import React, { useState, useMemo, useRef, useCallback } from 'react'
@@ -35,13 +15,13 @@ import { PieChart, Pie, Cell, LineChart, Line, BarChart, Bar, XAxis, YAxis, Cart
 import { Search, Brain, AlertTriangle, CheckCircle, XCircle, Info, ChevronDown, ChevronRight, Globe, ExternalLink, Loader, Shield } from 'lucide-react';
 
 /* ========== STABLE SUB-COMPONENTS ========== */
-function ModalShell({ title, onClose, children, wide }) {
+function ModalShell({ title, onClose, children, wide, dark }) {
   return (
     <div className="fixed inset-0 bg-black bg-opacity-40 flex items-start justify-center z-50 p-4 overflow-y-auto" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={`bg-white rounded-xl shadow-2xl ${wide ? 'max-w-4xl' : 'max-w-2xl'} w-full mt-8 mb-8`}>
-        <div className="flex items-center justify-between px-5 py-3 border-b">
-          <h3 className="text-base font-bold text-gray-800">{title}</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+      <div className={`${dark ? 'bg-gray-800 text-gray-100' : 'bg-white'} rounded-xl shadow-2xl ${wide ? 'max-w-4xl' : 'max-w-2xl'} w-full mt-8 mb-8`}>
+        <div className={`flex items-center justify-between px-5 py-3 border-b ${dark ? 'border-gray-700' : ''}`}>
+          <h3 className={`text-base font-bold ${dark ? 'text-gray-100' : 'text-gray-800'}`}>{title}</h3>
+          <button onClick={onClose} className={`${dark ? 'text-gray-400 hover:text-gray-200' : 'text-gray-400 hover:text-gray-600'} text-lg`}>✕</button>
         </div>
         <div className="p-5">{children}</div>
       </div>
@@ -59,39 +39,39 @@ function FormField({ label, children }) { return <div><label className="text-xs 
 /* ========== CONSTANTS ========== */
 const gid = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-    const r = Math.random() * 16 | 0;
-    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-  });
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); });
 };
-const getToday = () => {
-  const d = new Date();
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-};
+const getToday = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 const today = getToday();
 const RISK_COLORS = { High: '#ef4444', Medium: '#f59e0b', Low: '#22c55e' };
 const PIE_COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899'];
 const DEFAULT_HIGH_RISK = ['Iran', 'North Korea', 'Myanmar', 'Syria', 'Afghanistan', 'Libya', 'Somalia', 'South Sudan', 'Yemen', 'Iraq'];
 const DEFAULT_OFFSHORE = ['BVI', 'Cayman Islands', 'Panama', 'Bermuda', 'Jersey', 'Guernsey', 'Isle of Man', 'Liechtenstein', 'Vanuatu', 'Seychelles'];
 const DEFAULT_MONITORED = ['Russia', 'Turkey', 'UAE', 'Pakistan', 'Cambodia', 'Nigeria', 'Albania', 'Philippines', 'Barbados', 'Senegal'];
+
+/* ★ NEW: Industry Risk Factor */
+const HIGH_RISK_INDUSTRIES = ['Gambling / Gaming','Cryptocurrency / Virtual Assets','Arms / Defence','Precious Metals & Stones','Cash-intensive Business','Money Services Business','Adult Entertainment','Cannabis','Art & Antiquities','Non-Profit / Charity','Correspondent Banking'];
+const MEDIUM_RISK_INDUSTRIES = ['Construction','Import / Export','Logistics / Shipping','Mining','Pharmaceuticals','Tobacco','Real Estate'];
+const ALL_INDUSTRIES = [...new Set([...HIGH_RISK_INDUSTRIES,...MEDIUM_RISK_INDUSTRIES,'Technology','Manufacturing','Retail','Healthcare','Education','Financial Services (Regulated)','Professional Services','Agriculture','Hospitality','Telecommunications','Other'])].sort();
+
 const ALL_COUNTRIES = [...new Set([...DEFAULT_HIGH_RISK, ...DEFAULT_OFFSHORE, ...DEFAULT_MONITORED, 'USA', 'UK', 'Germany', 'France', 'Japan', 'Australia', 'Canada', 'Singapore', 'Hong Kong', 'Taiwan', 'Switzerland', 'Netherlands', 'Ireland', 'Luxembourg', 'China', 'India', 'Brazil', 'South Korea', 'New Zealand', 'Sweden', 'Norway'])].sort();
 const DOC_COMPANY = ['Certificate of Incorporation', 'Register of Directors', 'Register of Shareholders', 'Memorandum & Articles', 'Financial Statements', 'Proof of Address', 'Sanctions Screening Report', 'Source of Funds Declaration', 'Tax Residency Certificate'];
 const DOC_PERSON = ['Passport / ID', 'Proof of Address', 'Source of Wealth Declaration', 'CV / Profile', 'Sanctions Screening Report', 'PEP Screening Report', 'Bank Reference Letter'];
-const DEFAULT_WEIGHTS = { jurisdiction: 25, pep: 25, sanctions: 20, negativeNews: 10, entityType: 10, ownership: 10 };
-const WK = { jurisdiction: 'weightJurisdiction', pep: 'weightPep', sanctions: 'weightSanctions', negativeNews: 'weightNegativeNews', entityType: 'weightEntityType', ownership: 'weightOwnership' };
+const DEFAULT_WEIGHTS = { jurisdiction: 20, pep: 20, sanctions: 20, negativeNews: 10, entityType: 10, ownership: 10, industry: 10 };
+const WK = { jurisdiction: 'weightJurisdiction', pep: 'weightPep', sanctions: 'weightSanctions', negativeNews: 'weightNegativeNews', entityType: 'weightEntityType', ownership: 'weightOwnership', industry: 'weightIndustry' };
 
 const AUTO_HIGH_RISK_SUBTYPES = ['Trust', 'Nominee', 'Nominee Shareholder'];
 const SDD_ELIGIBLE_CATEGORIES = ['listed', 'government', 'stateOwned'];
 
 const SAMPLE_ENTITIES = [
-  { id: 'e1', name: 'Alpha Holdings Ltd', type: 'company', subType: 'Holding Company', companyCategory: 'private', jurisdiction: 'BVI', totalShares: 10000, isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-01-15', score: 68, rating: 'Medium' }, { date: '2025-06-10', score: 72, rating: 'High' }, { date: '2025-12-01', score: 75, rating: 'High' }], lastReviewDate: '2025-12-01', nextReviewDate: '2026-06-01', documents: [{ id: 'd1', name: 'Certificate of Incorporation', status: 'received', expiry: null }, { id: 'd2', name: 'Register of Directors', status: 'received', expiry: null }, { id: 'd3', name: 'Register of Shareholders', status: 'pending', expiry: null }, { id: 'd4', name: 'Financial Statements', status: 'expired', expiry: '2025-12-31' }], screeningLogs: [{ id: 's1', date: '2025-12-01', system: 'World-Check', type: 'Sanctions', result: 'Clear' }, { id: 's2', date: '2025-12-01', system: 'World-Check', type: 'PEP', result: 'Clear' }], str: null, notes: [{ id: 'n1', text: 'Initial onboarding completed.', date: '2025-01-15', author: 'Analyst A' }, { id: 'n2', text: 'Annual review: risk elevated due to BVI.', date: '2025-12-01', author: 'CO' }], cddRecords: [] },
-  { id: 'e2', name: 'Beta Trading Co', type: 'company', subType: 'Trading Company', companyCategory: 'listed', jurisdiction: 'Hong Kong', totalShares: 1000, isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-03-10', score: 35, rating: 'Low' }, { date: '2025-09-15', score: 42, rating: 'Medium' }], lastReviewDate: '2025-09-15', nextReviewDate: '2026-03-15', documents: [{ id: 'd5', name: 'Certificate of Incorporation', status: 'received', expiry: null }], screeningLogs: [{ id: 's3', date: '2025-09-15', system: 'Dow Jones', type: 'Sanctions', result: 'Clear' }], str: null, notes: [], cddRecords: [] },
-  { id: 'e3', name: 'Gamma Trust', type: 'company', subType: 'Trust', companyCategory: 'private', jurisdiction: 'Cayman Islands', totalShares: null, isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: true, riskOverride: null, riskHistory: [{ date: '2025-02-20', score: 78, rating: 'High' }], lastReviewDate: '2025-02-20', nextReviewDate: '2025-08-20', documents: [{ id: 'd7', name: 'Trust Deed', status: 'received', expiry: null }, { id: 'd8', name: 'Register of Beneficiaries', status: 'pending', expiry: null }], screeningLogs: [{ id: 's4', date: '2025-02-20', system: 'World-Check', type: 'Negative News', result: 'Hit - tax evasion' }], str: { flagged: true, submittedDate: '2025-03-01', mlroApproved: true, mlroDate: '2025-03-05' }, notes: [{ id: 'n4', text: 'Negative media flagged.', date: '2025-02-20', author: 'Analyst A' }], cddRecords: [] },
-  { id: 'e4', name: 'John Smith', type: 'person', subType: 'Director', companyCategory: null, jurisdiction: 'UK', totalShares: null, isPEP: true, pepCategory: 'domestic', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-01-15', score: 62, rating: 'Medium' }, { date: '2025-07-01', score: 65, rating: 'Medium' }], lastReviewDate: '2025-07-01', nextReviewDate: '2026-01-01', documents: [{ id: 'd9', name: 'Passport / ID', status: 'received', expiry: '2027-05-15' }], screeningLogs: [{ id: 's5', date: '2025-07-01', system: 'World-Check', type: 'PEP', result: 'Hit - Former MP' }], str: null, notes: [{ id: 'n5', text: 'PEP: former MP.', date: '2025-01-15', author: 'Analyst A' }], cddRecords: [] },
-  { id: 'e5', name: 'Jane Doe', type: 'person', subType: 'Shareholder', companyCategory: null, jurisdiction: 'USA', totalShares: null, isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-01-15', score: 18, rating: 'Low' }], lastReviewDate: '2025-01-15', nextReviewDate: '2026-01-15', documents: [{ id: 'd11', name: 'Passport / ID', status: 'received', expiry: '2028-11-20' }], screeningLogs: [{ id: 's6', date: '2025-01-15', system: 'Dow Jones', type: 'Sanctions', result: 'Clear' }], str: null, notes: [], cddRecords: [] },
-  { id: 'e6', name: 'Delta Corp', type: 'company', subType: 'Operating Company', companyCategory: 'stateOwned', jurisdiction: 'Singapore', totalShares: 5000, isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-04-01', score: 22, rating: 'Low' }], lastReviewDate: '2025-04-01', nextReviewDate: '2026-04-01', documents: [], screeningLogs: [], str: null, notes: [], cddRecords: [] },
-  { id: 'e7', name: 'Epsilon Foundation', type: 'company', subType: 'Foundation', companyCategory: 'private', jurisdiction: 'Panama', totalShares: null, isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-05-15', score: 71, rating: 'High' }], lastReviewDate: '2025-05-15', nextReviewDate: '2025-11-15', documents: [], screeningLogs: [], str: null, notes: [], cddRecords: [] },
-  { id: 'e8', name: 'David Chen', type: 'person', subType: 'Beneficiary', companyCategory: null, jurisdiction: 'China', totalShares: null, isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-06-01', score: 45, rating: 'Medium' }], lastReviewDate: '2025-06-01', nextReviewDate: '2025-12-01', documents: [{ id: 'd15', name: 'Passport / ID', status: 'received', expiry: '2026-02-01' }], screeningLogs: [], str: null, notes: [], cddRecords: [] },
+  { id: 'e1', name: 'Alpha Holdings Ltd', type: 'company', subType: 'Holding Company', companyCategory: 'private', jurisdiction: 'BVI', totalShares: 10000, industry: 'Financial Services (Regulated)', isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-01-15', score: 68, rating: 'Medium' }, { date: '2025-06-10', score: 72, rating: 'High' }, { date: '2025-12-01', score: 75, rating: 'High' }], lastReviewDate: '2025-12-01', nextReviewDate: '2026-06-01', documents: [{ id: 'd1', name: 'Certificate of Incorporation', status: 'received', expiry: null }, { id: 'd2', name: 'Register of Directors', status: 'received', expiry: null }, { id: 'd3', name: 'Register of Shareholders', status: 'pending', expiry: null }, { id: 'd4', name: 'Financial Statements', status: 'expired', expiry: '2025-12-31' }], screeningLogs: [{ id: 's1', date: '2025-12-01', system: 'World-Check', type: 'Sanctions', result: 'Clear' }, { id: 's2', date: '2025-12-01', system: 'World-Check', type: 'PEP', result: 'Clear' }], str: null, notes: [{ id: 'n1', text: 'Initial onboarding completed.', date: '2025-01-15', author: 'Analyst A' }, { id: 'n2', text: 'Annual review: risk elevated due to BVI.', date: '2025-12-01', author: 'CO' }], cddRecords: [] },
+  { id: 'e2', name: 'Beta Trading Co', type: 'company', subType: 'Trading Company', companyCategory: 'listed', jurisdiction: 'Hong Kong', totalShares: 1000, industry: 'Import / Export', isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-03-10', score: 35, rating: 'Low' }, { date: '2025-09-15', score: 42, rating: 'Medium' }], lastReviewDate: '2025-09-15', nextReviewDate: '2026-03-15', documents: [{ id: 'd5', name: 'Certificate of Incorporation', status: 'received', expiry: null }], screeningLogs: [{ id: 's3', date: '2025-09-15', system: 'Dow Jones', type: 'Sanctions', result: 'Clear' }], str: null, notes: [], cddRecords: [] },
+  { id: 'e3', name: 'Gamma Trust', type: 'company', subType: 'Trust', companyCategory: 'private', jurisdiction: 'Cayman Islands', totalShares: null, industry: 'Non-Profit / Charity', isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: true, riskOverride: null, riskHistory: [{ date: '2025-02-20', score: 78, rating: 'High' }], lastReviewDate: '2025-02-20', nextReviewDate: '2025-08-20', documents: [{ id: 'd7', name: 'Trust Deed', status: 'received', expiry: null }, { id: 'd8', name: 'Register of Beneficiaries', status: 'pending', expiry: null }], screeningLogs: [{ id: 's4', date: '2025-02-20', system: 'World-Check', type: 'Negative News', result: 'Hit - tax evasion' }], str: { flagged: true, submittedDate: '2025-03-01', mlroApproved: true, mlroDate: '2025-03-05' }, notes: [{ id: 'n4', text: 'Negative media flagged.', date: '2025-02-20', author: 'Analyst A' }], cddRecords: [] },
+  { id: 'e4', name: 'John Smith', type: 'person', subType: 'Director', companyCategory: null, jurisdiction: 'UK', totalShares: null, industry: '', isPEP: true, pepCategory: 'domestic', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-01-15', score: 62, rating: 'Medium' }, { date: '2025-07-01', score: 65, rating: 'Medium' }], lastReviewDate: '2025-07-01', nextReviewDate: '2026-01-01', documents: [{ id: 'd9', name: 'Passport / ID', status: 'received', expiry: '2027-05-15' }], screeningLogs: [{ id: 's5', date: '2025-07-01', system: 'World-Check', type: 'PEP', result: 'Hit - Former MP' }], str: null, notes: [{ id: 'n5', text: 'PEP: former MP.', date: '2025-01-15', author: 'Analyst A' }], cddRecords: [] },
+  { id: 'e5', name: 'Jane Doe', type: 'person', subType: 'Shareholder', companyCategory: null, jurisdiction: 'USA', totalShares: null, industry: '', isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-01-15', score: 18, rating: 'Low' }], lastReviewDate: '2025-01-15', nextReviewDate: '2026-01-15', documents: [{ id: 'd11', name: 'Passport / ID', status: 'received', expiry: '2028-11-20' }], screeningLogs: [{ id: 's6', date: '2025-01-15', system: 'Dow Jones', type: 'Sanctions', result: 'Clear' }], str: null, notes: [], cddRecords: [] },
+  { id: 'e6', name: 'Delta Corp', type: 'company', subType: 'Operating Company', companyCategory: 'stateOwned', jurisdiction: 'Singapore', totalShares: 5000, industry: 'Technology', isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-04-01', score: 22, rating: 'Low' }], lastReviewDate: '2025-04-01', nextReviewDate: '2026-04-01', documents: [], screeningLogs: [], str: null, notes: [], cddRecords: [] },
+  { id: 'e7', name: 'Epsilon Foundation', type: 'company', subType: 'Foundation', companyCategory: 'private', jurisdiction: 'Panama', totalShares: null, industry: 'Art & Antiquities', isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-05-15', score: 71, rating: 'High' }], lastReviewDate: '2025-05-15', nextReviewDate: '2025-11-15', documents: [], screeningLogs: [], str: null, notes: [], cddRecords: [] },
+  { id: 'e8', name: 'David Chen', type: 'person', subType: 'Beneficiary', companyCategory: null, jurisdiction: 'China', totalShares: null, industry: '', isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: '2025-06-01', score: 45, rating: 'Medium' }], lastReviewDate: '2025-06-01', nextReviewDate: '2025-12-01', documents: [{ id: 'd15', name: 'Passport / ID', status: 'received', expiry: '2026-02-01' }], screeningLogs: [], str: null, notes: [], cddRecords: [] },
 ];
 const SAMPLE_RELS = [
   { id: 'r1', sourceId: 'e4', targetId: 'e1', type: 'ownership', shares: 4000, percentage: null, description: 'Direct shareholding' },
@@ -186,38 +166,27 @@ const i18n = {
     sddEligible: '💡 SDD Eligible: This entity is a {type}, simplified due diligence (SDD) may apply.',
     autoHighRiskNotice: '⚠️ Auto High Risk: {subType} entities are automatically classified as High Risk with mandatory annual review.',
     editRel: '✏️', personCannotBeOwned: '⚠️ A person cannot be the target of an ownership relationship.',
-    annualReview: 'Annual Review Required',
-    saveRel: 'Save Relationship',
+    annualReview: 'Annual Review Required', saveRel: 'Save Relationship',
     duplicateRelWarning: '⚠️ A relationship already exists between these two entities with the same type.',
     circularRelWarning: '⚠️ This would create a circular ownership chain.',
     selfRelWarning: '⚠️ Source and target cannot be the same entity.',
     sharesExceedWarning: '⚠️ Total allocated shares ({allocated}) would exceed total issued shares ({total}).',
-    reviewCycleDays: 'Review Cycle (days)',
-    eddRequired: '🔴 EDD Required: High-risk entity requires Enhanced Due Diligence.',
-    docExpiringSoon: '⚠️ Document expiring within 30 days',
-    exportCSV: '📥 Export CSV',
-    lastUpdated: 'Last Updated',
-    entityStatus: 'Status',
-    pendingDocsCount: 'Pending Docs',
-    relCount: 'Relationships',
-    noRelWarning: '⚠️ This entity has no relationships.',
-    percentageExceeds100: '⚠️ Total ownership of target exceeds 100%.',
-    requiredField: 'This field is required.',
-    dueDiligenceLevel: 'Due Diligence Level',
-    sdd: 'SDD', cdd: 'CDD', edd: 'EDD',
-    sddDesc: 'Simplified', cddDesc: 'Standard', eddDesc: 'Enhanced',
-    reviewCycleHigh: 'High Risk: Review every 12 months',
-    reviewCycleMedium: 'Medium Risk: Review every 24 months',
-    reviewCycleLow: 'Low Risk: Review every 36 months',
+    reviewCycleDays: 'Review Cycle (days)', eddRequired: '🔴 EDD Required: High-risk entity requires Enhanced Due Diligence.',
+    docExpiringSoon: '⚠️ Document expiring within 30 days', exportCSV: '📥 Export CSV',
+    lastUpdated: 'Last Updated', entityStatus: 'Status', pendingDocsCount: 'Pending Docs', relCount: 'Relationships',
+    noRelWarning: '⚠️ This entity has no relationships.', percentageExceeds100: '⚠️ Total ownership of target exceeds 100%.',
+    requiredField: 'This field is required.', dueDiligenceLevel: 'Due Diligence Level',
+    sdd: 'SDD', cdd: 'CDD', edd: 'EDD', sddDesc: 'Simplified', cddDesc: 'Standard', eddDesc: 'Enhanced',
+    reviewCycleHigh: 'High Risk: Review every 12 months', reviewCycleMedium: 'Medium Risk: Review every 24 months', reviewCycleLow: 'Low Risk: Review every 36 months',
     autoReviewReminder: 'Auto-calculated next review based on risk rating',
-    pepCategory: 'PEP Category',
-    selectPepCategory: 'Select PEP Category',
-    pepForeign: 'Foreign PEP',
-    pepDomestic: 'Domestic PEP',
-    pepInternational: 'International Org. PEP',
-    pepFamilyMember: 'PEP Family Member',
-    pepCloseAssociate: 'PEP Close Associate',
+    pepCategory: 'PEP Category', selectPepCategory: 'Select PEP Category',
+    pepForeign: 'Foreign PEP', pepDomestic: 'Domestic PEP', pepInternational: 'International Org. PEP',
+    pepFamilyMember: 'PEP Family Member', pepCloseAssociate: 'PEP Close Associate',
     pepAutoHighRisk: 'Auto elevated to High Risk (PEP)',
+    weightIndustry: 'Industry', industryLabel: 'Industry / Sector', selectIndustry: 'Select industry…',
+    highRiskIndustry: '⚠️ High-Risk Industry', autoEDDIndustry: '🔴 Auto EDD: High-risk industry requires Enhanced Due Diligence.',
+    darkMode: 'Dark Mode', lightMode: 'Light Mode', geoRiskMap: 'Geographic Risk Heatmap', geoNoData: 'No entity data to display.',
+    zoomIn: 'Zoom In', zoomOut: 'Zoom Out', resetView: 'Reset View',
   },
   zh: {
     appTitle: 'KYC/AML', appSub: '合規管理系統', dashboard: '儀表板', workspace: '實體與結構', search: '搜尋', snapshots: '快照', settings: '設定', report: '報告',
@@ -300,38 +269,29 @@ const i18n = {
     sddEligible: '💡 SDD 適用提示：此實體為{type}，可考慮適用簡化盡職調查。',
     autoHighRiskNotice: '⚠️ 自動高風險：{subType} 類型實體依規自動歸類為高風險，須每年強制審查一次。',
     editRel: '✏️', personCannotBeOwned: '⚠️ 自然人不能作為持股關係的目標。',
-    annualReview: '強制年審',
-    saveRel: '儲存關係',
+    annualReview: '強制年審', saveRel: '儲存關係',
     duplicateRelWarning: '⚠️ 這兩個實體之間已存在相同類型的關係。',
     circularRelWarning: '⚠️ 此操作將形成循環持股鏈。',
     selfRelWarning: '⚠️ 來源與目標不能為同一實體。',
     sharesExceedWarning: '⚠️ 分配股數總計（{allocated}）將超過已發行總股數（{total}）。',
-    reviewCycleDays: '審查週期（天）',
-    eddRequired: '🔴 需要 EDD：高風險實體需進行加強盡職調查。',
-    docExpiringSoon: '⚠️ 文件將於 30 天內到期',
-    exportCSV: '📥 匯出 CSV',
-    lastUpdated: '最後更新',
-    entityStatus: '狀態',
-    pendingDocsCount: '待收文件',
-    relCount: '關係數',
+    reviewCycleDays: '審查週期（天）', eddRequired: '🔴 需要 EDD：高風險實體需進行加強盡職調查。',
+    docExpiringSoon: '⚠️ 文件將於 30 天內到期', exportCSV: '📥 匯出 CSV',
+    lastUpdated: '最後更新', entityStatus: '狀態', pendingDocsCount: '待收文件', relCount: '關係數',
     noRelWarning: '⚠️ 此實體尚無任何關係。請考慮將其連結至持股結構。',
     percentageExceeds100: '⚠️ 目標公司的持股比例合計超過 100%。',
-    requiredField: '此欄位為必填。',
-    dueDiligenceLevel: '盡職調查等級',
+    requiredField: '此欄位為必填。', dueDiligenceLevel: '盡職調查等級',
     sdd: 'SDD 簡化', cdd: 'CDD 標準', edd: 'EDD 加強',
     sddDesc: '簡化盡職調查', cddDesc: '標準盡職調查', eddDesc: '加強盡職調查',
-    reviewCycleHigh: '高風險：每 12 個月審查',
-    reviewCycleMedium: '中風險：每 24 個月審查',
-    reviewCycleLow: '低風險：每 36 個月審查',
+    reviewCycleHigh: '高風險：每 12 個月審查', reviewCycleMedium: '中風險：每 24 個月審查', reviewCycleLow: '低風險：每 36 個月審查',
     autoReviewReminder: '依據風險評級自動計算下次審查日',
-    pepCategory: 'PEP 類別',
-    selectPepCategory: '請選擇 PEP 類別',
-    pepForeign: '外國 PEP',
-    pepDomestic: '國內 PEP',
-    pepInternational: '國際組織 PEP',
-    pepFamilyMember: 'PEP 家屬成員',
-    pepCloseAssociate: 'PEP 密切關係人',
+    pepCategory: 'PEP 類別', selectPepCategory: '請選擇 PEP 類別',
+    pepForeign: '外國 PEP', pepDomestic: '國內 PEP', pepInternational: '國際組織 PEP',
+    pepFamilyMember: 'PEP 家屬成員', pepCloseAssociate: 'PEP 密切關係人',
     pepAutoHighRisk: '已自動提升為高風險（PEP）',
+    weightIndustry: '行業', industryLabel: '行業 / 業務範疇', selectIndustry: '選擇行業…',
+    highRiskIndustry: '⚠️ 高風險行業', autoEDDIndustry: '🔴 自動 EDD：高風險行業實體須進行加強盡職調查。',
+    darkMode: '暗黑模式', lightMode: '明亮模式', geoRiskMap: '地理風險熱力圖', geoNoData: '無實體資料可顯示。',
+    zoomIn: '放大', zoomOut: '縮小', resetView: '重置視圖',
   }
 };
 
@@ -1342,6 +1302,9 @@ export default function KYCSystem() {
   const [workspaceTab, setWorkspaceTab] = useState('list');
   const [mobileSideOpen, setMobileSideOpen] = useState(false);
   const [dragState, setDragState] = useState(null);
+  const [darkMode, setDarkMode] = useState(false);
+  const [svgTransform, setSvgTransform] = useState({ x: 0, y: 0, scale: 1 });
+  const [hoveredNode, setHoveredNode] = useState(null);
   const [entityFilter, setEntityFilter] = useState('');
   const [modalType, setModalType] = useState(null);
   const [modalData, setModalData] = useState({});
@@ -1412,10 +1375,11 @@ export default function KYCSystem() {
     return (existingPct + parseFloat(newPct)) > 100;
   }, [entities, relationships, getRelPercentage]);
 
-  const getDDLevel = (entity) => {
+    const getDDLevel = (entity) => {
     if (isSddEligible(entity)) return 'sdd';
     const eff = getEffectiveRating(entity);
     if (eff.rating === 'High') return 'edd';
+    if (HIGH_RISK_INDUSTRIES.includes(entity.industry)) return 'edd';
     return 'cdd';
   };
 
@@ -1433,8 +1397,8 @@ export default function KYCSystem() {
     return diff > 0 && diff <= 30;
   };
 
-  const calcCRR = useCallback((entity) => {
-    if (isAutoHighRisk(entity)) return { score: 100, rating: 'High', breakdown: { jurisdiction: 100, pep: 0, sanctions: 100, negativeNews: 0, entityType: 100, ownership: 100 }, autoHighRisk: true, jurisdictionForced: false, sanctionForced: false, pepForced: false };
+    const calcCRR = useCallback((entity) => {
+    if (isAutoHighRisk(entity)) return { score: 100, rating: 'High', breakdown: { jurisdiction: 100, pep: 0, sanctions: 100, negativeNews: 0, entityType: 100, ownership: 100, industry: 100 }, autoHighRisk: true, jurisdictionForced: false, sanctionForced: false, pepForced: false };
     const w = settings.weights;
     let jScore = settings.highRisk.includes(entity.jurisdiction) ? 100 : settings.offshore.includes(entity.jurisdiction) ? 80 : settings.monitored.includes(entity.jurisdiction) ? 50 : 15;
     const pepScore = entity.isPEP ? 100 : 0;
@@ -1443,8 +1407,9 @@ export default function KYCSystem() {
     let typeScore = ['Trust', 'Foundation', 'SPV'].includes(entity.subType) ? 85 : ['Holding Company', 'Shell Company'].includes(entity.subType) ? 60 : entity.subType === 'Trading Company' ? 35 : 20;
     const depth = getOwnershipDepth(entity.id);
     let ownScore = Math.min(100, depth * 30);
-    const total = w.jurisdiction + w.pep + w.sanctions + w.negativeNews + w.entityType + w.ownership;
-    const score = total > 0 ? Math.round((jScore * w.jurisdiction + pepScore * w.pep + sanctScore * w.sanctions + newsScore * w.negativeNews + typeScore * w.entityType + ownScore * w.ownership) / total) : 0;
+    const industryScore = HIGH_RISK_INDUSTRIES.includes(entity.industry) ? 100 : MEDIUM_RISK_INDUSTRIES.includes(entity.industry) ? 50 : 10;
+    const total = w.jurisdiction + w.pep + w.sanctions + w.negativeNews + w.entityType + w.ownership + (w.industry || 0);
+    const score = total > 0 ? Math.round((jScore * w.jurisdiction + pepScore * w.pep + sanctScore * w.sanctions + newsScore * w.negativeNews + typeScore * w.entityType + ownScore * w.ownership + industryScore * (w.industry || 0)) / total) : 0;
     const rOrder = { Low: 0, Medium: 1, High: 2 };
     let minRating = 'Low';
     if (settings.highRisk.includes(entity.jurisdiction)) minRating = 'High';
@@ -1453,10 +1418,10 @@ export default function KYCSystem() {
     let rating = score >= 70 ? 'High' : score >= 40 ? 'Medium' : 'Low';
     const rawRating = rating;
     if (rOrder[minRating] > rOrder[rating]) rating = minRating;
-    if (entity.isSanctioned) return { score: 100, rating: 'High', breakdown: { jurisdiction: jScore, pep: pepScore, sanctions: 100, negativeNews: newsScore, entityType: typeScore, ownership: ownScore }, autoHighRisk: false, sanctionForced: true, jurisdictionForced: false, pepForced: false };
+    if (entity.isSanctioned) return { score: 100, rating: 'High', breakdown: { jurisdiction: jScore, pep: pepScore, sanctions: 100, negativeNews: newsScore, entityType: typeScore, ownership: ownScore, industry: industryScore }, autoHighRisk: false, sanctionForced: true, jurisdictionForced: false, pepForced: false };
     let pepForced = false;
     if (entity.isPEP && rating !== 'High') { pepForced = true; rating = 'High'; }
-    return { score, rating, breakdown: { jurisdiction: jScore, pep: pepScore, sanctions: sanctScore, negativeNews: newsScore, entityType: typeScore, ownership: ownScore }, autoHighRisk: false, jurisdictionForced: rOrder[minRating] > rOrder[rawRating], pepForced };
+    return { score, rating, breakdown: { jurisdiction: jScore, pep: pepScore, sanctions: sanctScore, negativeNews: newsScore, entityType: typeScore, ownership: ownScore, industry: industryScore }, autoHighRisk: false, jurisdictionForced: rOrder[minRating] > rOrder[rawRating], pepForced };
   }, [entities, relationships, settings]);
 
   const getEffectiveRating = (entity) => { const crr = calcCRR(entity); if (crr.autoHighRisk) return { ...crr, overridden: false }; if (crr.pepForced) return { ...crr, overridden: false }; return entity.riskOverride ? { ...crr, rating: entity.riskOverride.rating, overridden: true } : { ...crr, overridden: false }; };
@@ -1596,13 +1561,12 @@ export default function KYCSystem() {
     return errors;
   }, [entities, relationships, t, hasDuplicateRel, wouldCreateCycle, wouldExceedShares, wouldExceedPercentage]);
 
-  const exportCSV = () => {
-    const headers = ['Name', 'Type', 'SubType', 'Category', 'Jurisdiction', 'Risk Rating', 'CRR Score', 'PEP', 'Sanctioned', 'Last Review', 'Next Review', 'DD Level'];
-    const rows = entities.map(e => { const r = getEffectiveRating(e); return [e.name, e.type, e.subType, getCategoryLabel(e.companyCategory), e.jurisdiction, r.rating, r.score, e.isPEP, e.isSanctioned, e.lastReviewDate, e.nextReviewDate, getDDLevel(e).toUpperCase()]; });
+    const exportCSV = () => {
+    const headers = ['Name','Type','SubType','Category','Jurisdiction','Industry','Risk Rating','CRR Score','PEP','Sanctioned','Last Review','Next Review','DD Level'];
+    const rows = entities.map(e => { const r = getEffectiveRating(e); return [e.name, e.type, e.subType, getCategoryLabel(e.companyCategory), e.jurisdiction, e.industry || '', r.rating, r.score, e.isPEP, e.isSanctioned, e.lastReviewDate, e.nextReviewDate, getDDLevel(e).toUpperCase()]; });
     const csv = [headers, ...rows].map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `kyc_entities_${today}.csv`; a.click(); URL.revokeObjectURL(url);
+    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `kyc_entities_${today}.csv`; a.click(); URL.revokeObjectURL(url);
   };
 
   const selectedEntity = entities.find(e => e.id === selectedId);
@@ -1672,6 +1636,12 @@ export default function KYCSystem() {
   const SDDBanner = ({ entity }) => { if (!isSddEligible(entity)) return null; return (<div className="bg-cyan-50 border border-cyan-300 rounded-lg p-3 flex items-start gap-2"><span className="text-lg shrink-0">🔵</span><div><div className="text-xs font-bold text-cyan-800">SDD</div><div className="text-xs text-cyan-700 mt-0.5">{t.sddEligible.replace('{type}', getCategoryLabel(entity.companyCategory))}</div></div></div>); };
   const AutoHighRiskBanner = ({ entity }) => { if (!isAutoHighRisk(entity)) return null; return (<div className="bg-red-50 border border-red-300 rounded-lg p-3 flex items-start gap-2"><span className="text-lg shrink-0">🔴</span><div><div className="text-xs font-bold text-red-800">{t.annualReview}</div><div className="text-xs text-red-700 mt-0.5">{t.autoHighRiskNotice.replace('{subType}', entity.subType)}</div></div></div>); };
   const EDDBanner = ({ entity }) => { if (isSddEligible(entity) || isAutoHighRisk(entity)) return null; const eff = getEffectiveRating(entity); if (eff.rating !== 'High') return null; return (<div className="bg-orange-50 border border-orange-300 rounded-lg p-3 flex items-start gap-2"><span className="text-lg shrink-0">🟠</span><div><div className="text-xs font-bold text-orange-800">EDD</div><div className="text-xs text-orange-700 mt-0.5">{t.eddRequired}</div></div></div>); };
+  const IndustryEDDBanner = ({ entity }) => {
+    if (!HIGH_RISK_INDUSTRIES.includes(entity.industry)) return null;
+    if (isSddEligible(entity) || isAutoHighRisk(entity)) return null;
+    if (getEffectiveRating(entity).rating === 'High') return null;
+    return (<div className="bg-orange-50 border border-orange-300 rounded-lg p-3 flex items-start gap-2"><span className="text-lg shrink-0">🏭</span><div><div className="text-xs font-bold text-orange-800">{t.highRiskIndustry}</div><div className="text-xs text-orange-700 mt-0.5">{t.autoEDDIndustry}</div></div></div>);
+  };
 
   // ====== DASHBOARD ======
   const renderDashboard = () => {
@@ -1858,7 +1828,7 @@ export default function KYCSystem() {
       <ModalShell title={`${ent.type === 'person' ? '👤' : '🏢'} ${ent.name}`} onClose={() => { setSelectedId(null); setExpandedCDD(null); }} wide>
         <div className="flex gap-1 mb-4 border-b pb-2 overflow-x-auto">{tabs.map(tb => <button key={tb.id} onClick={() => { setDetailTab(tb.id); setExpandedCDD(null); }} className={`px-3 py-1 rounded-lg text-sm font-medium whitespace-nowrap ${detailTab === tb.id ? (tb.id === 'cdd' ? 'bg-indigo-600 text-white' : tb.id === 'sanctionScreening' ? 'bg-orange-600 text-white' : 'bg-blue-600 text-white') : (tb.id === 'cdd' ? 'text-indigo-600 hover:bg-indigo-50 border border-indigo-200' : tb.id === 'sanctionScreening' ? 'text-orange-600 hover:bg-orange-50 border border-orange-200' : 'text-gray-500 hover:bg-gray-100')}`}>{tb.label}{tb.id === 'cdd' && cddRecords.length > 0 && detailTab !== 'cdd' && <span className="ml-1 bg-indigo-100 text-indigo-700 px-1 rounded-full text-xs">{cddRecords.length}</span>}</button>)}</div>
 
-        {detailTab === 'overview' && (<div className="space-y-3 mb-2"><SDDBanner entity={ent} /><AutoHighRiskBanner entity={ent} /><EDDBanner entity={ent} /></div>)}
+        {detailTab === 'overview' && (<div className="space-y-3 mb-2"><SDDBanner entity={ent} /><AutoHighRiskBanner entity={ent} /><EDDBanner entity={ent} /><IndustryEDDBanner entity={ent} /></div>)}
 
         {detailTab === 'cdd' && (<div className="space-y-4">
           <div className="flex items-center justify-between flex-wrap gap-2"><h3 className="text-sm font-bold text-gray-700">📋 {t.cddHistory}</h3><button onClick={() => openModal('saveCDD', { reviewer: '', type: 'periodic', status: 'completed', summary: '' })} className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-indigo-700 shadow-sm">{t.saveCDD}</button></div>
@@ -1870,6 +1840,7 @@ export default function KYCSystem() {
           <div className="grid grid-cols-2 gap-3">
             <div><span className="text-xs text-gray-400">{t.type}</span><div className="font-medium text-sm">{ent.subType || ent.type}{ent.type === 'company' && ent.companyCategory ? ` · ${getCategoryLabel(ent.companyCategory)}` : ''}</div></div>
             <div><span className="text-xs text-gray-400">{t.jurisdiction}</span><div className="font-medium text-sm">{ent.jurisdiction}</div></div>
+            <div><span className="text-xs text-gray-400">{t.industryLabel}</span><div className="font-medium text-sm">{ent.industry || '—'}{HIGH_RISK_INDUSTRIES.includes(ent.industry) && <span className="ml-1 text-red-500 text-xs">🔴</span>}</div></div>
             <div><span className="text-xs text-gray-400">{t.lastReview}</span><div className="font-medium text-sm">{ent.lastReviewDate}</div></div>
             <div><span className="text-xs text-gray-400">{t.nextReview}</span><div className={`font-medium text-sm ${ent.nextReviewDate && ent.nextReviewDate < today ? 'text-red-600' : ''}`}>{ent.nextReviewDate || '—'}{isAutoHighRisk(ent) && <span className="ml-1 text-red-500 text-xs">🔒 {t.annualReview}</span>}</div></div>
             <div><span className="text-xs text-gray-400">{t.dueDiligenceLevel}</span><div className="mt-0.5"><DDLevelBadge entity={ent} /></div></div>
@@ -1989,6 +1960,8 @@ export default function KYCSystem() {
       {(d.type || 'company') === 'company' && SDD_ELIGIBLE_CATEGORIES.includes(d.companyCategory) && (<div className="bg-cyan-50 border border-cyan-300 rounded-lg p-2.5 text-xs text-cyan-700">🔵 {t.sddEligible.replace('{type}', getCategoryLabel(d.companyCategory))}</div>)}
       {AUTO_HIGH_RISK_SUBTYPES.includes(d.subType) && (<div className="bg-red-50 border border-red-300 rounded-lg p-2.5 text-xs text-red-700">🔴 {t.autoHighRiskNotice.replace('{subType}', d.subType)}</div>)}
       <FormField label={t.jurisdiction}><select value={d.jurisdiction || 'USA'} onChange={e => setD('jurisdiction', e.target.value)} className="w-full border rounded px-3 py-2 text-sm">{ALL_COUNTRIES.map(c => <option key={c}>{c}</option>)}</select></FormField>
+      <FormField label={t.industryLabel}><select value={d.industry || ''} onChange={e => setD('industry', e.target.value)} className="w-full border rounded px-3 py-2 text-sm"><option value="">{t.selectIndustry}</option>{ALL_INDUSTRIES.map(ind => <option key={ind} value={ind}>{ind}{HIGH_RISK_INDUSTRIES.includes(ind) ? ' 🔴' : MEDIUM_RISK_INDUSTRIES.includes(ind) ? ' 🟡' : ''}</option>)}</select></FormField>
+      {HIGH_RISK_INDUSTRIES.includes(d.industry) && (<div className="bg-orange-50 border border-orange-300 rounded-lg p-2.5 text-xs text-orange-700">🏭 {t.autoEDDIndustry}</div>)}
       {(d.type || 'company') === 'company' && (<div className="bg-blue-50 rounded-lg p-3"><FormField label={t.totalSharesLabel}><input type="number" value={d.totalShares || ''} onChange={e => setD('totalShares', e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></FormField></div>)}
       <button onClick={() => { if (!d.name) { setD('_touched', true); return; } const isAHR = AUTO_HIGH_RISK_SUBTYPES.includes(d.subType); const nextReview = isAHR ? new Date(new Date().getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) : ''; setEntities(prev => [...prev, { id: gid(), name: d.name, type: d.type || 'company', subType: d.subType || '', companyCategory: (d.type || 'company') === 'company' ? (d.companyCategory || 'private') : null, jurisdiction: d.jurisdiction || 'USA', totalShares: d.totalShares ? parseInt(d.totalShares) : null, isPEP: false, pepCategory: '', isSanctioned: false, negativeNews: false, riskOverride: null, riskHistory: [{ date: today, score: 0, rating: 'Low' }], lastReviewDate: today, nextReviewDate: nextReview, documents: [], screeningLogs: [], str: null, notes: [], cddRecords: [] }]); closeModal(); }} className="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium mt-2">{t.addEntity}</button>
     </div></ModalShell>)}
@@ -2003,6 +1976,8 @@ export default function KYCSystem() {
       {(d.type || 'company') === 'company' && SDD_ELIGIBLE_CATEGORIES.includes(d.companyCategory) && (<div className="bg-cyan-50 border border-cyan-300 rounded-lg p-2.5 text-xs text-cyan-700">🔵 {t.sddEligible.replace('{type}', getCategoryLabel(d.companyCategory))}</div>)}
       {AUTO_HIGH_RISK_SUBTYPES.includes(d.subType) && (<div className="bg-red-50 border border-red-300 rounded-lg p-2.5 text-xs text-red-700">🔴 {t.autoHighRiskNotice.replace('{subType}', d.subType)}</div>)}
       <FormField label={t.jurisdiction}><select value={d.jurisdiction || 'USA'} onChange={e => setD('jurisdiction', e.target.value)} className="w-full border rounded px-3 py-2 text-sm">{ALL_COUNTRIES.map(c => <option key={c}>{c}</option>)}</select></FormField>
+      <FormField label={t.industryLabel}><select value={d.industry || ''} onChange={e => setD('industry', e.target.value)} className="w-full border rounded px-3 py-2 text-sm"><option value="">{t.selectIndustry}</option>{ALL_INDUSTRIES.map(ind => <option key={ind} value={ind}>{ind}{HIGH_RISK_INDUSTRIES.includes(ind) ? ' 🔴' : MEDIUM_RISK_INDUSTRIES.includes(ind) ? ' 🟡' : ''}</option>)}</select></FormField>
+      {HIGH_RISK_INDUSTRIES.includes(d.industry) && (<div className="bg-orange-50 border border-orange-300 rounded-lg p-2.5 text-xs text-orange-700">🏭 {t.autoEDDIndustry}</div>)}
       {(d.type || 'company') === 'company' && (<div className="bg-blue-50 rounded-lg p-3"><FormField label={t.totalSharesLabel}><input type="number" value={d.totalShares != null ? d.totalShares : ''} onChange={e => setD('totalShares', e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></FormField></div>)}
       <button onClick={() => { if (!d.name || !d.id) return; const isAHR = AUTO_HIGH_RISK_SUBTYPES.includes(d.subType); const up = { name: d.name, type: d.type, subType: d.subType || '', companyCategory: (d.type || 'company') === 'company' ? (d.companyCategory || 'private') : null, jurisdiction: d.jurisdiction, totalShares: d.totalShares ? parseInt(d.totalShares) : null }; if (isAHR) { const ent = entities.find(e => e.id === d.id); if (ent && !ent.nextReviewDate) up.nextReviewDate = new Date(new Date().getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10); } updateEntity(d.id, up); closeModal(); }} className="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium mt-2">{t.saveChanges}</button>
     </div></ModalShell>)}
