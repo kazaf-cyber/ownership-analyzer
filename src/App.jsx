@@ -1743,9 +1743,7 @@ export default function KYCSystem() {
   onWheel={e => { e.preventDefault(); setSvgTransform(p => ({ ...p, scale: Math.max(0.3, Math.min(3, +(p.scale + (e.deltaY > 0 ? -0.1 : 0.1)).toFixed(1))) })); }}
   onMouseMove={e => { if (dragState && svgRef.current) { const rect = svgRef.current.getBoundingClientRect(); setDragState(prev => prev ? { ...prev, mx: e.clientX - rect.left, my: e.clientY - rect.top } : null); } }}
   onMouseUp={() => setDragState(null)}>
-                onMouseMove={e => { if (dragState && svgRef.current) { const rect = svgRef.current.getBoundingClientRect(); setDragState(prev => prev ? { ...prev, mx: e.clientX - rect.left, my: e.clientY - rect.top } : null); } }}
-                onMouseUp={() => setDragState(null)}>
-                <defs>
+              <defs>
                   <marker id="arr" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#94a3b8" /></marker>
                   <marker id="arrH" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#3b82f6" /></marker>
                   <marker id="arrR" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#a855f7" /></marker>
@@ -2089,7 +2087,8 @@ export default function KYCSystem() {
       <button onClick={() => setLang(l => l === 'zh' ? 'en' : 'zh')} className="flex items-center gap-1 px-2 py-1 rounded text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200">{lang === 'zh' ? 'EN' : '中文'}</button>
       <button onClick={() => setDarkMode(dm => !dm)} className="flex items-center gap-1 px-2 py-1 rounded text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200">{darkMode ? '☀️' : '🌙'}</button>
        </div>
-        <nav className="flex-1 py-1">{navItems.map(item => (<button key={item.id} onClick={() => setView(item.id)} className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${view === item.id ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><span>{item.icon}</span>{item.label}{item.id === 'snapshots' && snapshots.length > 0 && <span className="ml-auto bg-slate-600 text-slate-200 px-1.5 py-0.5 rounded-full text-xs leading-none">{snapshots.length}</span>}</button>))}</nav>
+          </div>
+       <nav className="flex-1 py-1">{navItems.map(item => (<button key={item.id} onClick={() => setView(item.id)} className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${view === item.id ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><span>{item.icon}</span>{item.label}{item.id === 'snapshots' && snapshots.length > 0 && <span className="ml-auto bg-slate-600 text-slate-200 px-1.5 py-0.5 rounded-full text-xs leading-none">{snapshots.length}</span>}</button>))}</nav>
         {autoTodos.filter(td => td.priority === 'critical' || td.priority === 'high').length > 0 && <div className="p-2 border-t border-slate-700 text-xs text-red-400">🔔 {autoTodos.filter(td => td.priority === 'critical' || td.priority === 'high').length} {t.urgentItems}</div>}
       </div>
       {view === 'workspace' ? (<div className="flex-1 flex flex-col overflow-hidden p-3 pb-8 pt-10 md:pt-0">{renderWorkspace()}</div>) : (<div className="flex-1 overflow-y-auto p-5 pb-8 pt-10 md:pt-0">{view === 'dashboard' && renderDashboard()}{view === 'search' && renderSearch()}{view === 'snapshots' && renderSnapshots()}{view === 'settings' && renderSettings()}{view === 'report' && renderReport()}</div>)}
