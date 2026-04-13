@@ -2086,9 +2086,9 @@ export default function KYCSystem() {
       {mobileSideOpen && (<div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setMobileSideOpen(false)} />)}
       <div className={`fixed md:relative left-0 top-0 bottom-0 z-50 w-44 bg-slate-800 text-white flex flex-col shrink-0 transition-transform duration-200 ${mobileSideOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}>
         <div className="p-3 border-b border-slate-700"><div className="text-base font-bold">🛡️ {t.appTitle}</div><div className="text-xs text-slate-400">{t.appSub}</div><div className="mt-2 flex gap-1">
-  <button onClick={() => setLang(l => l === 'zh' ? 'en' : 'zh')} className="flex items-center gap-1 px-2 py-1 rounded text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200">{lang === 'zh' ? 'EN' : '中文'}</button>
-  <button onClick={() => setDarkMode(dm => !dm)} className="flex items-center gap-1 px-2 py-1 rounded text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200">{darkMode ? '☀️' : '🌙'}</button>
-  </div>
+      <button onClick={() => setLang(l => l === 'zh' ? 'en' : 'zh')} className="flex items-center gap-1 px-2 py-1 rounded text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200">{lang === 'zh' ? 'EN' : '中文'}</button>
+      <button onClick={() => setDarkMode(dm => !dm)} className="flex items-center gap-1 px-2 py-1 rounded text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200">{darkMode ? '☀️' : '🌙'}</button>
+       </div>
         <nav className="flex-1 py-1">{navItems.map(item => (<button key={item.id} onClick={() => setView(item.id)} className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${view === item.id ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><span>{item.icon}</span>{item.label}{item.id === 'snapshots' && snapshots.length > 0 && <span className="ml-auto bg-slate-600 text-slate-200 px-1.5 py-0.5 rounded-full text-xs leading-none">{snapshots.length}</span>}</button>))}</nav>
         {autoTodos.filter(td => td.priority === 'critical' || td.priority === 'high').length > 0 && <div className="p-2 border-t border-slate-700 text-xs text-red-400">🔔 {autoTodos.filter(td => td.priority === 'critical' || td.priority === 'high').length} {t.urgentItems}</div>}
       </div>
