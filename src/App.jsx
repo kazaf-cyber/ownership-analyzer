@@ -1700,6 +1700,60 @@ export default function KYCSystem() {
         <div className="bg-white rounded-xl shadow-sm border p-3"><h3 className="text-xs font-semibold text-gray-600 mb-1">{t.entityTypes}</h3><ResponsiveContainer width="100%" height={150}><BarChart data={barData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" tick={{ fontSize: 8 }} /><YAxis /><Bar dataKey="count" fill="#6366f1" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div>
       </div>
       <div className="bg-white rounded-xl shadow-sm border p-3 mb-4"><h3 className="text-xs font-semibold text-gray-600 mb-1">{t.avgRiskScoreTrend}</h3><ResponsiveContainer width="100%" height={130}><LineChart data={trendData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="month" tick={{ fontSize: 9 }} /><YAxis domain={[0, 100]} /><RTooltip /><Line type="monotone" dataKey="avgScore" stroke="#ef4444" strokeWidth={2} /></LineChart></ResponsiveContainer></div>
+      {/* ★ Geographic Risk Heatmap */}
+{(() => {
+  const geoData = {};
+  entities.forEach(e => {
+    const j = e.jurisdiction;
+    if (!geoData[j]) geoData[j] = { name: j, total: 0, high: 0, medium: 0, low: 0 };
+    geoData[j].total++;
+    const r = getEffectiveRating(e).rating;
+    if (r === 'High') geoData[j].high++;
+    else if (r === 'Medium') geoData[j].medium++;
+    else geoData[j].low++;
+  });
+  const geoArr = Object.values(geoData).sort((a, b) => {
+    const aScore = a.high * 3 + a.medium * 2 + a.low;
+    const bScore = b.high * 3 + b.medium * 2 + b.low;
+    return bScore - aScore;
+  });
+  if (geoArr.length === 0) return null;
+  const maxTotal = Math.max(...geoArr.map(g => g.total), 1);
+  const getHeatColor = (g) => {
+    if (g.high > 0) return { bg: 'bg-red-500', text: 'text-white' };
+    if (g.medium > 0) return { bg: 'bg-amber-400', text: 'text-gray-900' };
+    return { bg: 'bg-green-400', text: 'text-gray-900' };
+  };
+  return (
+    <div className="bg-white rounded-xl shadow-sm border p-3 mb-4">
+      <h3 className="text-xs font-semibold text-gray-600 mb-2">🌍 {t.geoRiskMap}</h3>
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+        {geoArr.map(g => {
+          const c = getHeatColor(g);
+          const widthPct = Math.max(20, Math.round((g.total / maxTotal) * 100));
+          return (
+            <div key={g.name} className="relative rounded-lg overflow-hidden border border-gray-200">
+              <div className={`${c.bg} ${c.text} px-2.5 py-2`} style={{ width: `${widthPct}%`, minWidth: '100%' }}>
+                <div className="text-xs font-bold truncate">{g.name}</div>
+                <div className="flex gap-1.5 mt-0.5 text-xs opacity-90">
+                  <span>{g.total} total</span>
+                  {g.high > 0 && <span>🔴{g.high}</span>}
+                  {g.medium > 0 && <span>🟡{g.medium}</span>}
+                  {g.low > 0 && <span>🟢{g.low}</span>}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex gap-3 mt-2 text-xs text-gray-400">
+        <span>🔴 {t.highRisk}</span>
+        <span>🟡 {lang === 'zh' ? '中風險' : 'Medium'}</span>
+        <span>🟢 {lang === 'zh' ? '低風險' : 'Low'}</span>
+      </div>
+    </div>
+  );
+})()}
       <div className="bg-white rounded-xl shadow-sm border p-3"><h3 className="text-xs font-semibold text-gray-600 mb-2">{t.autoTodos} ({autoTodos.length})</h3><div className="space-y-1 max-h-48 overflow-y-auto">{autoTodos.map(td => (<div key={td.id} className="flex items-center gap-2 p-1.5 rounded bg-gray-50 hover:bg-gray-100 cursor-pointer text-xs" onClick={() => { setSelectedId(td.entityId); setDetailTab('overview'); setView('workspace'); }}><PriorityDot p={td.priority} /><span className="flex-1 text-gray-700">{td.text}</span><span className="text-gray-400 text-xs px-1.5 py-0.5 bg-gray-200 rounded">{td.type}</span></div>))}{autoTodos.length === 0 && <div className="text-xs text-gray-400 text-center py-3">{t.noPendingTodos}</div>}</div></div>
     </div>);
   };
