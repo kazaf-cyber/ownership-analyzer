@@ -1,4 +1,4 @@
-',/**
+/**
  * KYC/AML Compliance Management System
  * 
  * 修正日誌 (2026-04-01~04-09): [原有]
