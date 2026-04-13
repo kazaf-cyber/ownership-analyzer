@@ -53,7 +53,37 @@ const DEFAULT_MONITORED = ['Russia', 'Turkey', 'UAE', 'Pakistan', 'Cambodia', 'N
 const HIGH_RISK_INDUSTRIES = ['Gambling / Gaming','Cryptocurrency / Virtual Assets','Arms / Defence','Precious Metals & Stones','Cash-intensive Business','Money Services Business','Adult Entertainment','Cannabis','Art & Antiquities','Non-Profit / Charity','Correspondent Banking'];
 const MEDIUM_RISK_INDUSTRIES = ['Construction','Import / Export','Logistics / Shipping','Mining','Pharmaceuticals','Tobacco','Real Estate'];
 const ALL_INDUSTRIES = [...new Set([...HIGH_RISK_INDUSTRIES,...MEDIUM_RISK_INDUSTRIES,'Technology','Manufacturing','Retail','Healthcare','Education','Financial Services (Regulated)','Professional Services','Agriculture','Hospitality','Telecommunications','Other'])].sort();
-
+const INDUSTRY_LABELS_ZH = {
+  'Gambling / Gaming': '博彩 / 遊戲',
+  'Cryptocurrency / Virtual Assets': '加密貨幣 / 虛擬資產',
+  'Arms / Defence': '軍火 / 國防',
+  'Precious Metals & Stones': '貴金屬與寶石',
+  'Cash-intensive Business': '現金密集型業務',
+  'Money Services Business': '貨幣服務業務',
+  'Adult Entertainment': '成人娛樂',
+  'Cannabis': '大麻產業',
+  'Art & Antiquities': '藝術品與古董',
+  'Non-Profit / Charity': '非營利 / 慈善機構',
+  'Correspondent Banking': '代理銀行業務',
+  'Construction': '建築業',
+  'Import / Export': '進出口貿易',
+  'Logistics / Shipping': '物流 / 航運',
+  'Mining': '採礦業',
+  'Pharmaceuticals': '製藥業',
+  'Tobacco': '菸草業',
+  'Real Estate': '房地產',
+  'Technology': '科技業',
+  'Manufacturing': '製造業',
+  'Retail': '零售業',
+  'Healthcare': '醫療保健',
+  'Education': '教育業',
+  'Financial Services (Regulated)': '金融服務（受監管）',
+  'Professional Services': '專業服務',
+  'Agriculture': '農業',
+  'Hospitality': '餐旅業',
+  'Telecommunications': '電信業',
+  'Other': '其他',
+};
 const ALL_COUNTRIES = [...new Set([...DEFAULT_HIGH_RISK, ...DEFAULT_OFFSHORE, ...DEFAULT_MONITORED, 'USA', 'UK', 'Germany', 'France', 'Japan', 'Australia', 'Canada', 'Singapore', 'Hong Kong', 'Taiwan', 'Switzerland', 'Netherlands', 'Ireland', 'Luxembourg', 'China', 'India', 'Brazil', 'South Korea', 'New Zealand', 'Sweden', 'Norway'])].sort();
 const DOC_COMPANY = ['Certificate of Incorporation', 'Register of Directors', 'Register of Shareholders', 'Memorandum & Articles', 'Financial Statements', 'Proof of Address', 'Sanctions Screening Report', 'Source of Funds Declaration', 'Tax Residency Certificate'];
 const DOC_PERSON = ['Passport / ID', 'Proof of Address', 'Source of Wealth Declaration', 'CV / Profile', 'Sanctions Screening Report', 'PEP Screening Report', 'Bank Reference Letter'];
