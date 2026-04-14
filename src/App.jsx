@@ -501,44 +501,81 @@ const SANCTION_MOCK_ZH = [
   { rank: 4, title: '全球制裁動態：OFAC發佈金融機構新指引', source: '彭博法律', date: '2026-03-05', snippet: 'OFAC已發佈更新的金融機構制裁篩查最佳實踐指引...', matchedKeywords: ['制裁'], cls: 'NO_HIT', confidence: 0.93, reason: '一般監管指引。全文未提及ABC控股有限公司。', riskCat: 'N/A' }
 ];
 
-/* ★ GeoRiskMap — SVG World Map with Risk Dots */
+/* ★ GeoRiskMap — Realistic SVG World Map */
 function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
   const [hovered, setHovered] = React.useState(null);
 
-  const COORDS = {
-    'USA':[195,155],'Canada':[185,105],'UK':[428,118],'Germany':[453,122],
-    'France':[438,135],'Japan':[708,152],'Australia':[718,325],'Singapore':[623,242],
-    'Hong Kong':[658,192],'Taiwan':[668,188],'Switzerland':[450,130],'Netherlands':[445,115],
-    'Ireland':[415,112],'Luxembourg':[444,125],'China':[638,168],'India':[573,202],
-    'Brazil':[288,298],'South Korea':[688,152],'New Zealand':[768,355],'Sweden':[460,88],
-    'Norway':[448,85],'Iran':[528,170],'North Korea':[685,145],'Myanmar':[608,208],
-    'Syria':[496,162],'Afghanistan':[553,170],'Libya':[458,180],'Somalia':[508,238],
-    'South Sudan':[486,238],'Yemen':[518,206],'Iraq':[506,168],'BVI':[256,206],
-    'Cayman Islands':[220,206],'Panama':[226,226],'Bermuda':[266,172],
-    'Jersey':[430,126],'Guernsey':[426,126],'Isle of Man':[423,110],
-    'Liechtenstein':[454,130],'Vanuatu':[756,296],'Seychelles':[533,265],
-    'Russia':[548,92],'Turkey':[486,152],'UAE':[533,192],'Pakistan':[556,182],
-    'Cambodia':[630,220],'Nigeria':[438,226],'Albania':[468,148],
-    'Philippines':[666,216],'Barbados':[276,216],'Senegal':[390,216],
-    'Cuba':[232,198],'Venezuela':[268,228],'Nicaragua':[213,218],
-    'Haiti':[248,208],'Mali':[423,208],'Central African Republic':[473,233],
-    'Congo':[468,258],'Ethiopia':[503,228],'Guinea-Bissau':[393,218],
-    'Macedonia':[478,146],'Montenegro':[464,145],'Serbia':[468,140],
-    'Slovenia':[458,135],'Croatia':[460,138],'Bulgaria':[478,142],
-    'Romania':[472,135],'Kosovo':[470,147],'Belarus':[478,108],
-    'Bosnia and Herzegovina':[462,142],'Kyrgyzstan':[568,148],
-    'Ukraine':[482,118],'Lebanon':[496,166],'Sudan':[490,218],
-    'South Africa':[475,338],'Kenya':[502,252],
+  const px = (lon) => (lon + 180) / 360 * 960 + 20;
+  const py = (lat) => (84 - lat) / 150 * 480 + 10;
+
+  const smooth = (pts) => {
+    if (!pts || pts.length < 3) return '';
+    const c = pts.map(([lo, la]) => [px(lo), py(la)]);
+    const mid = (a, b) => [(a[0]+b[0])/2, (a[1]+b[1])/2];
+    const m0 = mid(c[c.length-1], c[0]);
+    let d = `M${m0[0].toFixed(0)},${m0[1].toFixed(0)}`;
+    for (let i = 0; i < c.length; i++) {
+      const m = mid(c[i], c[(i+1)%c.length]);
+      d += ` Q${c[i][0].toFixed(0)},${c[i][1].toFixed(0)},${m[0].toFixed(0)},${m[1].toFixed(0)}`;
+    }
+    return d + ' Z';
   };
 
-  const CONTINENTS = [
-    "M75,48 Q130,38 178,48 Q208,58 228,82 Q248,112 252,148 Q248,178 238,198 L218,212 Q198,218 175,212 Q148,198 122,172 Q98,148 88,118 Q78,88 78,48 Z",
-    "M212,238 Q242,222 268,238 Q282,258 288,288 Q285,322 272,352 Q258,372 238,375 Q222,368 215,348 Q210,318 210,282 Q210,258 212,238 Z",
-    "M412,55 Q438,48 468,55 Q492,65 498,88 Q500,108 496,128 Q488,145 475,152 Q460,155 442,150 Q428,140 418,122 Q410,102 410,78 Q411,65 412,55 Z",
-    "M415,165 Q442,155 472,165 Q498,178 510,198 Q522,228 525,262 Q522,298 510,325 Q492,345 470,345 Q448,338 432,316 Q422,288 418,255 Q413,222 413,192 Q414,175 415,165 Z",
-    "M496,38 Q548,32 608,38 Q668,48 718,68 Q745,88 750,115 Q746,145 728,165 Q706,185 678,198 Q646,212 616,215 Q588,210 563,196 Q540,178 523,155 Q508,130 503,102 Q498,72 496,38 Z",
-    "M685,290 Q715,280 745,286 Q772,296 785,315 Q782,338 768,355 Q746,358 722,355 Q702,342 690,322 Q685,305 685,290 Z",
+  const LAND = [
+    [[-168,72],[-155,73],[-140,70],[-130,73],[-115,74],[-100,76],[-85,73],[-80,68],[-80,64],[-72,62],[-65,60],[-58,55],[-55,48],[-58,45],[-62,44],[-66,44],[-70,43],[-74,41],[-76,36],[-80,31],[-82,29],[-81,25],[-82,25],[-85,29],[-90,30],[-95,29],[-97,26],[-97,22],[-95,18],[-92,15],[-90,14],[-86,12],[-84,10],[-82,8],[-80,8],[-82,10],[-86,13],[-90,15],[-94,17],[-100,20],[-105,20],[-110,23],[-112,27],[-117,33],[-120,36],[-122,39],[-124,44],[-124,48],[-128,52],[-133,56],[-140,60],[-148,61],[-155,61],[-162,58],[-167,57],[-170,60],[-168,65],[-168,72]],
+    [[-55,60],[-50,60],[-45,61],[-40,64],[-30,68],[-22,72],[-18,76],[-22,80],[-30,82],[-40,83],[-48,82],[-55,78],[-58,72],[-57,66],[-55,60]],
+    [[-80,10],[-77,7],[-76,3],[-79,-1],[-80,-4],[-77,-7],[-74,-12],[-72,-16],[-70,-20],[-68,-24],[-65,-28],[-58,-34],[-60,-37],[-64,-42],[-68,-46],[-72,-50],[-74,-52],[-68,-55],[-63,-54],[-58,-52],[-55,-42],[-52,-34],[-48,-26],[-44,-23],[-42,-20],[-39,-16],[-37,-12],[-35,-7],[-35,-2],[-48,0],[-52,3],[-56,5],[-60,7],[-63,8],[-66,10],[-70,12],[-75,11],[-78,10],[-80,10]],
+    [[-10,36],[-9,38],[-9,42],[-8,44],[-4,44],[-1,44],[2,46],[3,49],[4,52],[6,54],[9,55],[12,56],[13,55],[16,56],[20,58],[24,60],[28,59],[30,60],[32,62],[32,65],[28,68],[24,66],[18,66],[14,65],[10,64],[6,63],[2,61],[-1,58],[-4,57],[-6,55],[-8,53],[-10,50],[-10,46],[-9,42],[-6,38],[-4,36],[-1,36],[3,36],[6,38],[10,40],[12,43],[14,43],[16,42],[18,39],[20,36],[22,36],[25,38],[28,41],[30,39],[28,36],[24,35],[20,36],[16,38],[12,38],[8,38],[5,37],[2,36],[-1,36],[-4,36],[-10,36]],
+    [[-6,50],[-4,50],[-2,51],[0,52],[0,54],[-1,56],[-3,58],[-5,58],[-7,57],[-8,55],[-8,52],[-7,50],[-6,50]],
+    [[-11,52],[-9,52],[-7,53],[-6,54],[-8,55],[-10,55],[-11,54],[-11,52]],
+    [[5,59],[8,58],[12,60],[15,62],[18,65],[20,68],[18,71],[14,71],[10,69],[6,66],[5,63],[5,59]],
+    [[-24,64],[-20,64],[-16,65],[-14,66],[-16,67],[-20,66],[-24,65],[-24,64]],
+    [[-17,15],[-16,18],[-17,22],[-13,28],[-6,34],[-5,36],[0,36],[5,37],[10,37],[12,34],[18,33],[25,32],[30,31],[33,30],[36,28],[38,22],[43,12],[45,8],[47,4],[50,0],[50,-5],[48,-10],[44,-15],[40,-22],[38,-26],[35,-30],[30,-34],[28,-34],[26,-30],[22,-28],[18,-24],[15,-20],[13,-12],[12,-5],[10,0],[8,5],[5,5],[2,6],[-2,5],[-5,5],[-5,8],[-8,10],[-12,12],[-16,13],[-17,15]],
+    [[36,30],[40,28],[44,25],[48,24],[52,23],[56,22],[57,24],[56,26],[54,28],[50,29],[48,30],[44,32],[42,35],[38,37],[36,36],[35,33],[36,30]],
+    [[28,50],[35,52],[45,55],[55,58],[65,62],[75,65],[85,68],[95,70],[105,72],[115,73],[125,72],[135,68],[145,62],[150,56],[155,52],[160,58],[165,62],[170,66],[180,70],[180,48],[170,45],[160,42],[150,42],[145,44],[140,48],[135,52],[130,55],[125,58],[120,60],[110,60],[100,58],[90,56],[80,52],[70,48],[60,44],[50,42],[40,42],[35,45],[28,50]],
+    [[28,42],[32,38],[35,37],[38,35],[42,32],[48,28],[52,25],[56,24],[60,25],[64,28],[68,30],[72,34],[76,36],[80,38],[85,40],[90,42],[95,44],[100,46],[100,42],[95,38],[90,35],[85,32],[80,28],[76,24],[72,20],[68,18],[64,16],[60,14],[56,14],[52,16],[48,20],[44,24],[40,26],[36,28],[34,30],[32,32],[30,35],[28,38],[28,42]],
+    [[68,24],[72,22],[76,18],[80,12],[82,8],[80,6],[76,8],[72,14],[68,20],[66,24],[68,24]],
+    [[80,42],[88,44],[94,46],[100,48],[106,45],[112,40],[116,36],[118,32],[120,28],[122,24],[120,20],[116,16],[112,14],[108,12],[104,8],[100,4],[98,4],[100,10],[102,14],[104,20],[106,24],[108,28],[110,32],[108,36],[104,40],[100,44],[94,46],[88,44],[80,42]],
+    [[98,20],[100,18],[102,16],[104,14],[106,10],[108,6],[106,2],[104,0],[102,0],[100,2],[98,4],[96,6],[95,10],[95,14],[96,16],[98,20]],
+    [[130,32],[132,34],[134,36],[137,36],[140,38],[142,42],[143,45],[141,43],[139,39],[136,36],[133,33],[130,32]],
+    [[126,34],[128,36],[129,38],[128,39],[127,38],[126,36],[126,34]],
+    [[120,22],[121,24],[121,26],[120,25],[120,22]],
+    [[118,10],[120,14],[122,18],[123,16],[122,12],[121,10],[120,8],[118,10]],
+    [[96,6],[100,2],[104,-2],[108,-5],[112,-8],[116,-8],[120,-6],[124,-4],[128,-3],[132,-5],[136,-7],[140,-5],[142,-8],[140,-10],[134,-10],[128,-7],[124,-8],[120,-9],[115,-9],[110,-8],[106,-6],[102,-4],[98,0],[96,3],[96,6]],
+    [[114,-14],[118,-16],[122,-18],[126,-20],[130,-22],[134,-28],[136,-32],[138,-36],[142,-38],[148,-40],[152,-38],[154,-32],[153,-26],[152,-22],[150,-18],[148,-15],[144,-12],[140,-11],[136,-12],[132,-14],[128,-14],[124,-14],[120,-14],[116,-14],[114,-14]],
+    [[172,-34],[174,-37],[176,-40],[178,-43],[176,-46],[174,-45],[172,-42],[172,-38],[172,-34]],
+    [[44,-12],[46,-15],[48,-18],[50,-22],[49,-25],[47,-25],[45,-22],[44,-18],[44,-14],[44,-12]],
+    [[80,10],[81,8],[82,7],[81,6],[80,7],[80,10]],
+    [[142,-2],[146,-4],[150,-6],[152,-4],[150,-2],[146,-1],[142,-2]],
   ];
+
+  const CC = {
+    'USA':[-95.7,37.1],'Canada':[-96.8,56.1],'UK':[-1.2,52.3],'Germany':[10.4,51.2],
+    'France':[2.2,46.2],'Japan':[138.3,36.2],'Australia':[133.8,-25.3],
+    'Singapore':[103.8,1.4],'Hong Kong':[114.2,22.3],'Taiwan':[121,23.7],
+    'Switzerland':[8.2,46.8],'Netherlands':[5.3,52.1],'Ireland':[-7.7,53.1],
+    'Luxembourg':[6.1,49.8],'China':[104.2,35.9],'India':[79,21.1],
+    'Brazil':[-51.9,-14.2],'South Korea':[127.8,35.9],'New Zealand':[174.9,-40.9],
+    'Sweden':[18.6,60.1],'Norway':[8.5,60.5],'Iran':[53.7,32.4],
+    'North Korea':[127,40],'Myanmar':[96,19.8],'Syria':[38,34.8],
+    'Afghanistan':[67,33.9],'Libya':[17,26.3],'Somalia':[46.2,5.2],
+    'South Sudan':[30,7.9],'Yemen':[48,15.6],'Iraq':[43.7,33.2],
+    'BVI':[-64.6,18.4],'Cayman Islands':[-81.3,19.3],'Panama':[-80.8,8.5],
+    'Bermuda':[-64.8,32.3],'Jersey':[-2.1,49.2],'Guernsey':[-2.6,49.5],
+    'Isle of Man':[-4.5,54.2],'Liechtenstein':[9.6,47.2],'Vanuatu':[166.9,-15.4],
+    'Seychelles':[55.5,-4.7],'Russia':[105.3,61.5],'Turkey':[35.2,38.9],
+    'UAE':[53.8,23.4],'Pakistan':[69.3,30.4],'Cambodia':[104.9,12.6],
+    'Nigeria':[8,9.1],'Albania':[20.2,41.2],'Philippines':[122,12.9],
+    'Barbados':[-59.5,13.2],'Senegal':[-14.5,14.5],'Cuba':[-77.8,21.5],
+    'Venezuela':[-66.6,6.4],'Nicaragua':[-85.2,12.9],'Haiti':[-72.3,19],
+    'Mali':[-4,17.6],'Central African Republic':[20.9,6.6],'Congo':[21.8,-4.3],
+    'Ethiopia':[40.5,9],'Guinea-Bissau':[-15.2,12],'Macedonia':[21.7,41.5],
+    'Montenegro':[19.3,42.7],'Serbia':[21.9,44.2],'Slovenia':[14.6,46.2],
+    'Croatia':[15.2,45.1],'Bulgaria':[25.5,42.7],'Romania':[24.7,45.9],
+    'Kosovo':[20.9,42.6],'Belarus':[27.9,53.7],'Bosnia and Herzegovina':[17.7,43.9],
+    'Kyrgyzstan':[74.8,41.2],'Ukraine':[31.2,48.4],'Lebanon':[35.9,33.9],
+    'Sudan':[30,12.9],'South Africa':[22.9,-30.6],'Kenya':[37.9,-0.02],
+  };
 
   const geoData = {};
   entities.forEach(e => {
@@ -552,118 +589,76 @@ function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
   });
 
   if (Object.keys(geoData).length === 0) return null;
-
   const getColor = (g) => g.high > 0 ? '#ef4444' : g.medium > 0 ? '#f59e0b' : '#22c55e';
-  const getStroke = (g) => g.high > 0 ? '#dc2626' : g.medium > 0 ? '#d97706' : '#16a34a';
-  const getR = (total) => Math.max(7, Math.min(20, 7 + total * 3));
-
-  const unmatched = Object.keys(geoData).filter(c => !COORDS[c]);
+  const getR = (total) => Math.max(6, Math.min(18, 6 + total * 2.5));
+  const unmatched = Object.keys(geoData).filter(c => !CC[c]);
 
   return (
     <div className="bg-white rounded-xl shadow-sm border p-3 mb-4">
       <h3 className="text-xs font-semibold text-gray-600 mb-2">🌍 {t.geoRiskMap}</h3>
-      <div className="relative w-full overflow-hidden rounded-lg bg-gradient-to-b from-slate-50 to-slate-100 border">
-        <svg viewBox="0 0 1000 420" className="w-full" style={{ minHeight: '180px' }}>
+      <div className="relative w-full overflow-hidden rounded-lg">
+        <svg viewBox="0 0 1000 500" className="w-full" style={{ minHeight: '200px' }}>
           <defs>
-            <radialGradient id="dotGlow" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="white" stopOpacity="0.4" />
-              <stop offset="100%" stopColor="white" stopOpacity="0" />
-            </radialGradient>
+            <linearGradient id="ocean" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#0c1929" />
+              <stop offset="50%" stopColor="#132744" />
+              <stop offset="100%" stopColor="#1a3556" />
+            </linearGradient>
+            <filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+            <filter id="landShadow"><feDropShadow dx="0" dy="1" stdDeviation="1.5" floodColor="#000" floodOpacity="0.3"/></filter>
           </defs>
-
-          {Array.from({ length: 19 }, (_, i) => (
-            <line key={`h${i}`} x1="0" y1={(i + 1) * 22} x2="1000" y2={(i + 1) * 22} stroke="#e2e8f0" strokeWidth="0.3" />
-          ))}
-          {Array.from({ length: 23 }, (_, i) => (
-            <line key={`v${i}`} x1={(i + 1) * 43} y1="0" x2={(i + 1) * 43} y2="420" stroke="#e2e8f0" strokeWidth="0.3" />
-          ))}
-
-          {CONTINENTS.map((d, i) => (
-            <path key={i} d={d} fill="#94a3b8" fillOpacity="0.18" stroke="#94a3b8" strokeOpacity="0.3" strokeWidth="1" />
-          ))}
-
+          <rect width="1000" height="500" fill="url(#ocean)" rx="8" />
+          {[-60,-30,0,30,60].map(lat => <line key={`h${lat}`} x1="20" y1={py(lat)} x2="980" y2={py(lat)} stroke="#1e3a5f" strokeWidth="0.4" strokeDasharray="3,5" />)}
+          {[-150,-120,-90,-60,-30,0,30,60,90,120,150].map(lon => <line key={`v${lon}`} x1={px(lon)} y1="10" x2={px(lon)} y2="490" stroke="#1e3a5f" strokeWidth="0.4" strokeDasharray="3,5" />)}
+          {LAND.map((pts, i) => <path key={i} d={smooth(pts)} fill="#1a3a2a" fillOpacity="0.85" stroke="#2d6b48" strokeWidth="0.6" strokeLinejoin="round" filter="url(#landShadow)" />)}
           {Object.entries(geoData).map(([country, data]) => {
-            const coord = COORDS[country];
-            if (!coord) return null;
-            const [cx, cy] = coord;
-            const color = getColor(data);
-            const stroke = getStroke(data);
-            const r = getR(data.total);
-            const isHov = hovered?.country === country;
+            const coord = CC[country]; if (!coord) return null;
+            const cx = px(coord[0]), cy = py(coord[1]);
+            const color = getColor(data); const r = getR(data.total);
+            const isHov = hovered === country;
             return (
-              <g key={country}
-                onMouseEnter={() => setHovered({ country, data, x: cx, y: cy })}
-                onMouseLeave={() => setHovered(null)}
-                style={{ cursor: 'pointer' }}>
-                <circle cx={cx} cy={cy} r={r + 6} fill={color} fillOpacity={isHov ? 0.25 : 0.12}>
-                  {!isHov && <animate attributeName="r" values={`${r + 4};${r + 8};${r + 4}`} dur="3s" repeatCount="indefinite" />}
+              <g key={country} onMouseEnter={() => setHovered(country)} onMouseLeave={() => setHovered(null)} style={{ cursor: 'pointer' }}>
+                <circle cx={cx} cy={cy} r={r + 4} fill={color} fillOpacity="0.12">
+                  <animate attributeName="r" values={`${r+3};${r+9};${r+3}`} dur="2.5s" repeatCount="indefinite" />
+                  <animate attributeName="fill-opacity" values="0.12;0.04;0.12" dur="2.5s" repeatCount="indefinite" />
                 </circle>
-                <circle cx={cx} cy={cy} r={r} fill={color} fillOpacity="0.9" stroke="white" strokeWidth="2"
-                  style={{ transition: 'r 0.2s', ...(isHov ? { filter: 'brightness(1.15)' } : {}) }} />
-                {r >= 9 && (
-                  <text x={cx} y={cy + 1} textAnchor="middle" dominantBaseline="middle"
-                    fontSize={r > 12 ? '10' : '8'} fontWeight="bold" fill="white" style={{ pointerEvents: 'none' }}>
-                    {data.total}
-                  </text>
-                )}
-                <text x={cx} y={cy + r + 11} textAnchor="middle" fontSize="7" fill="#475569" fontWeight="600"
-                  style={{ pointerEvents: 'none' }}>
-                  {country.length > 14 ? country.slice(0, 12) + '…' : country}
-                </text>
+                <circle cx={cx} cy={cy} r={isHov ? r + 2 : r} fill={color} stroke="rgba(255,255,255,0.85)" strokeWidth="1.5" filter="url(#glow)" style={{ transition: 'all 0.2s' }} />
+                {r >= 8 && <text x={cx} y={cy + 1} textAnchor="middle" dominantBaseline="middle" fontSize={r > 12 ? '10' : '8'} fontWeight="bold" fill="white" style={{ pointerEvents: 'none' }}>{data.total}</text>}
+                <text x={cx} y={cy + r + 12} textAnchor="middle" fontSize="7" fill="rgba(255,255,255,0.6)" fontWeight="500" style={{ pointerEvents: 'none' }}>{country.length > 16 ? country.slice(0, 14) + '…' : country}</text>
               </g>
             );
           })}
-
-          {hovered && (() => {
-            const bw = 120, bh = 54;
-            let tx = hovered.x - bw / 2;
-            let ty = hovered.y - bh - getR(hovered.data.total) - 12;
+          {hovered && CC[hovered] && geoData[hovered] && (() => {
+            const d = geoData[hovered], coord = CC[hovered];
+            const cx = px(coord[0]), cy = py(coord[1]), r = getR(d.total);
+            const bw = 135, bh = 60;
+            let tx = cx - bw / 2, ty = cy - bh - r - 14;
             if (tx < 5) tx = 5; if (tx + bw > 995) tx = 995 - bw;
-            if (ty < 5) ty = hovered.y + getR(hovered.data.total) + 8;
-            const d = hovered.data;
+            if (ty < 5) ty = cy + r + 10;
             return (
               <g style={{ pointerEvents: 'none' }}>
-                <rect x={tx} y={ty} width={bw} height={bh} rx={7}
-                  fill="#0f172a" fillOpacity="0.92" stroke="#334155" strokeWidth="1" />
-                <polygon
-                  points={`${hovered.x - 5},${ty + bh} ${hovered.x + 5},${ty + bh} ${hovered.x},${ty + bh + 6}`}
-                  fill="#0f172a" fillOpacity="0.92"
-                  style={{ display: ty < hovered.y ? 'block' : 'none' }}
-                />
-                <text x={tx + bw / 2} y={ty + 15} textAnchor="middle" fontSize="10" fontWeight="bold" fill="white">
-                  {hovered.country}
-                </text>
-                <text x={tx + bw / 2} y={ty + 30} textAnchor="middle" fontSize="9" fill="#94a3b8">
-                  {lang === 'zh' ? `共 ${d.total} 個實體` : `${d.total} entities`}
-                </text>
-                <text x={tx + bw / 2} y={ty + 44} textAnchor="middle" fontSize="9" fill="#cbd5e1">
-                  {`🔴${d.high}  🟡${d.medium}  🟢${d.low}`}
-                </text>
+                <rect x={tx} y={ty} width={bw} height={bh} rx={8} fill="rgba(15,23,42,0.95)" stroke="rgba(99,102,241,0.5)" strokeWidth="1" />
+                <text x={tx+bw/2} y={ty+16} textAnchor="middle" fontSize="11" fontWeight="bold" fill="white">{hovered}</text>
+                <text x={tx+bw/2} y={ty+32} textAnchor="middle" fontSize="9" fill="#94a3b8">{lang === 'zh' ? `共 ${d.total} 個實體` : `${d.total} entities`}</text>
+                <text x={tx+bw/2} y={ty+50} textAnchor="middle" fontSize="9" fill="#cbd5e1">🔴{d.high}  🟡{d.medium}  🟢{d.low}</text>
               </g>
             );
           })()}
         </svg>
       </div>
-
       {unmatched.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-2">
           {unmatched.map(c => {
-            const g = geoData[c]; const color = getColor(g);
-            return (
-              <span key={c} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs border bg-gray-50">
-                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
-                {c} ({g.total})
-              </span>
-            );
+            const g = geoData[c];
+            return (<span key={c} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs border bg-gray-50"><span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: getColor(g) }} />{c} ({g.total})</span>);
           })}
         </div>
       )}
-
       <div className="flex gap-3 mt-2 text-xs text-gray-400 flex-wrap">
         <span>🔴 {t.highRisk}</span>
         <span>🟡 {lang === 'zh' ? '中風險' : 'Medium'}</span>
         <span>🟢 {lang === 'zh' ? '低風險' : 'Low'}</span>
-        <span className="ml-auto text-gray-300">{lang === 'zh' ? '圓點大小 = 實體數量' : 'Dot size = entity count'}</span>
+        <span className="ml-auto text-gray-300">{lang === 'zh' ? '圓點大小 = 實體數量 | 懸停查看詳情' : 'Dot size = entity count | Hover for details'}</span>
       </div>
     </div>
   );
