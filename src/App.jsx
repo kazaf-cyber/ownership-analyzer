@@ -1850,7 +1850,6 @@ export default function KYCSystem() {
 <span className="text-xs text-gray-400">{Math.round(svgTransform.scale * 100)}%</span>
 {/* ★ END NEW */}
 <button onClick={() => setDragMode(!dragMode)} className={`px-2 py-1 rounded text-xs font-medium ${dragMode ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-600'}`}>{dragMode ? t.dragModeOn : t.dragMode}</button>
-              <button onClick={() => setDragMode(!dragMode)} className={`px-2 py-1 rounded text-xs font-medium ${dragMode ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-600'}`}>{dragMode ? t.dragModeOn : t.dragMode}</button>
               <button onClick={() => openModal('addRel', { sourceId: '', targetId: '', type: 'ownership', percentage: '', shares: '', description: '', inputMode: 'shares' })} className="bg-blue-600 text-white px-2 py-1 rounded text-xs">{t.addRelationship}</button>
               {dagSelected && <button onClick={() => setDagSelected(null)} className="bg-gray-200 text-gray-600 px-2 py-1 rounded text-xs">{t.clearSelection}</button>}
             </div>
