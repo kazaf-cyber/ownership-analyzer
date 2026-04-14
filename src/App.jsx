@@ -501,170 +501,322 @@ const SANCTION_MOCK_ZH = [
   { rank: 4, title: '全球制裁動態：OFAC發佈金融機構新指引', source: '彭博法律', date: '2026-03-05', snippet: 'OFAC已發佈更新的金融機構制裁篩查最佳實踐指引...', matchedKeywords: ['制裁'], cls: 'NO_HIT', confidence: 0.93, reason: '一般監管指引。全文未提及ABC控股有限公司。', riskCat: 'N/A' }
 ];
 
-/* ★ GeoRiskMap — Realistic SVG World Map */
+import React, { useState, useMemo, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { PieChart, Pie, Cell, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer } from 'recharts';
+
+/* ══════════════════════════════════════════════════════════════
+   GeoRiskMap — Real World Map (D3.js + TopoJSON, dynamically loaded)
+   Replace the old GeoRiskMap function with this entire block.
+   ══════════════════════════════════════════════════════════════ */
+
 function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
-  const [hovered, setHovered] = React.useState(null);
+  const wrapRef = useRef(null);
+  const mapRef = useRef(null);
+  const tipRef = useRef(null);
+  const zoomObjRef = useRef(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [unmatchedList, setUnmatchedList] = useState([]);
 
-  const px = (lon) => (lon + 180) / 360 * 960 + 20;
-  const py = (lat) => (84 - lat) / 150 * 480 + 10;
+  const NAME_TO_ISO = useMemo(() => ({
+    'USA':'840','UK':'826','Germany':'276','France':'250','Japan':'392',
+    'Australia':'036','Canada':'124','Singapore':'702','Taiwan':'158',
+    'Switzerland':'756','Netherlands':'528','Ireland':'372','Luxembourg':'442',
+    'China':'156','India':'356','Brazil':'076','South Korea':'410',
+    'New Zealand':'554','Sweden':'752','Norway':'578','Iran':'364',
+    'North Korea':'408','Myanmar':'104','Syria':'760','Afghanistan':'004',
+    'Libya':'434','Somalia':'706','South Sudan':'728','Yemen':'887','Iraq':'368',
+    'Panama':'591','Liechtenstein':'438','Vanuatu':'548','Seychelles':'690',
+    'Russia':'643','Turkey':'792','UAE':'784','Pakistan':'586','Cambodia':'116',
+    'Nigeria':'566','Albania':'008','Philippines':'608','Barbados':'052',
+    'Senegal':'686','Cuba':'192','Venezuela':'862','Nicaragua':'558','Haiti':'332',
+    'Mali':'466','Central African Republic':'140','Congo':'180','Ethiopia':'231',
+    'Guinea-Bissau':'624','Macedonia':'807','Montenegro':'499','Serbia':'688',
+    'Slovenia':'705','Croatia':'191','Bulgaria':'100','Romania':'642',
+    'Belarus':'112','Bosnia and Herzegovina':'070','Kyrgyzstan':'417',
+    'Ukraine':'804','Lebanon':'422','Sudan':'729','South Africa':'710',
+    'Kenya':'404','Italy':'380','Spain':'724','Mexico':'484','Saudi Arabia':'682',
+    'Egypt':'818','Indonesia':'360','Thailand':'764','Malaysia':'458',
+    'Cayman Islands':'136',
+    'Hong Kong':null,'BVI':null,'Bermuda':null,'Jersey':null,'Guernsey':null,
+    'Isle of Man':null,'Kosovo':null,'Macau':null,
+  }), []);
 
-  const smooth = (pts) => {
-    if (!pts || pts.length < 3) return '';
-    const c = pts.map(([lo, la]) => [px(lo), py(la)]);
-    const mid = (a, b) => [(a[0]+b[0])/2, (a[1]+b[1])/2];
-    const m0 = mid(c[c.length-1], c[0]);
-    let d = `M${m0[0].toFixed(0)},${m0[1].toFixed(0)}`;
-    for (let i = 0; i < c.length; i++) {
-      const m = mid(c[i], c[(i+1)%c.length]);
-      d += ` Q${c[i][0].toFixed(0)},${c[i][1].toFixed(0)},${m[0].toFixed(0)},${m[1].toFixed(0)}`;
-    }
-    return d + ' Z';
+  const POINT_COORDS = useMemo(() => ({
+    'Hong Kong':[114.17,22.32],'Singapore':[103.82,1.35],'BVI':[-64.6,18.4],
+    'Cayman Islands':[-81.25,19.31],'Bermuda':[-64.78,32.3],'Jersey':[-2.13,49.21],
+    'Guernsey':[-2.58,49.45],'Isle of Man':[-4.48,54.24],'Liechtenstein':[9.55,47.17],
+    'Macau':[113.54,22.2],'Luxembourg':[6.13,49.81],'Kosovo':[20.9,42.6],
+    'Barbados':[-59.5,13.2],'Seychelles':[55.5,-4.7],'Vanuatu':[166.9,-15.4],
+    'Taiwan':[121,23.7],
+  }), []);
+
+  const geoData = useMemo(() => {
+    const data = {};
+    entities.forEach(e => {
+      const j = e.jurisdiction;
+      if (!data[j]) data[j] = { name: j, total: 0, high: 0, medium: 0, low: 0 };
+      data[j].total++;
+      const r = getEffectiveRating(e).rating;
+      if (r === 'High') data[j].high++;
+      else if (r === 'Medium') data[j].medium++;
+      else data[j].low++;
+    });
+    return data;
+  }, [entities, getEffectiveRating]);
+
+  const getCol = useCallback((g) => !g ? '#172340' : g.high > 0 ? '#ef4444' : g.medium > 0 ? '#f59e0b' : '#22c55e', []);
+  const hovCol = useCallback((g) => !g ? '#1e3050' : g.high > 0 ? '#fca5a5' : g.medium > 0 ? '#fcd34d' : '#86efac', []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const load = (src) => new Promise((res, rej) => {
+      if (src.includes('d3') && window.d3) return res();
+      if (src.includes('topojson') && window.topojson) return res();
+      const s = document.createElement('script');
+      s.src = src; s.onload = res; s.onerror = () => rej(new Error(src));
+      document.head.appendChild(s);
+    });
+    (async () => {
+      try {
+        await load('https://d3js.org/d3.v7.min.js');
+        await load('https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js');
+        if (!cancelled) setLoading(false);
+      } catch (e) { if (!cancelled) setErr(lang === 'zh' ? '地圖庫載入失敗' : 'Map library load failed'); }
+    })();
+    return () => { cancelled = true; };
+  }, [lang]);
+
+  React.useEffect(() => {
+    if (loading || err || !mapRef.current || Object.keys(geoData).length === 0) return;
+    const d3 = window.d3, topojson = window.topojson;
+    if (!d3 || !topojson) return;
+
+    d3.select(mapRef.current).selectAll('*').remove();
+    const W = mapRef.current.clientWidth || 800;
+    const H = Math.max(Math.min(W * 0.5, 480), 240);
+
+    const svg = d3.select(mapRef.current).append('svg').attr('width', W).attr('height', H).style('display', 'block');
+
+    const defs = svg.append('defs');
+    const og = defs.append('radialGradient').attr('id','geo-og2').attr('cx','50%').attr('cy','40%').attr('r','65%');
+    og.append('stop').attr('offset','0%').attr('stop-color','#0f1d32');
+    og.append('stop').attr('offset','100%').attr('stop-color','#060e1a');
+    const gl = defs.append('filter').attr('id','geo-gl2');
+    gl.append('feGaussianBlur').attr('stdDeviation','2.5').attr('result','b');
+    const fmg = gl.append('feMerge');
+    fmg.append('feMergeNode').attr('in','b');
+    fmg.append('feMergeNode').attr('in','SourceGraphic');
+
+    svg.append('rect').attr('width', W).attr('height', H).attr('fill','url(#geo-og2)');
+
+    const proj = d3.geoNaturalEarth1().scale(W / 5.5).translate([W / 2, H / 2]);
+    const pathGen = d3.geoPath().projection(proj);
+    const g = svg.append('g');
+
+    const zm = d3.zoom().scaleExtent([1, 10]).on('zoom', e => g.attr('transform', e.transform));
+    svg.call(zm);
+    zoomObjRef.current = { svg, zm };
+
+    g.append('path').datum(d3.geoGraticule().step([20, 20])())
+      .attr('d', pathGen).attr('fill','none').attr('stroke','rgba(30,58,95,0.4)').attr('stroke-width', 0.3);
+
+    const tip = tipRef.current;
+    const showT = (evt, data) => {
+      if (!tip) return;
+      tip.style.opacity = '1';
+      const pct = v => data.total ? Math.round(v / data.total * 100) : 0;
+      tip.innerHTML = '<div style="font-weight:700;font-size:13px;margin-bottom:4px">' + data.name + '</div>' +
+        '<div style="height:1px;background:rgba(148,163,184,0.2);margin:4px 0"></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:2px 0"><span>📊 ' + (lang === 'zh' ? '總實體' : 'Total') + '</span><b>' + data.total + '</b></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:2px 0"><span>🔴 ' + (lang === 'zh' ? '高風險' : 'High') + '</span><b>' + data.high + ' (' + pct(data.high) + '%)</b></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:2px 0"><span>🟡 ' + (lang === 'zh' ? '中風險' : 'Med') + '</span><b>' + data.medium + ' (' + pct(data.medium) + '%)</b></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:2px 0"><span>🟢 ' + (lang === 'zh' ? '低風險' : 'Low') + '</span><b>' + data.low + ' (' + pct(data.low) + '%)</b></div>';
+      moveT(evt);
+    };
+    const moveT = (evt) => {
+      if (!tip || !wrapRef.current) return;
+      const r = wrapRef.current.getBoundingClientRect();
+      let x = evt.clientX - r.left + 14, y = evt.clientY - r.top - 8;
+      if (x + 175 > r.width) x -= 195;
+      if (y + 130 > r.height) y -= 140;
+      tip.style.left = x + 'px'; tip.style.top = y + 'px';
+    };
+    const hideT = () => { if (tip) tip.style.opacity = '0'; };
+
+    const iso2j = {};
+    Object.entries(NAME_TO_ISO).forEach(([n, iso]) => { if (iso && geoData[n]) iso2j[iso] = n; });
+
+    d3.json('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json').then(world => {
+      const countries = topojson.feature(world, world.objects.countries);
+      const borders = topojson.mesh(world, world.objects.countries, (a, b) => a !== b);
+      const matched = new Set();
+
+      g.selectAll('.gc').data(countries.features).enter().append('path')
+        .attr('d', pathGen)
+        .attr('fill', d => { const j = iso2j[d.id]; return j ? getCol(geoData[j]) : '#172340'; })
+        .attr('fill-opacity', d => iso2j[d.id] ? 0.8 : 0.45)
+        .attr('stroke', d => iso2j[d.id] ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.06)')
+        .attr('stroke-width', d => iso2j[d.id] ? 0.7 : 0.3)
+        .style('cursor', d => iso2j[d.id] ? 'pointer' : 'default')
+        .style('transition', 'fill 0.2s')
+        .on('mouseenter', function(evt, d) {
+          const j = iso2j[d.id]; if (!j) return;
+          d3.select(this).attr('fill', hovCol(geoData[j])).attr('fill-opacity', 1).attr('stroke-width', 1.5).raise();
+          showT(evt, geoData[j]);
+        })
+        .on('mousemove', moveT)
+        .on('mouseleave', function(evt, d) {
+          const j = iso2j[d.id];
+          d3.select(this).attr('fill', j ? getCol(geoData[j]) : '#172340').attr('fill-opacity', j ? 0.8 : 0.45).attr('stroke-width', j ? 0.7 : 0.3);
+          hideT();
+        });
+
+      g.append('path').datum(borders).attr('d', pathGen).attr('fill','none').attr('stroke','rgba(255,255,255,0.08)').attr('stroke-width', 0.5).style('pointer-events','none');
+
+      Object.entries(iso2j).forEach(([iso, jName]) => {
+        const data = geoData[jName]; if (!data) return;
+        const feat = countries.features.find(f => String(f.id) === String(iso));
+        if (!feat) return;
+        const c = pathGen.centroid(feat); if (isNaN(c[0])) return;
+        matched.add(jName);
+        const r = Math.max(5, Math.min(14, 4 + data.total * 2));
+        const col = getCol(data);
+        const pu = g.append('circle').attr('cx', c[0]).attr('cy', c[1]).attr('r', r).attr('fill', col).attr('fill-opacity', 0.2).style('pointer-events','none');
+        pu.append('animate').attr('attributeName','r').attr('values', r + ';' + (r + 8) + ';' + r).attr('dur','2.5s').attr('repeatCount','indefinite');
+        pu.append('animate').attr('attributeName','fill-opacity').attr('values','.2;.04;.2').attr('dur','2.5s').attr('repeatCount','indefinite');
+        g.append('circle').attr('cx', c[0]).attr('cy', c[1]).attr('r', r).attr('fill', col).attr('stroke','rgba(255,255,255,0.85)').attr('stroke-width', 1.2).style('filter','url(#geo-gl2)').style('pointer-events','none');
+        if (data.total >= 2) g.append('text').attr('x', c[0]).attr('y', c[1] + 0.5).attr('text-anchor','middle').attr('dominant-baseline','middle').attr('font-size', r >= 8 ? '9px' : '7px').attr('font-weight','700').attr('fill','white').style('pointer-events','none').text(data.total);
+      });
+
+      Object.entries(POINT_COORDS).forEach(([name, coords]) => {
+        const data = geoData[name]; if (!data || matched.has(name)) return;
+        matched.add(name);
+        const p = proj(coords); if (!p || isNaN(p[0])) return;
+        const r = Math.max(5, Math.min(12, 4 + data.total * 1.5));
+        const col = getCol(data);
+        const pu = g.append('circle').attr('cx', p[0]).attr('cy', p[1]).attr('r', r).attr('fill', col).attr('fill-opacity', 0.2).style('pointer-events','none');
+        pu.append('animate').attr('attributeName','r').attr('values', r + ';' + (r + 7) + ';' + r).attr('dur','2.5s').attr('repeatCount','indefinite');
+        pu.append('animate').attr('attributeName','fill-opacity').attr('values','.2;.04;.2').attr('dur','2.5s').attr('repeatCount','indefinite');
+        g.append('circle').attr('cx', p[0]).attr('cy', p[1]).attr('r', r).attr('fill', col).attr('stroke','rgba(255,255,255,0.85)').attr('stroke-width', 1.2).style('filter','url(#geo-gl2)').style('pointer-events','none');
+        if (data.total >= 1) g.append('text').attr('x', p[0]).attr('y', p[1] + 0.5).attr('text-anchor','middle').attr('dominant-baseline','middle').attr('font-size','8px').attr('font-weight','700').attr('fill','white').style('pointer-events','none').text(data.total);
+        g.append('text').attr('x', p[0]).attr('y', p[1] + r + 10).attr('text-anchor','middle').attr('font-size','7px').attr('fill','rgba(255,255,255,0.45)').attr('font-weight','500').style('pointer-events','none').text(name.length > 14 ? name.slice(0, 12) + '…' : name);
+        g.append('circle').attr('cx', p[0]).attr('cy', p[1]).attr('r', r + 5).attr('fill','transparent').style('cursor','pointer')
+          .on('mouseenter', evt => showT(evt, data)).on('mousemove', moveT).on('mouseleave', hideT);
+      });
+
+      setUnmatchedList(Object.keys(geoData).filter(c => !matched.has(c)));
+    }).catch(() => setErr(lang === 'zh' ? '地圖數據載入失敗' : 'Map data load failed'));
+
+  }, [loading, err, geoData, lang, NAME_TO_ISO, POINT_COORDS, getCol, hovCol]);
+
+  const handleZoom = (action) => {
+    if (!zoomObjRef.current || !window.d3) return;
+    const { svg, zm } = zoomObjRef.current;
+    if (action === 'in') svg.transition().duration(300).call(zm.scaleBy, 1.5);
+    else if (action === 'out') svg.transition().duration(300).call(zm.scaleBy, 0.67);
+    else svg.transition().duration(400).call(zm.transform, window.d3.zoomIdentity);
   };
-
-  const LAND = [
-    [[-168,72],[-155,73],[-140,70],[-130,73],[-115,74],[-100,76],[-85,73],[-80,68],[-80,64],[-72,62],[-65,60],[-58,55],[-55,48],[-58,45],[-62,44],[-66,44],[-70,43],[-74,41],[-76,36],[-80,31],[-82,29],[-81,25],[-82,25],[-85,29],[-90,30],[-95,29],[-97,26],[-97,22],[-95,18],[-92,15],[-90,14],[-86,12],[-84,10],[-82,8],[-80,8],[-82,10],[-86,13],[-90,15],[-94,17],[-100,20],[-105,20],[-110,23],[-112,27],[-117,33],[-120,36],[-122,39],[-124,44],[-124,48],[-128,52],[-133,56],[-140,60],[-148,61],[-155,61],[-162,58],[-167,57],[-170,60],[-168,65],[-168,72]],
-    [[-55,60],[-50,60],[-45,61],[-40,64],[-30,68],[-22,72],[-18,76],[-22,80],[-30,82],[-40,83],[-48,82],[-55,78],[-58,72],[-57,66],[-55,60]],
-    [[-80,10],[-77,7],[-76,3],[-79,-1],[-80,-4],[-77,-7],[-74,-12],[-72,-16],[-70,-20],[-68,-24],[-65,-28],[-58,-34],[-60,-37],[-64,-42],[-68,-46],[-72,-50],[-74,-52],[-68,-55],[-63,-54],[-58,-52],[-55,-42],[-52,-34],[-48,-26],[-44,-23],[-42,-20],[-39,-16],[-37,-12],[-35,-7],[-35,-2],[-48,0],[-52,3],[-56,5],[-60,7],[-63,8],[-66,10],[-70,12],[-75,11],[-78,10],[-80,10]],
-    [[-10,36],[-9,38],[-9,42],[-8,44],[-4,44],[-1,44],[2,46],[3,49],[4,52],[6,54],[9,55],[12,56],[13,55],[16,56],[20,58],[24,60],[28,59],[30,60],[32,62],[32,65],[28,68],[24,66],[18,66],[14,65],[10,64],[6,63],[2,61],[-1,58],[-4,57],[-6,55],[-8,53],[-10,50],[-10,46],[-9,42],[-6,38],[-4,36],[-1,36],[3,36],[6,38],[10,40],[12,43],[14,43],[16,42],[18,39],[20,36],[22,36],[25,38],[28,41],[30,39],[28,36],[24,35],[20,36],[16,38],[12,38],[8,38],[5,37],[2,36],[-1,36],[-4,36],[-10,36]],
-    [[-6,50],[-4,50],[-2,51],[0,52],[0,54],[-1,56],[-3,58],[-5,58],[-7,57],[-8,55],[-8,52],[-7,50],[-6,50]],
-    [[-11,52],[-9,52],[-7,53],[-6,54],[-8,55],[-10,55],[-11,54],[-11,52]],
-    [[5,59],[8,58],[12,60],[15,62],[18,65],[20,68],[18,71],[14,71],[10,69],[6,66],[5,63],[5,59]],
-    [[-24,64],[-20,64],[-16,65],[-14,66],[-16,67],[-20,66],[-24,65],[-24,64]],
-    [[-17,15],[-16,18],[-17,22],[-13,28],[-6,34],[-5,36],[0,36],[5,37],[10,37],[12,34],[18,33],[25,32],[30,31],[33,30],[36,28],[38,22],[43,12],[45,8],[47,4],[50,0],[50,-5],[48,-10],[44,-15],[40,-22],[38,-26],[35,-30],[30,-34],[28,-34],[26,-30],[22,-28],[18,-24],[15,-20],[13,-12],[12,-5],[10,0],[8,5],[5,5],[2,6],[-2,5],[-5,5],[-5,8],[-8,10],[-12,12],[-16,13],[-17,15]],
-    [[36,30],[40,28],[44,25],[48,24],[52,23],[56,22],[57,24],[56,26],[54,28],[50,29],[48,30],[44,32],[42,35],[38,37],[36,36],[35,33],[36,30]],
-    [[28,50],[35,52],[45,55],[55,58],[65,62],[75,65],[85,68],[95,70],[105,72],[115,73],[125,72],[135,68],[145,62],[150,56],[155,52],[160,58],[165,62],[170,66],[180,70],[180,48],[170,45],[160,42],[150,42],[145,44],[140,48],[135,52],[130,55],[125,58],[120,60],[110,60],[100,58],[90,56],[80,52],[70,48],[60,44],[50,42],[40,42],[35,45],[28,50]],
-    [[28,42],[32,38],[35,37],[38,35],[42,32],[48,28],[52,25],[56,24],[60,25],[64,28],[68,30],[72,34],[76,36],[80,38],[85,40],[90,42],[95,44],[100,46],[100,42],[95,38],[90,35],[85,32],[80,28],[76,24],[72,20],[68,18],[64,16],[60,14],[56,14],[52,16],[48,20],[44,24],[40,26],[36,28],[34,30],[32,32],[30,35],[28,38],[28,42]],
-    [[68,24],[72,22],[76,18],[80,12],[82,8],[80,6],[76,8],[72,14],[68,20],[66,24],[68,24]],
-    [[80,42],[88,44],[94,46],[100,48],[106,45],[112,40],[116,36],[118,32],[120,28],[122,24],[120,20],[116,16],[112,14],[108,12],[104,8],[100,4],[98,4],[100,10],[102,14],[104,20],[106,24],[108,28],[110,32],[108,36],[104,40],[100,44],[94,46],[88,44],[80,42]],
-    [[98,20],[100,18],[102,16],[104,14],[106,10],[108,6],[106,2],[104,0],[102,0],[100,2],[98,4],[96,6],[95,10],[95,14],[96,16],[98,20]],
-    [[130,32],[132,34],[134,36],[137,36],[140,38],[142,42],[143,45],[141,43],[139,39],[136,36],[133,33],[130,32]],
-    [[126,34],[128,36],[129,38],[128,39],[127,38],[126,36],[126,34]],
-    [[120,22],[121,24],[121,26],[120,25],[120,22]],
-    [[118,10],[120,14],[122,18],[123,16],[122,12],[121,10],[120,8],[118,10]],
-    [[96,6],[100,2],[104,-2],[108,-5],[112,-8],[116,-8],[120,-6],[124,-4],[128,-3],[132,-5],[136,-7],[140,-5],[142,-8],[140,-10],[134,-10],[128,-7],[124,-8],[120,-9],[115,-9],[110,-8],[106,-6],[102,-4],[98,0],[96,3],[96,6]],
-    [[114,-14],[118,-16],[122,-18],[126,-20],[130,-22],[134,-28],[136,-32],[138,-36],[142,-38],[148,-40],[152,-38],[154,-32],[153,-26],[152,-22],[150,-18],[148,-15],[144,-12],[140,-11],[136,-12],[132,-14],[128,-14],[124,-14],[120,-14],[116,-14],[114,-14]],
-    [[172,-34],[174,-37],[176,-40],[178,-43],[176,-46],[174,-45],[172,-42],[172,-38],[172,-34]],
-    [[44,-12],[46,-15],[48,-18],[50,-22],[49,-25],[47,-25],[45,-22],[44,-18],[44,-14],[44,-12]],
-    [[80,10],[81,8],[82,7],[81,6],[80,7],[80,10]],
-    [[142,-2],[146,-4],[150,-6],[152,-4],[150,-2],[146,-1],[142,-2]],
-  ];
-
-  const CC = {
-    'USA':[-95.7,37.1],'Canada':[-96.8,56.1],'UK':[-1.2,52.3],'Germany':[10.4,51.2],
-    'France':[2.2,46.2],'Japan':[138.3,36.2],'Australia':[133.8,-25.3],
-    'Singapore':[103.8,1.4],'Hong Kong':[114.2,22.3],'Taiwan':[121,23.7],
-    'Switzerland':[8.2,46.8],'Netherlands':[5.3,52.1],'Ireland':[-7.7,53.1],
-    'Luxembourg':[6.1,49.8],'China':[104.2,35.9],'India':[79,21.1],
-    'Brazil':[-51.9,-14.2],'South Korea':[127.8,35.9],'New Zealand':[174.9,-40.9],
-    'Sweden':[18.6,60.1],'Norway':[8.5,60.5],'Iran':[53.7,32.4],
-    'North Korea':[127,40],'Myanmar':[96,19.8],'Syria':[38,34.8],
-    'Afghanistan':[67,33.9],'Libya':[17,26.3],'Somalia':[46.2,5.2],
-    'South Sudan':[30,7.9],'Yemen':[48,15.6],'Iraq':[43.7,33.2],
-    'BVI':[-64.6,18.4],'Cayman Islands':[-81.3,19.3],'Panama':[-80.8,8.5],
-    'Bermuda':[-64.8,32.3],'Jersey':[-2.1,49.2],'Guernsey':[-2.6,49.5],
-    'Isle of Man':[-4.5,54.2],'Liechtenstein':[9.6,47.2],'Vanuatu':[166.9,-15.4],
-    'Seychelles':[55.5,-4.7],'Russia':[105.3,61.5],'Turkey':[35.2,38.9],
-    'UAE':[53.8,23.4],'Pakistan':[69.3,30.4],'Cambodia':[104.9,12.6],
-    'Nigeria':[8,9.1],'Albania':[20.2,41.2],'Philippines':[122,12.9],
-    'Barbados':[-59.5,13.2],'Senegal':[-14.5,14.5],'Cuba':[-77.8,21.5],
-    'Venezuela':[-66.6,6.4],'Nicaragua':[-85.2,12.9],'Haiti':[-72.3,19],
-    'Mali':[-4,17.6],'Central African Republic':[20.9,6.6],'Congo':[21.8,-4.3],
-    'Ethiopia':[40.5,9],'Guinea-Bissau':[-15.2,12],'Macedonia':[21.7,41.5],
-    'Montenegro':[19.3,42.7],'Serbia':[21.9,44.2],'Slovenia':[14.6,46.2],
-    'Croatia':[15.2,45.1],'Bulgaria':[25.5,42.7],'Romania':[24.7,45.9],
-    'Kosovo':[20.9,42.6],'Belarus':[27.9,53.7],'Bosnia and Herzegovina':[17.7,43.9],
-    'Kyrgyzstan':[74.8,41.2],'Ukraine':[31.2,48.4],'Lebanon':[35.9,33.9],
-    'Sudan':[30,12.9],'South Africa':[22.9,-30.6],'Kenya':[37.9,-0.02],
-  };
-
-  const geoData = {};
-  entities.forEach(e => {
-    const j = e.jurisdiction;
-    if (!geoData[j]) geoData[j] = { name: j, total: 0, high: 0, medium: 0, low: 0 };
-    geoData[j].total++;
-    const r = getEffectiveRating(e).rating;
-    if (r === 'High') geoData[j].high++;
-    else if (r === 'Medium') geoData[j].medium++;
-    else geoData[j].low++;
-  });
 
   if (Object.keys(geoData).length === 0) return null;
-  const getColor = (g) => g.high > 0 ? '#ef4444' : g.medium > 0 ? '#f59e0b' : '#22c55e';
-  const getR = (total) => Math.max(6, Math.min(18, 6 + total * 2.5));
-  const unmatched = Object.keys(geoData).filter(c => !CC[c]);
 
   return (
     <div className="bg-white rounded-xl shadow-sm border p-3 mb-4">
-      <h3 className="text-xs font-semibold text-gray-600 mb-2">🌍 {t.geoRiskMap}</h3>
-      <div className="relative w-full overflow-hidden rounded-lg">
-        <svg viewBox="0 0 1000 500" className="w-full" style={{ minHeight: '200px' }}>
-          <defs>
-            <linearGradient id="ocean" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#0c1929" />
-              <stop offset="50%" stopColor="#132744" />
-              <stop offset="100%" stopColor="#1a3556" />
-            </linearGradient>
-            <filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-            <filter id="landShadow"><feDropShadow dx="0" dy="1" stdDeviation="1.5" floodColor="#000" floodOpacity="0.3"/></filter>
-          </defs>
-          <rect width="1000" height="500" fill="url(#ocean)" rx="8" />
-          {[-60,-30,0,30,60].map(lat => <line key={`h${lat}`} x1="20" y1={py(lat)} x2="980" y2={py(lat)} stroke="#1e3a5f" strokeWidth="0.4" strokeDasharray="3,5" />)}
-          {[-150,-120,-90,-60,-30,0,30,60,90,120,150].map(lon => <line key={`v${lon}`} x1={px(lon)} y1="10" x2={px(lon)} y2="490" stroke="#1e3a5f" strokeWidth="0.4" strokeDasharray="3,5" />)}
-          {LAND.map((pts, i) => <path key={i} d={smooth(pts)} fill="#1a3a2a" fillOpacity="0.85" stroke="#2d6b48" strokeWidth="0.6" strokeLinejoin="round" filter="url(#landShadow)" />)}
-          {Object.entries(geoData).map(([country, data]) => {
-            const coord = CC[country]; if (!coord) return null;
-            const cx = px(coord[0]), cy = py(coord[1]);
-            const color = getColor(data); const r = getR(data.total);
-            const isHov = hovered === country;
-            return (
-              <g key={country} onMouseEnter={() => setHovered(country)} onMouseLeave={() => setHovered(null)} style={{ cursor: 'pointer' }}>
-                <circle cx={cx} cy={cy} r={r + 4} fill={color} fillOpacity="0.12">
-                  <animate attributeName="r" values={`${r+3};${r+9};${r+3}`} dur="2.5s" repeatCount="indefinite" />
-                  <animate attributeName="fill-opacity" values="0.12;0.04;0.12" dur="2.5s" repeatCount="indefinite" />
-                </circle>
-                <circle cx={cx} cy={cy} r={isHov ? r + 2 : r} fill={color} stroke="rgba(255,255,255,0.85)" strokeWidth="1.5" filter="url(#glow)" style={{ transition: 'all 0.2s' }} />
-                {r >= 8 && <text x={cx} y={cy + 1} textAnchor="middle" dominantBaseline="middle" fontSize={r > 12 ? '10' : '8'} fontWeight="bold" fill="white" style={{ pointerEvents: 'none' }}>{data.total}</text>}
-                <text x={cx} y={cy + r + 12} textAnchor="middle" fontSize="7" fill="rgba(255,255,255,0.6)" fontWeight="500" style={{ pointerEvents: 'none' }}>{country.length > 16 ? country.slice(0, 14) + '…' : country}</text>
-              </g>
-            );
-          })}
-          {hovered && CC[hovered] && geoData[hovered] && (() => {
-            const d = geoData[hovered], coord = CC[hovered];
-            const cx = px(coord[0]), cy = py(coord[1]), r = getR(d.total);
-            const bw = 135, bh = 60;
-            let tx = cx - bw / 2, ty = cy - bh - r - 14;
-            if (tx < 5) tx = 5; if (tx + bw > 995) tx = 995 - bw;
-            if (ty < 5) ty = cy + r + 10;
-            return (
-              <g style={{ pointerEvents: 'none' }}>
-                <rect x={tx} y={ty} width={bw} height={bh} rx={8} fill="rgba(15,23,42,0.95)" stroke="rgba(99,102,241,0.5)" strokeWidth="1" />
-                <text x={tx+bw/2} y={ty+16} textAnchor="middle" fontSize="11" fontWeight="bold" fill="white">{hovered}</text>
-                <text x={tx+bw/2} y={ty+32} textAnchor="middle" fontSize="9" fill="#94a3b8">{lang === 'zh' ? `共 ${d.total} 個實體` : `${d.total} entities`}</text>
-                <text x={tx+bw/2} y={ty+50} textAnchor="middle" fontSize="9" fill="#cbd5e1">🔴{d.high}  🟡{d.medium}  🟢{d.low}</text>
-              </g>
-            );
-          })()}
-        </svg>
+      <h3 className="text-xs font-semibold text-gray-600 mb-2">🌍 {t.geoRiskMap || 'Geographic Risk Heatmap'}</h3>
+      <div ref={wrapRef} className="relative w-full overflow-hidden rounded-lg" style={{ minHeight: '240px', background: 'linear-gradient(180deg, #0c1929, #132744, #1a3556)' }}>
+        <div ref={mapRef} />
+        {loading && !err && (
+          <div className="absolute inset-0 flex items-center justify-center gap-2 text-xs" style={{ color: '#64748b' }}>
+            <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: 'rgba(99,102,241,0.2)', borderTopColor: '#6366f1' }} />
+            {lang === 'zh' ? '正在載入真實世界地圖…' : 'Loading world map…'}
+          </div>
+        )}
+        {err && <div className="absolute inset-0 flex items-center justify-center text-xs" style={{ color: '#ef4444' }}>⚠ {err}</div>}
+        <div ref={tipRef} style={{ position: 'absolute', pointerEvents: 'none', zIndex: 100, background: 'rgba(8,15,30,0.96)', border: '1px solid rgba(99,102,241,0.4)', borderRadius: '10px', padding: '10px 14px', fontSize: '11px', color: '#e2e8f0', opacity: 0, transition: 'opacity 0.15s', minWidth: '160px', boxShadow: '0 8px 30px rgba(0,0,0,0.5)' }} />
+        {!loading && !err && (
+          <div className="absolute bottom-2 right-2 flex flex-col gap-1" style={{ zIndex: 10 }}>
+            <button onClick={() => handleZoom('in')} className="w-7 h-7 rounded-lg text-white text-sm flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }} title="Zoom In">+</button>
+            <button onClick={() => handleZoom('out')} className="w-7 h-7 rounded-lg text-white text-sm flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }} title="Zoom Out">−</button>
+            <button onClick={() => handleZoom('reset')} className="w-7 h-7 rounded-lg text-white text-sm flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }} title="Reset">⟳</button>
+          </div>
+        )}
       </div>
-      {unmatched.length > 0 && (
+      {unmatchedList.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-2">
-          {unmatched.map(c => {
-            const g = geoData[c];
-            return (<span key={c} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs border bg-gray-50"><span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: getColor(g) }} />{c} ({g.total})</span>);
+          {unmatchedList.map(c => {
+            const gd = geoData[c];
+            return (
+              <span key={c} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs border bg-gray-50">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: getCol(gd) }} />
+                {c} ({gd.total})
+              </span>
+            );
           })}
         </div>
       )}
       <div className="flex gap-3 mt-2 text-xs text-gray-400 flex-wrap">
-        <span>🔴 {t.highRisk}</span>
+        <span>🔴 {t.highRisk || 'High Risk'}</span>
         <span>🟡 {lang === 'zh' ? '中風險' : 'Medium'}</span>
         <span>🟢 {lang === 'zh' ? '低風險' : 'Low'}</span>
-        <span className="ml-auto text-gray-300">{lang === 'zh' ? '圓點大小 = 實體數量 | 懸停查看詳情' : 'Dot size = entity count | Hover for details'}</span>
+        <span className="ml-auto text-gray-300">{lang === 'zh' ? '滾輪縮放 · 拖曳平移 · 懸停查看' : 'Scroll zoom · Drag pan · Hover details'}</span>
       </div>
     </div>
   );
 }
 
+/* ═══════════════ DEMO WRAPPER ═══════════════ */
+const DEMO_ENTITIES = [
+  { id:'1', name:'Alpha Holdings', jurisdiction:'BVI', type:'company' },
+  { id:'2', name:'Beta Trading', jurisdiction:'Hong Kong', type:'company' },
+  { id:'3', name:'Gamma Trust', jurisdiction:'Cayman Islands', type:'company' },
+  { id:'4', name:'John Smith', jurisdiction:'UK', type:'person' },
+  { id:'5', name:'Jane Doe', jurisdiction:'USA', type:'person' },
+  { id:'6', name:'Delta Corp', jurisdiction:'Singapore', type:'company' },
+  { id:'7', name:'Epsilon Foundation', jurisdiction:'Panama', type:'company' },
+  { id:'8', name:'David Chen', jurisdiction:'China', type:'person' },
+  { id:'9', name:'Zeta GmbH', jurisdiction:'Germany', type:'company' },
+  { id:'10', name:'Eta SA', jurisdiction:'Switzerland', type:'company' },
+  { id:'11', name:'Theta LLC', jurisdiction:'Russia', type:'company' },
+  { id:'12', name:'Iota Ltd', jurisdiction:'UAE', type:'company' },
+  { id:'13', name:'Kappa Inc', jurisdiction:'Japan', type:'company' },
+  { id:'14', name:'Lambda Pty', jurisdiction:'Australia', type:'company' },
+  { id:'15', name:'Mu Corp', jurisdiction:'Taiwan', type:'company' },
+  { id:'16', name:'Nu Trading', jurisdiction:'Nigeria', type:'company' },
+  { id:'17', name:'Xi Holdings', jurisdiction:'Iran', type:'company' },
+  { id:'18', name:'Pi Fund', jurisdiction:'Luxembourg', type:'company' },
+  { id:'19', name:'Rho Bank', jurisdiction:'France', type:'company' },
+  { id:'20', name:'Sigma KK', jurisdiction:'South Korea', type:'company' },
+];
+const DEMO_RATINGS = { '1':'High','2':'Medium','3':'High','4':'Medium','5':'Low','6':'Low','7':'High','8':'Medium','9':'Low','10':'Low','11':'High','12':'Medium','13':'Low','14':'Low','15':'Medium','16':'High','17':'High','18':'Low','19':'Low','20':'Low' };
 
+export default function Demo() {
+  const getEffectiveRating = useCallback((e) => ({ rating: DEMO_RATINGS[e.id] || 'Low' }), []);
+  const t = { geoRiskMap: '地理風險熱力圖 — Real World Map', highRisk: '高風險 High', zoomIn: '放大', zoomOut: '縮小', resetView: '重置' };
+  return (
+    <div className="min-h-screen bg-gray-900 p-4">
+      <div className="max-w-5xl mx-auto">
+        <div className="text-center mb-4">
+          <h1 className="text-xl font-bold text-white">🌍 GeoRiskMap — D3.js Real World Map</h1>
+          <p className="text-sm text-gray-400 mt-1">Natural Earth 投影 · TopoJSON · 縮放拖曳 · 懸停 Tooltip · 脈衝動畫</p>
+        </div>
+        <GeoRiskMap entities={DEMO_ENTITIES} getEffectiveRating={getEffectiveRating} t={t} lang="zh" />
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          {DEMO_ENTITIES.map(e => (
+            <div key={e.id} className="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300">
+              <span>{e.type === 'person' ? '👤' : '🏢'}</span>
+              <span className="flex-1 truncate">{e.name}</span>
+              <span className="text-gray-500">{e.jurisdiction}</span>
+              <span className={`w-2.5 h-2.5 rounded-full ${DEMO_RATINGS[e.id] === 'High' ? 'bg-red-500' : DEMO_RATINGS[e.id] === 'Medium' ? 'bg-amber-500' : 'bg-green-500'}`} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ 
 /* ========== GENERIC SCREENING COMPONENT (shared by Adverse Media & Sanction) ========== */
 
 function ScreeningModule({ entityName: initialEntityName, mode }) {
