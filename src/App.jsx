@@ -1328,7 +1328,37 @@ export default function KYCSystem() {
   const [batchSelected, setBatchSelected] = useState(new Set());
   const [contextMenu, setContextMenu] = useState(null);
   const [dagSelected, setDagSelected] = useState(null);
-  const [dragMode, setDragMode] = useState(false);
+  const [dragMode, setDragMode] = useState(false);React.useEffect(() => {
+  const id = 'kyc-dark-style';
+  let el = document.getElementById(id);
+  if (!el) { el = document.createElement('style'); el.id = id; document.head.appendChild(el); }
+  el.textContent = darkMode ? `
+    .dm .bg-white { background-color: #1e293b !important; }
+    .dm .bg-gray-50 { background-color: #0f172a !important; }
+    .dm .bg-gray-100 { background-color: #1e2d45 !important; }
+    .dm .bg-gray-200 { background-color: #334155 !important; }
+    .dm .text-gray-800 { color: #f1f5f9 !important; }
+    .dm .text-gray-700 { color: #e2e8f0 !important; }
+    .dm .text-gray-600 { color: #cbd5e1 !important; }
+    .dm .text-gray-500 { color: #94a3b8 !important; }
+    .dm .text-gray-400 { color: #64748b !important; }
+    .dm .border { border-color: #334155 !important; }
+    .dm .border-b { border-color: #334155 !important; }
+    .dm .border-gray-100, .dm .border-gray-200 { border-color: #334155 !important; }
+    .dm input, .dm select, .dm textarea { background-color: #1e293b !important; color: #f1f5f9 !important; border-color: #475569 !important; }
+    .dm .hover\\:bg-gray-50:hover, .dm .hover\\:bg-gray-100:hover { background-color: #334155 !important; }
+    .dm .hover\\:bg-blue-50:hover { background-color: #1e3a5f !important; }
+    .dm .bg-amber-50 { background-color: #292215 !important; }
+    .dm .bg-red-50 { background-color: #2c1a1a !important; }
+    .dm .bg-blue-50 { background-color: #172035 !important; }
+    .dm .bg-green-50 { background-color: #14261e !important; }
+    .dm .bg-indigo-50 { background-color: #1a1f3c !important; }
+    .dm .bg-purple-50 { background-color: #241a35 !important; }
+    .dm .bg-cyan-50 { background-color: #0f2830 !important; }
+    .dm .bg-orange-50 { background-color: #2a1a0f !important; }
+    .dm .shadow-sm, .dm .shadow-2xl { box-shadow: 0 2px 8px rgba(0,0,0,0.6) !important; }
+   ` : '';
+    }, [darkMode]);
   const [workspaceTab, setWorkspaceTab] = useState('list');
   const [mobileSideOpen, setMobileSideOpen] = useState(false);
   const [dragState, setDragState] = useState(null);
@@ -2159,7 +2189,7 @@ export default function KYCSystem() {
   ];
 
   return (
-    <div className={`flex h-screen ${darkMode ? 'bg-gray-900 text-gray-100' : 'bg-gray-50 text-gray-800'} overflow-hidden`} style={{ fontSize: '13px' }}>
+    <div className={`flex h-screen ${darkMode ? 'bg-gray-900 text-gray-100 dm' : 'bg-gray-50 text-gray-800'} overflow-hidden`} style={{ fontSize: '13px' }}>
       <div className="md:hidden fixed top-0 left-0 right-0 h-10 bg-slate-800 text-white flex items-center px-3 z-30 shrink-0">
         <button onClick={() => setMobileSideOpen(!mobileSideOpen)} className="text-white p-1 text-lg leading-none">☰</button>
         <span className="text-sm font-bold ml-2">🛡️ KYC/AML</span>
