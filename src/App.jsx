@@ -1328,7 +1328,12 @@ export default function KYCSystem() {
   const [batchSelected, setBatchSelected] = useState(new Set());
   const [contextMenu, setContextMenu] = useState(null);
   const [dagSelected, setDagSelected] = useState(null);
-  const [dragMode, setDragMode] = useState(false);React.useEffect(() => {
+  const [dragMode, setDragMode] = useState(false);
+  const [workspaceTab, setWorkspaceTab] = useState('list');
+  const [mobileSideOpen, setMobileSideOpen] = useState(false);
+  const [dragState, setDragState] = useState(null);
+  const [darkMode, setDarkMode] = useState(false);
+  React.useEffect(() => {
   const id = 'kyc-dark-style';
   let el = document.getElementById(id);
   if (!el) { el = document.createElement('style'); el.id = id; document.head.appendChild(el); }
@@ -1359,10 +1364,6 @@ export default function KYCSystem() {
     .dm .shadow-sm, .dm .shadow-2xl { box-shadow: 0 2px 8px rgba(0,0,0,0.6) !important; }
    ` : '';
     }, [darkMode]);
-  const [workspaceTab, setWorkspaceTab] = useState('list');
-  const [mobileSideOpen, setMobileSideOpen] = useState(false);
-  const [dragState, setDragState] = useState(null);
-  const [darkMode, setDarkMode] = useState(false);
   const [svgTransform, setSvgTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [hoveredNode, setHoveredNode] = useState(null);
   const [entityFilter, setEntityFilter] = useState('');
