@@ -501,23 +501,15 @@ const SANCTION_MOCK_ZH = [
   { rank: 4, title: '全球制裁動態：OFAC發佈金融機構新指引', source: '彭博法律', date: '2026-03-05', snippet: 'OFAC已發佈更新的金融機構制裁篩查最佳實踐指引...', matchedKeywords: ['制裁'], cls: 'NO_HIT', confidence: 0.93, reason: '一般監管指引。全文未提及ABC控股有限公司。', riskCat: 'N/A' }
 ];
 
-import React, { useState, useMemo, useRef, useCallback } from 'react';
-import { createPortal } from 'react-dom';
-import { PieChart, Pie, Cell, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer } from 'recharts';
-
-/* ══════════════════════════════════════════════════════════════
-   GeoRiskMap — Real World Map (D3.js + TopoJSON, dynamically loaded)
-   Replace the old GeoRiskMap function with this entire block.
-   ══════════════════════════════════════════════════════════════ */
-
+/* ★ GeoRiskMap — Real World Map (D3.js + TopoJSON) */
 function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
-  const wrapRef = useRef(null);
-  const mapRef = useRef(null);
-  const tipRef = useRef(null);
-  const zoomObjRef = useRef(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(null);
-  const [unmatchedList, setUnmatchedList] = useState([]);
+  const wrapRef = React.useRef(null);
+  const mapRef = React.useRef(null);
+  const tipRef = React.useRef(null);
+  const zoomObjRef = React.useRef(null);
+  const [loading, setLoading] = React.useState(true);
+  const [err, setErr] = React.useState(null);
+  const [unmatchedList, setUnmatchedList] = React.useState([]);
 
   const NAME_TO_ISO = useMemo(() => ({
     'USA':'840','UK':'826','Germany':'276','France':'250','Japan':'392',
@@ -723,7 +715,7 @@ function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
 
   return (
     <div className="bg-white rounded-xl shadow-sm border p-3 mb-4">
-      <h3 className="text-xs font-semibold text-gray-600 mb-2">🌍 {t.geoRiskMap || 'Geographic Risk Heatmap'}</h3>
+      <h3 className="text-xs font-semibold text-gray-600 mb-2">🌍 {t.geoRiskMap}</h3>
       <div ref={wrapRef} className="relative w-full overflow-hidden rounded-lg" style={{ minHeight: '240px', background: 'linear-gradient(180deg, #0c1929, #132744, #1a3556)' }}>
         <div ref={mapRef} />
         {loading && !err && (
@@ -736,9 +728,9 @@ function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
         <div ref={tipRef} style={{ position: 'absolute', pointerEvents: 'none', zIndex: 100, background: 'rgba(8,15,30,0.96)', border: '1px solid rgba(99,102,241,0.4)', borderRadius: '10px', padding: '10px 14px', fontSize: '11px', color: '#e2e8f0', opacity: 0, transition: 'opacity 0.15s', minWidth: '160px', boxShadow: '0 8px 30px rgba(0,0,0,0.5)' }} />
         {!loading && !err && (
           <div className="absolute bottom-2 right-2 flex flex-col gap-1" style={{ zIndex: 10 }}>
-            <button onClick={() => handleZoom('in')} className="w-7 h-7 rounded-lg text-white text-sm flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }} title="Zoom In">+</button>
-            <button onClick={() => handleZoom('out')} className="w-7 h-7 rounded-lg text-white text-sm flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }} title="Zoom Out">−</button>
-            <button onClick={() => handleZoom('reset')} className="w-7 h-7 rounded-lg text-white text-sm flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }} title="Reset">⟳</button>
+            <button onClick={() => handleZoom('in')} className="w-7 h-7 rounded-lg text-white text-sm flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }} title={t.zoomIn}>+</button>
+            <button onClick={() => handleZoom('out')} className="w-7 h-7 rounded-lg text-white text-sm flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }} title={t.zoomOut}>−</button>
+            <button onClick={() => handleZoom('reset')} className="w-7 h-7 rounded-lg text-white text-sm flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }} title={t.resetView}>⟳</button>
           </div>
         )}
       </div>
@@ -756,7 +748,7 @@ function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
         </div>
       )}
       <div className="flex gap-3 mt-2 text-xs text-gray-400 flex-wrap">
-        <span>🔴 {t.highRisk || 'High Risk'}</span>
+        <span>🔴 {t.highRisk}</span>
         <span>🟡 {lang === 'zh' ? '中風險' : 'Medium'}</span>
         <span>🟢 {lang === 'zh' ? '低風險' : 'Low'}</span>
         <span className="ml-auto text-gray-300">{lang === 'zh' ? '滾輪縮放 · 拖曳平移 · 懸停查看' : 'Scroll zoom · Drag pan · Hover details'}</span>
@@ -765,58 +757,7 @@ function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
   );
 }
 
-/* ═══════════════ DEMO WRAPPER ═══════════════ */
-const DEMO_ENTITIES = [
-  { id:'1', name:'Alpha Holdings', jurisdiction:'BVI', type:'company' },
-  { id:'2', name:'Beta Trading', jurisdiction:'Hong Kong', type:'company' },
-  { id:'3', name:'Gamma Trust', jurisdiction:'Cayman Islands', type:'company' },
-  { id:'4', name:'John Smith', jurisdiction:'UK', type:'person' },
-  { id:'5', name:'Jane Doe', jurisdiction:'USA', type:'person' },
-  { id:'6', name:'Delta Corp', jurisdiction:'Singapore', type:'company' },
-  { id:'7', name:'Epsilon Foundation', jurisdiction:'Panama', type:'company' },
-  { id:'8', name:'David Chen', jurisdiction:'China', type:'person' },
-  { id:'9', name:'Zeta GmbH', jurisdiction:'Germany', type:'company' },
-  { id:'10', name:'Eta SA', jurisdiction:'Switzerland', type:'company' },
-  { id:'11', name:'Theta LLC', jurisdiction:'Russia', type:'company' },
-  { id:'12', name:'Iota Ltd', jurisdiction:'UAE', type:'company' },
-  { id:'13', name:'Kappa Inc', jurisdiction:'Japan', type:'company' },
-  { id:'14', name:'Lambda Pty', jurisdiction:'Australia', type:'company' },
-  { id:'15', name:'Mu Corp', jurisdiction:'Taiwan', type:'company' },
-  { id:'16', name:'Nu Trading', jurisdiction:'Nigeria', type:'company' },
-  { id:'17', name:'Xi Holdings', jurisdiction:'Iran', type:'company' },
-  { id:'18', name:'Pi Fund', jurisdiction:'Luxembourg', type:'company' },
-  { id:'19', name:'Rho Bank', jurisdiction:'France', type:'company' },
-  { id:'20', name:'Sigma KK', jurisdiction:'South Korea', type:'company' },
-];
-const DEMO_RATINGS = { '1':'High','2':'Medium','3':'High','4':'Medium','5':'Low','6':'Low','7':'High','8':'Medium','9':'Low','10':'Low','11':'High','12':'Medium','13':'Low','14':'Low','15':'Medium','16':'High','17':'High','18':'Low','19':'Low','20':'Low' };
 
-export default function Demo() {
-  const getEffectiveRating = useCallback((e) => ({ rating: DEMO_RATINGS[e.id] || 'Low' }), []);
-  const t = { geoRiskMap: '地理風險熱力圖 — Real World Map', highRisk: '高風險 High', zoomIn: '放大', zoomOut: '縮小', resetView: '重置' };
-  return (
-    <div className="min-h-screen bg-gray-900 p-4">
-      <div className="max-w-5xl mx-auto">
-        <div className="text-center mb-4">
-          <h1 className="text-xl font-bold text-white">🌍 GeoRiskMap — D3.js Real World Map</h1>
-          <p className="text-sm text-gray-400 mt-1">Natural Earth 投影 · TopoJSON · 縮放拖曳 · 懸停 Tooltip · 脈衝動畫</p>
-        </div>
-        <GeoRiskMap entities={DEMO_ENTITIES} getEffectiveRating={getEffectiveRating} t={t} lang="zh" />
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          {DEMO_ENTITIES.map(e => (
-            <div key={e.id} className="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300">
-              <span>{e.type === 'person' ? '👤' : '🏢'}</span>
-              <span className="flex-1 truncate">{e.name}</span>
-              <span className="text-gray-500">{e.jurisdiction}</span>
-              <span className={`w-2.5 h-2.5 rounded-full ${DEMO_RATINGS[e.id] === 'High' ? 'bg-red-500' : DEMO_RATINGS[e.id] === 'Medium' ? 'bg-amber-500' : 'bg-green-500'}`} />
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
- 
 /* ========== GENERIC SCREENING COMPONENT (shared by Adverse Media & Sanction) ========== */
 
 function ScreeningModule({ entityName: initialEntityName, mode }) {
