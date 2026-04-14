@@ -501,6 +501,174 @@ const SANCTION_MOCK_ZH = [
   { rank: 4, title: '全球制裁動態：OFAC發佈金融機構新指引', source: '彭博法律', date: '2026-03-05', snippet: 'OFAC已發佈更新的金融機構制裁篩查最佳實踐指引...', matchedKeywords: ['制裁'], cls: 'NO_HIT', confidence: 0.93, reason: '一般監管指引。全文未提及ABC控股有限公司。', riskCat: 'N/A' }
 ];
 
+/* ★ GeoRiskMap — SVG World Map with Risk Dots */
+function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
+  const [hovered, setHovered] = React.useState(null);
+
+  const COORDS = {
+    'USA':[195,155],'Canada':[185,105],'UK':[428,118],'Germany':[453,122],
+    'France':[438,135],'Japan':[708,152],'Australia':[718,325],'Singapore':[623,242],
+    'Hong Kong':[658,192],'Taiwan':[668,188],'Switzerland':[450,130],'Netherlands':[445,115],
+    'Ireland':[415,112],'Luxembourg':[444,125],'China':[638,168],'India':[573,202],
+    'Brazil':[288,298],'South Korea':[688,152],'New Zealand':[768,355],'Sweden':[460,88],
+    'Norway':[448,85],'Iran':[528,170],'North Korea':[685,145],'Myanmar':[608,208],
+    'Syria':[496,162],'Afghanistan':[553,170],'Libya':[458,180],'Somalia':[508,238],
+    'South Sudan':[486,238],'Yemen':[518,206],'Iraq':[506,168],'BVI':[256,206],
+    'Cayman Islands':[220,206],'Panama':[226,226],'Bermuda':[266,172],
+    'Jersey':[430,126],'Guernsey':[426,126],'Isle of Man':[423,110],
+    'Liechtenstein':[454,130],'Vanuatu':[756,296],'Seychelles':[533,265],
+    'Russia':[548,92],'Turkey':[486,152],'UAE':[533,192],'Pakistan':[556,182],
+    'Cambodia':[630,220],'Nigeria':[438,226],'Albania':[468,148],
+    'Philippines':[666,216],'Barbados':[276,216],'Senegal':[390,216],
+    'Cuba':[232,198],'Venezuela':[268,228],'Nicaragua':[213,218],
+    'Haiti':[248,208],'Mali':[423,208],'Central African Republic':[473,233],
+    'Congo':[468,258],'Ethiopia':[503,228],'Guinea-Bissau':[393,218],
+    'Macedonia':[478,146],'Montenegro':[464,145],'Serbia':[468,140],
+    'Slovenia':[458,135],'Croatia':[460,138],'Bulgaria':[478,142],
+    'Romania':[472,135],'Kosovo':[470,147],'Belarus':[478,108],
+    'Bosnia and Herzegovina':[462,142],'Kyrgyzstan':[568,148],
+    'Ukraine':[482,118],'Lebanon':[496,166],'Sudan':[490,218],
+    'South Africa':[475,338],'Kenya':[502,252],
+  };
+
+  const CONTINENTS = [
+    "M75,48 Q130,38 178,48 Q208,58 228,82 Q248,112 252,148 Q248,178 238,198 L218,212 Q198,218 175,212 Q148,198 122,172 Q98,148 88,118 Q78,88 78,48 Z",
+    "M212,238 Q242,222 268,238 Q282,258 288,288 Q285,322 272,352 Q258,372 238,375 Q222,368 215,348 Q210,318 210,282 Q210,258 212,238 Z",
+    "M412,55 Q438,48 468,55 Q492,65 498,88 Q500,108 496,128 Q488,145 475,152 Q460,155 442,150 Q428,140 418,122 Q410,102 410,78 Q411,65 412,55 Z",
+    "M415,165 Q442,155 472,165 Q498,178 510,198 Q522,228 525,262 Q522,298 510,325 Q492,345 470,345 Q448,338 432,316 Q422,288 418,255 Q413,222 413,192 Q414,175 415,165 Z",
+    "M496,38 Q548,32 608,38 Q668,48 718,68 Q745,88 750,115 Q746,145 728,165 Q706,185 678,198 Q646,212 616,215 Q588,210 563,196 Q540,178 523,155 Q508,130 503,102 Q498,72 496,38 Z",
+    "M685,290 Q715,280 745,286 Q772,296 785,315 Q782,338 768,355 Q746,358 722,355 Q702,342 690,322 Q685,305 685,290 Z",
+  ];
+
+  const geoData = {};
+  entities.forEach(e => {
+    const j = e.jurisdiction;
+    if (!geoData[j]) geoData[j] = { name: j, total: 0, high: 0, medium: 0, low: 0 };
+    geoData[j].total++;
+    const r = getEffectiveRating(e).rating;
+    if (r === 'High') geoData[j].high++;
+    else if (r === 'Medium') geoData[j].medium++;
+    else geoData[j].low++;
+  });
+
+  if (Object.keys(geoData).length === 0) return null;
+
+  const getColor = (g) => g.high > 0 ? '#ef4444' : g.medium > 0 ? '#f59e0b' : '#22c55e';
+  const getStroke = (g) => g.high > 0 ? '#dc2626' : g.medium > 0 ? '#d97706' : '#16a34a';
+  const getR = (total) => Math.max(7, Math.min(20, 7 + total * 3));
+
+  const unmatched = Object.keys(geoData).filter(c => !COORDS[c]);
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border p-3 mb-4">
+      <h3 className="text-xs font-semibold text-gray-600 mb-2">🌍 {t.geoRiskMap}</h3>
+      <div className="relative w-full overflow-hidden rounded-lg bg-gradient-to-b from-slate-50 to-slate-100 border">
+        <svg viewBox="0 0 1000 420" className="w-full" style={{ minHeight: '180px' }}>
+          <defs>
+            <radialGradient id="dotGlow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="white" stopOpacity="0.4" />
+              <stop offset="100%" stopColor="white" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+
+          {Array.from({ length: 19 }, (_, i) => (
+            <line key={`h${i}`} x1="0" y1={(i + 1) * 22} x2="1000" y2={(i + 1) * 22} stroke="#e2e8f0" strokeWidth="0.3" />
+          ))}
+          {Array.from({ length: 23 }, (_, i) => (
+            <line key={`v${i}`} x1={(i + 1) * 43} y1="0" x2={(i + 1) * 43} y2="420" stroke="#e2e8f0" strokeWidth="0.3" />
+          ))}
+
+          {CONTINENTS.map((d, i) => (
+            <path key={i} d={d} fill="#94a3b8" fillOpacity="0.18" stroke="#94a3b8" strokeOpacity="0.3" strokeWidth="1" />
+          ))}
+
+          {Object.entries(geoData).map(([country, data]) => {
+            const coord = COORDS[country];
+            if (!coord) return null;
+            const [cx, cy] = coord;
+            const color = getColor(data);
+            const stroke = getStroke(data);
+            const r = getR(data.total);
+            const isHov = hovered?.country === country;
+            return (
+              <g key={country}
+                onMouseEnter={() => setHovered({ country, data, x: cx, y: cy })}
+                onMouseLeave={() => setHovered(null)}
+                style={{ cursor: 'pointer' }}>
+                <circle cx={cx} cy={cy} r={r + 6} fill={color} fillOpacity={isHov ? 0.25 : 0.12}>
+                  {!isHov && <animate attributeName="r" values={`${r + 4};${r + 8};${r + 4}`} dur="3s" repeatCount="indefinite" />}
+                </circle>
+                <circle cx={cx} cy={cy} r={r} fill={color} fillOpacity="0.9" stroke="white" strokeWidth="2"
+                  style={{ transition: 'r 0.2s', ...(isHov ? { filter: 'brightness(1.15)' } : {}) }} />
+                {r >= 9 && (
+                  <text x={cx} y={cy + 1} textAnchor="middle" dominantBaseline="middle"
+                    fontSize={r > 12 ? '10' : '8'} fontWeight="bold" fill="white" style={{ pointerEvents: 'none' }}>
+                    {data.total}
+                  </text>
+                )}
+                <text x={cx} y={cy + r + 11} textAnchor="middle" fontSize="7" fill="#475569" fontWeight="600"
+                  style={{ pointerEvents: 'none' }}>
+                  {country.length > 14 ? country.slice(0, 12) + '…' : country}
+                </text>
+              </g>
+            );
+          })}
+
+          {hovered && (() => {
+            const bw = 120, bh = 54;
+            let tx = hovered.x - bw / 2;
+            let ty = hovered.y - bh - getR(hovered.data.total) - 12;
+            if (tx < 5) tx = 5; if (tx + bw > 995) tx = 995 - bw;
+            if (ty < 5) ty = hovered.y + getR(hovered.data.total) + 8;
+            const d = hovered.data;
+            return (
+              <g style={{ pointerEvents: 'none' }}>
+                <rect x={tx} y={ty} width={bw} height={bh} rx={7}
+                  fill="#0f172a" fillOpacity="0.92" stroke="#334155" strokeWidth="1" />
+                <polygon
+                  points={`${hovered.x - 5},${ty + bh} ${hovered.x + 5},${ty + bh} ${hovered.x},${ty + bh + 6}`}
+                  fill="#0f172a" fillOpacity="0.92"
+                  style={{ display: ty < hovered.y ? 'block' : 'none' }}
+                />
+                <text x={tx + bw / 2} y={ty + 15} textAnchor="middle" fontSize="10" fontWeight="bold" fill="white">
+                  {hovered.country}
+                </text>
+                <text x={tx + bw / 2} y={ty + 30} textAnchor="middle" fontSize="9" fill="#94a3b8">
+                  {lang === 'zh' ? `共 ${d.total} 個實體` : `${d.total} entities`}
+                </text>
+                <text x={tx + bw / 2} y={ty + 44} textAnchor="middle" fontSize="9" fill="#cbd5e1">
+                  {`🔴${d.high}  🟡${d.medium}  🟢${d.low}`}
+                </text>
+              </g>
+            );
+          })()}
+        </svg>
+      </div>
+
+      {unmatched.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {unmatched.map(c => {
+            const g = geoData[c]; const color = getColor(g);
+            return (
+              <span key={c} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs border bg-gray-50">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
+                {c} ({g.total})
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="flex gap-3 mt-2 text-xs text-gray-400 flex-wrap">
+        <span>🔴 {t.highRisk}</span>
+        <span>🟡 {lang === 'zh' ? '中風險' : 'Medium'}</span>
+        <span>🟢 {lang === 'zh' ? '低風險' : 'Low'}</span>
+        <span className="ml-auto text-gray-300">{lang === 'zh' ? '圓點大小 = 實體數量' : 'Dot size = entity count'}</span>
+      </div>
+    </div>
+  );
+}
+
 
 /* ========== GENERIC SCREENING COMPONENT (shared by Adverse Media & Sanction) ========== */
 
@@ -1731,60 +1899,7 @@ export default function KYCSystem() {
         <div className="bg-white rounded-xl shadow-sm border p-3"><h3 className="text-xs font-semibold text-gray-600 mb-1">{t.entityTypes}</h3><ResponsiveContainer width="100%" height={150}><BarChart data={barData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" tick={{ fontSize: 8 }} /><YAxis /><Bar dataKey="count" fill="#6366f1" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div>
       </div>
       <div className="bg-white rounded-xl shadow-sm border p-3 mb-4"><h3 className="text-xs font-semibold text-gray-600 mb-1">{t.avgRiskScoreTrend}</h3><ResponsiveContainer width="100%" height={130}><LineChart data={trendData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="month" tick={{ fontSize: 9 }} /><YAxis domain={[0, 100]} /><RTooltip /><Line type="monotone" dataKey="avgScore" stroke="#ef4444" strokeWidth={2} /></LineChart></ResponsiveContainer></div>
-      {/* ★ Geographic Risk Heatmap */}
-{(() => {
-  const geoData = {};
-  entities.forEach(e => {
-    const j = e.jurisdiction;
-    if (!geoData[j]) geoData[j] = { name: j, total: 0, high: 0, medium: 0, low: 0 };
-    geoData[j].total++;
-    const r = getEffectiveRating(e).rating;
-    if (r === 'High') geoData[j].high++;
-    else if (r === 'Medium') geoData[j].medium++;
-    else geoData[j].low++;
-  });
-  const geoArr = Object.values(geoData).sort((a, b) => {
-    const aScore = a.high * 3 + a.medium * 2 + a.low;
-    const bScore = b.high * 3 + b.medium * 2 + b.low;
-    return bScore - aScore;
-  });
-  if (geoArr.length === 0) return null;
-  const maxTotal = Math.max(...geoArr.map(g => g.total), 1);
-  const getHeatColor = (g) => {
-    if (g.high > 0) return { bg: 'bg-red-500', text: 'text-white' };
-    if (g.medium > 0) return { bg: 'bg-amber-400', text: 'text-gray-900' };
-    return { bg: 'bg-green-400', text: 'text-gray-900' };
-  };
-  return (
-    <div className="bg-white rounded-xl shadow-sm border p-3 mb-4">
-      <h3 className="text-xs font-semibold text-gray-600 mb-2">🌍 {t.geoRiskMap}</h3>
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-        {geoArr.map(g => {
-          const c = getHeatColor(g);
-          const widthPct = Math.max(20, Math.round((g.total / maxTotal) * 100));
-          return (
-            <div key={g.name} className="relative rounded-lg overflow-hidden border border-gray-200">
-              <div className={`${c.bg} ${c.text} px-2.5 py-2`} style={{ width: `${widthPct}%`, minWidth: '100%' }}>
-                <div className="text-xs font-bold truncate">{g.name}</div>
-                <div className="flex gap-1.5 mt-0.5 text-xs opacity-90">
-                  <span>{g.total} total</span>
-                  {g.high > 0 && <span>🔴{g.high}</span>}
-                  {g.medium > 0 && <span>🟡{g.medium}</span>}
-                  {g.low > 0 && <span>🟢{g.low}</span>}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <div className="flex gap-3 mt-2 text-xs text-gray-400">
-        <span>🔴 {t.highRisk}</span>
-        <span>🟡 {lang === 'zh' ? '中風險' : 'Medium'}</span>
-        <span>🟢 {lang === 'zh' ? '低風險' : 'Low'}</span>
-      </div>
-    </div>
-  );
-})()}
+      <GeoRiskMap entities={entities} getEffectiveRating={getEffectiveRating} t={t} lang={lang} />
       <div className="bg-white rounded-xl shadow-sm border p-3"><h3 className="text-xs font-semibold text-gray-600 mb-2">{t.autoTodos} ({autoTodos.length})</h3><div className="space-y-1 max-h-48 overflow-y-auto">{autoTodos.map(td => (<div key={td.id} className="flex items-center gap-2 p-1.5 rounded bg-gray-50 hover:bg-gray-100 cursor-pointer text-xs" onClick={() => { setSelectedId(td.entityId); setDetailTab('overview'); setView('workspace'); }}><PriorityDot p={td.priority} /><span className="flex-1 text-gray-700">{td.text}</span><span className="text-gray-400 text-xs px-1.5 py-0.5 bg-gray-200 rounded">{td.type}</span></div>))}{autoTodos.length === 0 && <div className="text-xs text-gray-400 text-center py-3">{t.noPendingTodos}</div>}</div></div>
     </div>);
   };
