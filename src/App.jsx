@@ -879,8 +879,8 @@ function ScreeningModule({ entityName: initialEntityName, mode }) {
 
   const moduleTitle = isSanction ? 'Sanction Screening' : 'Adverse Media Screening';
   const moduleSubtitle = isSanction
-    ? '🛡️ 自動語言檢測 | 手動 Google 搜尋 → PDF 上傳 → 📰 網頁全文抓取 → AI 制裁名單分類'
-    : '🔍 自動語言檢測 | 手動 Google 搜尋 → PDF 上傳 → 📰 網頁全文抓取 → AI 分類';
+    ? '🛡️ t.sanctionSubtitle'
+    : '🔍 t.adverseSubtitle';
   const moduleIcon = isSanction ? <Shield className="w-5 h-5 text-orange-300" /> : <Shield className="w-5 h-5" />;
   const headerBg = isSanction ? 'bg-orange-800' : 'bg-slate-800';
 
@@ -1300,7 +1300,7 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
       </div>
       <div className="bg-white border-b sticky top-0 z-10">
         <div className="max-w-6xl mx-auto flex overflow-x-auto">
-          {[{id:'demo',label:'🎬 開始'},{id:'arch',label:'🏗️ 架構說明'},{id:'keywords',label:'🔑 關鍵字配置'}].map(t => (
+          {[{id:'demo',label:'🎬 t.tabStart'},{id:'arch',label:'🏗️ t.tabArchitecture'},{id:'keywords',label:'🔑 t.tabKeywords'}].map(t => (
             <button key={t.id} onClick={() => setActiveTab(t.id)} className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap ${activeTab === t.id ? (isSanction ? 'border-orange-500 text-orange-700 bg-orange-50' : 'border-blue-500 text-blue-700 bg-blue-50') : 'border-transparent text-gray-500 hover:text-gray-700'}`}>{t.label}</button>
           ))}
         </div>
@@ -1312,7 +1312,7 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
               <button onClick={() => setShowWorkerConfig(!showWorkerConfig)} className="w-full px-4 py-2.5 flex items-center justify-between text-left hover:bg-gray-50">
                 <div className="flex items-center gap-2">
                   <Globe className="w-4 h-4 text-teal-600" />
-                  <span className="text-sm font-bold text-gray-700">📰 網頁全文抓取設定</span>
+                  <span className="text-sm font-bold text-gray-700">📰 t.webScrapingSettings</span>
                   {workerUrl.trim() ? <span className="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full border border-green-200">✅ 已設定</span> : <span className="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full border border-gray-200">選填</span>}
                 </div>
                 {showWorkerConfig ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
@@ -1338,11 +1338,11 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <div className="flex items-center gap-2 mb-3">
                 <span className={`w-6 h-6 rounded-full ${isSanction ? 'bg-orange-600' : 'bg-blue-600'} text-white text-xs font-bold flex items-center justify-center`}>1</span>
-                <h2 className="text-sm font-bold text-gray-800">執行 Google 搜尋</h2>
+                <h2 className="text-sm font-bold text-gray-800">t.stepGoogle</h2>
               </div>
               <div className="flex flex-col sm:flex-row gap-3 mb-3">
                 <div className="flex-1">
-                  <label className="text-xs text-gray-500 mb-1 block">實體名稱</label>
+                  <label className="text-xs text-gray-500 mb-1 block">t.entityName</label>
                   <input type="text" value={searchEntity} onChange={e => setSearchEntity(e.target.value)} maxLength={200} className="w-full border-2 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none" placeholder="輸入英文或中文名稱..." />
                 </div>
                 <div>
@@ -1524,8 +1524,8 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
             <div className="bg-white rounded-xl border shadow-sm p-5">
               <h2 className="text-sm font-bold text-gray-800 mb-4">🔄 {isSanction ? '制裁篩查' : '搜尋'}流程（含網頁全文抓取）</h2>
               {[
-                { n: 1, icon: '📝', t: '輸入實體名稱', d: `系統自動生成 ${isSanction ? '制裁篩查' : 'Google'} 搜尋查詢字串` },
-                { n: 2, icon: '🔍', t: '執行 Google 搜尋', d: '點擊連結在 Google 搜尋，確認搜尋結果' },
+                { n: 1, icon: '📝', t: 't.entityName', d: `系統自動生成 ${isSanction ? '制裁篩查' : 'Google'} 搜尋查詢字串` },
+                { n: 2, icon: '🔍', t: 't.stepGoogle', d: '點擊連結在 Google 搜尋，確認搜尋結果' },
                 { n: 3, icon: '📄', t: '儲存為 PDF', d: '使用 Ctrl+P → 另存為 PDF' },
                 { n: 4, icon: '⬆️', t: '上傳 PDF', d: '在步驟 2 上傳剛儲存的 PDF 文件' },
                 { n: 5, icon: '📰', t: '網頁全文抓取（自動）', d: '若已設定 Worker，系統自動從 PDF 中提取外部 URL，透過 /api/scrape 抓取每個網頁的實際內容' },
