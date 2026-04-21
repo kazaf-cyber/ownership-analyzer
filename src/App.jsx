@@ -135,7 +135,6 @@ const i18n = {
     riskManagement: 'Risk Management', overrideRating: 'Override Rating', clearOverride: 'Clear Override',
     overrideActive: 'Override Active', reason: 'Reason', by: 'By', on: 'on',
     riskScoreTrend: 'Risk Score Trend', insufficientHistory: 'Insufficient history.', auditTrail: 'Audit Trail', score: 'Score', override: 'Override',
-    dragModeOn: '🔗 Drag ON', dragMode: '🔗 Drag', addRelationship: '+ Add Rel', clearSelection: 'Clear',
     lowRisk: 'Low Risk', mediumRisk: 'Medium Risk', ownership: 'Ownership', control: 'Control', rca: 'RCA',
     globalSearch: 'Global Search', searchPlaceholder: 'Search entities, notes, todos…', noResults: 'No results.', todos: 'Todos',
     snapshotDesc: 'Snapshot description…', saveSnapshot: '📸 Save', savesCurrentState: 'Saves current state', entitiesLabel: 'entities', relationshipsLabel: 'relationships',
@@ -268,7 +267,6 @@ const i18n = {
     riskManagement: '風險管理', overrideRating: '覆寫評級', clearOverride: '清除覆寫',
     overrideActive: '覆寫生效中', reason: '原因', by: '操作人', on: '於',
     riskScoreTrend: '風險趨勢', insufficientHistory: '資料不足。', auditTrail: '稽核軌跡', score: '分數', override: '覆寫',
-    dragModeOn: '🔗 拖拽 ON', dragMode: '🔗 拖拽', addRelationship: '+ 新增關係', clearSelection: '取消',
     lowRisk: '低風險', mediumRisk: '中風險', ownership: '持股', control: '控制', rca: '密切關聯人',
     globalSearch: '全域搜尋', searchPlaceholder: '搜尋實體、備註、待辦…', noResults: '找不到結果。', todos: '待辦',
     snapshotDesc: '快照描述…', saveSnapshot: '📸 儲存', savesCurrentState: '儲存目前狀態', entitiesLabel: '個實體', relationshipsLabel: '個關係',
@@ -1644,10 +1642,8 @@ export default function KYCSystem() {
   const [batchSelected, setBatchSelected] = useState(new Set());
   const [contextMenu, setContextMenu] = useState(null);
   const [dagSelected, setDagSelected] = useState(null);
-  const [dragMode, setDragMode] = useState(false);
   const [workspaceTab, setWorkspaceTab] = useState('list');
   const [mobileSideOpen, setMobileSideOpen] = useState(false);
-  const [dragState, setDragState] = useState(null);
   const [darkMode, setDarkMode] = useState(false);
   React.useEffect(() => {
   const id = 'kyc-dark-style';
@@ -2112,15 +2108,12 @@ export default function KYCSystem() {
 <button onClick={() => setSvgTransform({ x: 0, y: 0, scale: 1 })} className="bg-gray-200 text-gray-600 px-2 py-1 rounded text-xs" title={t.resetView}>↺</button>
 <span className="text-xs text-gray-400">{Math.round(svgTransform.scale * 100)}%</span>
 {/* ★ END NEW */}
-<button onClick={() => setDragMode(!dragMode)} className={`px-2 py-1 rounded text-xs font-medium ${dragMode ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-600'}`}>{dragMode ? t.dragModeOn : t.dragMode}</button>
               <button onClick={() => openModal('addRel', { sourceId: '', targetId: '', type: 'ownership', percentage: '', shares: '', description: '', inputMode: 'shares' })} className="bg-blue-600 text-white px-2 py-1 rounded text-xs">{t.addRelationship}</button>
               {dagSelected && <button onClick={() => setDagSelected(null)} className="bg-gray-200 text-gray-600 px-2 py-1 rounded text-xs">{t.clearSelection}</button>}
             </div>
             <div className="flex-1 overflow-auto relative" onClick={() => setContextMenu(null)}>
               <svg ref={svgRef} width={W} height={Math.max(H, 350)}
-  onWheel={e => { e.preventDefault(); setSvgTransform(p => ({ ...p, scale: Math.max(0.3, Math.min(3, +(p.scale + (e.deltaY > 0 ? -0.1 : 0.1)).toFixed(1))) })); }}
-  onMouseMove={e => { if (dragState && svgRef.current) { const rect = svgRef.current.getBoundingClientRect(); setDragState(prev => prev ? { ...prev, mx: e.clientX - rect.left, my: e.clientY - rect.top } : null); } }}
-  onMouseUp={() => setDragState(null)}>
+  onWheel={e => { e.preventDefault(); setSvgTransform(p => ({ ...p, scale: Math.max(0.3, Math.min(3, +(p.scale + (e.deltaY > 0 ? -0.1 : 0.1)).toFixed(1))) })); }}>
               <defs>
                   <marker id="arr" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#94a3b8" /></marker>
                   <marker id="arrH" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#3b82f6" /></marker>
@@ -2139,12 +2132,10 @@ export default function KYCSystem() {
                   const hi = connectedSet && connectedSet.has(ent.id); const dim = connectedSet && !hi;
                   const fill = r.rating === 'High' ? '#fef2f2' : r.rating === 'Medium' ? '#fffbeb' : '#f0fdf4';
                   const border = sel ? '#3b82f6' : r.rating === 'High' ? '#fca5a5' : r.rating === 'Medium' ? '#fcd34d' : '#86efac';
-                  return (<g key={ent.id} opacity={dim ? 0.15 : 1} style={{ cursor: dragMode ? 'crosshair' : 'pointer' }}
+                  return (<g key={ent.id} opacity={dim ? 0.15 : 1} style={{ cursor: 'pointer' }}
                     onClick={e => { e.stopPropagation(); if (!dragMode) setDagSelected(ent.id === dagSelected ? null : ent.id); }}
                     onDoubleClick={() => { setSelectedId(ent.id); setDetailTab('overview'); }}
-                    onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY, entityId: ent.id }); }}
-                    onMouseDown={e => { if (dragMode && svgRef.current) { const rect = svgRef.current.getBoundingClientRect(); setDragState({ sourceId: ent.id, mx: e.clientX - rect.left, my: e.clientY - rect.top }); } }}
-                    onMouseUp={() => { if (dragState && dragState.sourceId !== ent.id) { openModal('addRel', { sourceId: dragState.sourceId, targetId: ent.id, type: 'ownership', percentage: '', shares: '', description: '', inputMode: 'shares' }); setDragState(null); } }}>
+                    onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY, entityId: ent.id }); }}>
                     {ent.type === 'person' ? <circle cx={pos.x + 65} cy={pos.y + 20} r={22} fill={fill} stroke={border} strokeWidth={sel ? 3 : 2} /> : <rect x={pos.x} y={pos.y} width={130} height={40} rx={6} fill={fill} stroke={border} strokeWidth={sel ? 3 : 2} />}
                     <text x={pos.x + 65} y={ent.type === 'person' ? pos.y + 24 : pos.y + 17} textAnchor="middle" fontSize="9" fontWeight="600" fill="#1e293b">{ent.name.length > 15 ? ent.name.slice(0, 14) + '…' : ent.name}</text>
                     <text x={pos.x + 65} y={ent.type === 'person' ? pos.y + 36 : pos.y + 30} textAnchor="middle" fontSize="7" fill="#64748b">{ent.jurisdiction}{isSddEligible(ent) ? ' 🔵' : ''}</text>
@@ -2152,7 +2143,6 @@ export default function KYCSystem() {
                     {isAutoHighRisk(ent) && <circle cx={pos.x + (ent.type === 'person' ? 42 : 4)} cy={pos.y + 4} r={5} fill="#ef4444" stroke="white" strokeWidth="1.5" />}
                   </g>);
                 })}
-                {dragState && dragState.mx && <line x1={positions[dragState.sourceId]?.x + 65} y1={positions[dragState.sourceId]?.y + 20} x2={dragState.mx} y2={dragState.my} stroke="#3b82f6" strokeWidth={2} strokeDasharray="5 3" />}
                 </g>
               </svg>
               {contextMenu && (<div className="absolute bg-white rounded-lg shadow-lg border py-1 z-40" style={{ left: contextMenu.x, top: contextMenu.y, minWidth: '140px' }}>{ctxItems.map(item => (<button key={item.label} onClick={() => { item.action(contextMenu.entityId); setContextMenu(null); }} className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-100">{item.label}</button>))}</div>)}
