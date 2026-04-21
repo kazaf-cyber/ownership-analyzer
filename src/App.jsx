@@ -246,6 +246,7 @@ const i18n = {
     mockDataNote: 'Below are simulated results. Complete steps 1-3 for real analysis results.',
     selectPart: 'Select Part:',
     previewAllQueries: 'Preview All Query Strings',
+    addRelationship: '+ Add Rel',
   },
   zh: {
     appTitle: 'KYC/AML', appSub: '合規管理系統', dashboard: '儀表板', workspace: '實體與結構', search: '搜尋', snapshots: '快照', settings: '設定', report: '報告',
@@ -380,6 +381,7 @@ const i18n = {
     mockDataNote: '以下為模擬分析結果，完成步驟 1-3 後可獲取真實分析結果。',
     selectPart: '選擇 Part：',
     previewAllQueries: '預覽全部查詢字串',
+    addRelationship: '+ 新增關係',
   }
 };
 
