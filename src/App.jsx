@@ -1430,7 +1430,28 @@ ${pdfParsingNote}`;
       `${i + 1}. ${clsLabel(r.cls)}: ${r.reason}`
     ).join('\n');
   }, [results]);
+   const updateResultCls = (rank, newCls, note) => {
+    setResults(prev => prev.map(r =>
+      r.rank === rank
+        ? {
+            ...r,
+            cls: newCls,
+            reason: `[Manual] ${note} | Original(${r.cls}): ${r.reason}`,
+            _manualOverride: true,
+          }
+        : r
+    ));
+  };
+  const [strFlaggedRanks, setStrFlaggedRanks] = useState(new Set());
 
+  const flagSTR = (rank) => {
+    setStrFlaggedRanks(prev => {
+      const next = new Set(prev);
+      if (next.has(rank)) next.delete(rank); else next.add(rank);
+      return next;
+    });
+  };
+  
   const ResultCard = ({ r }) => {
     const c = CLS_CONFIG[r.cls] || CLS_CONFIG['NO_HIT'];
     const Icon = c.icon;
@@ -1468,7 +1489,25 @@ ${pdfParsingNote}`;
               </p>
               <div className="flex gap-3 mt-2 text-xs text-gray-500"><span>Risk: <b className={c.text}>{r.riskCat}</b></span><span>Confidence: <b>{Math.round(r.confidence * 100)}%</b></span></div>
             </div>
-            {r.cls === 'TRUE_HIT' && (<div className="flex gap-2 mt-2"><button className="bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-red-100">🚨 標記 STR</button></div>)}
+            {r.cls === 'TRUE_HIT' && (               
+            <div className="flex gap-2 mt-2">                 
+              <button                   
+                onClick={(e) => { e.stopPropagation(); flagSTR(r.rank); }}                   
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition ${                     
+                  strFlaggedRanks.has(r.rank)                       
+                  ? 'bg-red-600 text-white border-red-600'                       
+                  : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'                   
+                }`}                 >                   
+                {strFlaggedRanks.has(r.rank) ? '✅ 已標記 STR' : '🚨 標記 STR'}                
+              </button>                 
+              <button                   
+                onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'FALSE_HIT', 'Manually downgraded from TRUE_HIT'); }}                   
+                className="bg-gray-50 text-gray-600 border border-gray-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-gray-100"                 
+                >                   
+                ↓ 降級為 False Hit                 
+              </button>               
+            </div>             
+          )}
             {r.cls === 'POSSIBLE_HIT' && (
               <div className="mt-2 space-y-2">
                 {r.missingInfo && r.missingInfo.length > 0 && (
@@ -1483,8 +1522,18 @@ ${pdfParsingNote}`;
                   </div>
                 )}
                 <div className="flex gap-2">
-                  <button className="bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-green-100">✅ 確認非同人</button>
-                  <button className="bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-red-100">🚨 升級為 True Hit</button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'FALSE_HIT', 'Manually confirmed as different person'); }}
+                    className="bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-green-100"
+                  >
+                    ✅ 確認非同人
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'TRUE_HIT', 'Manually upgraded from POSSIBLE_HIT'); }}
+                    className="bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-red-100"
+                  >
+                    🚨 升級為 True Hit
+                  </button>
                 </div>
               </div>
             )}
