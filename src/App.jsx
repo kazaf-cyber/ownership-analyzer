@@ -1634,7 +1634,6 @@ ${pdfParsingNote}`;
             {/* ── 補充辨識資料 ── */}
          <div className="bg-white rounded-xl border shadow-sm p-4">
          <div className="flex items-center gap-2 mb-3">
-        <span className="text-lg">🪪</span>
         <h2 className="text-sm font-bold text-gray-800">補充辨識資料（排除同名不同人）</h2>
         <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full border">選填但強烈建議</span>
         </div>
