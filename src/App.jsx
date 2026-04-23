@@ -924,6 +924,7 @@ function ScreeningModule({ entityName: initialEntityName, mode }) {
   const [sanctionPart, setSanctionPart] = useState('part1');
   const [workerStatus, setWorkerStatus] = useState('');
   const [copied, setCopied] = useState(false);
+  const [entityContext, setEntityContext] = useState('');
 
   React.useEffect(() => {
     if (analysisComplete && results.length > 0) {
@@ -1015,7 +1016,7 @@ function ScreeningModule({ entityName: initialEntityName, mode }) {
   };
 
   /* ── 生成 AI Prompt（制裁篩查 vs 不良媒體各自不同）── */
-    const buildAIPrompt = (searchEntityName, enrichedContent, resultCount, hasPageContent, lang) => {
+    const buildAIPrompt = (searchEntityName, enrichedContent, resultCount, hasPageContent, lang, entityContext) => {
 
     const pdfCleaningNote = `
 ═══════════════════════════════════════════
@@ -1049,6 +1050,26 @@ TASK: Analyze each Google search result from the PDF and classify whether the en
 ═══════════════════════════════════════════
 ENTITY UNDER SCREENING: "${searchEntityName}"
 ═══════════════════════════════════════════
+${entityContext ? `
+═══════════════════════════════════════════
+🪪 KNOWN IDENTIFYING INFORMATION (provided by compliance officer):
+═══════════════════════════════════════════
+${entityContext}
+
+CRITICAL INSTRUCTION FOR NAME DISAMBIGUATION:
+• The above describes the ACTUAL person/entity being screened.
+• If a search result mentions the SAME NAME but DIFFERENT identifying details (different age, profession, jurisdiction, company) → classify as FALSE_HIT even if content is ML/TF related.
+• Chinese names have extremely high duplication rates ("陳志明", "李偉明" etc. may refer to thousands of different individuals).
+• TRUE_HIT requires BOTH: (1) Name match AND (2) At least ONE identifying detail match.
+• If the article mentions the name + ML/TF content but provides NO identifying details at all → POSSIBLE_HIT (not TRUE_HIT).
+• When in doubt between TRUE_HIT and FALSE_HIT → classify as POSSIBLE_HIT.
+` : `
+NOTE ON NAME DISAMBIGUATION:
+• No additional identifying information was provided for this entity.
+• If a search result mentions the same name in ML/TF context but provides NO identifying details (no DOB, no company, no jurisdiction, no profession) to confirm identity → classify as POSSIBLE_HIT (not TRUE_HIT).
+• TRUE_HIT requires the article to contain at least ONE corroborating detail beyond just the name.
+• Chinese names have extremely high duplication rates — a name-only match is NEVER sufficient for TRUE_HIT.
+`}
 ${pdfCleaningNote}
 ${hasPageContent ? `YOU HAVE TWO DATA SOURCES:
 1. Google search result snippets (from PDF)
@@ -1088,8 +1109,9 @@ STAGE 2 — SANCTIONS RELEVANCE (only if Stage 1 passes):
     - Article mentions sanctions but entity is not a target or subject
 
 CLASSIFICATION OUTPUT:
-- TRUE_HIT: Stage 1 ✅ AND Stage 2 ✅ — entity confirmed AND directly sanctioned, designated, or investigated for sanctions violations
-- FALSE_HIT: Stage 1 ❌ — different entity with similar name
+- TRUE_HIT: Stage 1 ✅ (name + at least ONE identifying detail confirmed) AND Stage 2 ✅ — entity confirmed AND directly sanctioned or investigated
+- POSSIBLE_HIT: Name matches + content IS sanctions-related, but article provides NO identifying details to confirm or deny identity — requires manual review
+- FALSE_HIT: Stage 1 ❌ — identifying details CONTRADICT (different age, profession, jurisdiction, company)
 - IRRELEVANT_MLTF: Stage 1 ✅ but Stage 2 ❌ — correct entity but NOT sanctions-related
 - NO_HIT: Entity not mentioned at all, or no meaningful content
 
@@ -1111,6 +1133,7 @@ RESPONSE FORMAT — JSON array only, no other text:
   "confidence": 0.95,
   "reason": "Write a fluent, natural paragraph combining name verification and sanctions relevance reasoning. Do NOT use 'STAGE 1' or 'STAGE 2' labels.",
   "riskCat": "OFAC SDN / EU Sanctions / UN Sanctions / Sanctions Evasion / Asset Freeze / Proliferation / N/A"
+  "missingInfo": ["DOB", "company affiliation", "jurisdiction"
 }]
 
 Analyze ALL search results from this PDF. ${reminderText}
@@ -1129,6 +1152,26 @@ TASK: Analyze each Google search result from the PDF and classify it using a str
 ═══════════════════════════════════════════
 ENTITY UNDER SCREENING: "${searchEntityName}"
 ═══════════════════════════════════════════
+${entityContext ? `
+═══════════════════════════════════════════
+🪪 KNOWN IDENTIFYING INFORMATION (provided by compliance officer):
+═══════════════════════════════════════════
+${entityContext}
+
+CRITICAL INSTRUCTION FOR NAME DISAMBIGUATION:
+• The above describes the ACTUAL person/entity being screened.
+• If a search result mentions the SAME NAME but DIFFERENT identifying details (different age, profession, jurisdiction, company) → classify as FALSE_HIT even if content is ML/TF related.
+• Chinese names have extremely high duplication rates ("陳志明", "李偉明" etc. may refer to thousands of different individuals).
+• TRUE_HIT requires BOTH: (1) Name match AND (2) At least ONE identifying detail match.
+• If the article mentions the name + ML/TF content but provides NO identifying details at all → POSSIBLE_HIT (not TRUE_HIT).
+• When in doubt between TRUE_HIT and FALSE_HIT → classify as POSSIBLE_HIT.
+` : `
+NOTE ON NAME DISAMBIGUATION:
+• No additional identifying information was provided for this entity.
+• If a search result mentions the same name in ML/TF context but provides NO identifying details (no DOB, no company, no jurisdiction, no profession) to confirm identity → classify as POSSIBLE_HIT (not TRUE_HIT).
+• TRUE_HIT requires the article to contain at least ONE corroborating detail beyond just the name.
+• Chinese names have extremely high duplication rates — a name-only match is NEVER sufficient for TRUE_HIT.
+`}
 ${pdfCleaningNote}
 ${hasPageContent ? `YOU HAVE TWO DATA SOURCES:
 1. Google search result snippets (from PDF)
@@ -1168,8 +1211,9 @@ STAGE 2 — ML/TF RELEVANCE (only if Stage 1 passes):
     - Regulatory news that does NOT name the entity as a subject
 
 CLASSIFICATION OUTPUT:
-- TRUE_HIT: Stage 1 ✅ AND Stage 2 ✅ — entity confirmed AND content is directly ML/TF related
-- FALSE_HIT: Stage 1 ❌ — different entity with similar name
+- TRUE_HIT: Stage 1 ✅ (name + at least ONE identifying detail confirmed) AND Stage 2 ✅ — entity confirmed AND content is directly ML/TF related
+- POSSIBLE_HIT: Name matches + content IS ML/TF related, but article provides NO identifying details to confirm or deny identity — requires manual review
+- FALSE_HIT: Stage 1 ❌ — identifying details CONTRADICT (different age, profession, jurisdiction, company)
 - IRRELEVANT_MLTF: Stage 1 ✅ but Stage 2 ❌ — correct entity but NOT ML/TF related
 - NO_HIT: Entity not mentioned at all, or no meaningful content
 
@@ -1192,6 +1236,7 @@ RESPONSE FORMAT — JSON array only, no other text:
   "confidence": 0.92,
   "reason": "Write a fluent, natural paragraph combining name verification and ML/TF relevance reasoning. Do NOT use 'STAGE 1' or 'STAGE 2' labels.",
   "riskCat": "Money Laundering / Sanctions Evasion / Bribery / Tax Evasion (Criminal) / Terrorist Financing / Fraud (Criminal) / Regulatory Action / N/A"
+  "missingInfo": ["DOB", "company affiliation", "jurisdiction"
 }]
 
 Analyze ALL search results from this PDF. ${reminderText}
@@ -1303,7 +1348,7 @@ ${pdfParsingNote}`;
 
       const hasPageContent = scrapedCount > 0;
 
-      const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, hasPageContent, lang);
+      const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, hasPageContent, lang, entityContext);
 
       const res = await fetch('https://api.poe.com/v1/chat/completions', {
         method: 'POST',
@@ -1399,7 +1444,8 @@ ${pdfParsingNote}`;
               <div className="flex items-center gap-1.5 mb-1.5"><Brain className={`w-3.5 h-3.5 ${c.text}`} /><span className={`text-xs font-bold ${c.text}`}>AI 分析</span></div>
               <p className="text-xs text-gray-700">
                 <span className={`font-bold mr-1 ${r.cls === 'TRUE_HIT' ? 'text-red-700' : r.cls === 'FALSE_HIT' ? 'text-amber-700' : r.cls === 'IRRELEVANT_MLTF' ? 'text-slate-600' : 'text-green-700'}`}>
-                  {r.cls === 'TRUE_HIT' ? 'TRUE HIT' : r.cls === 'FALSE_HIT' ? 'FALSE HIT' : r.cls === 'IRRELEVANT_MLTF' ? 'IRRELEVANT' : 'NO HIT'}:
+                  {r.cls === 'TRUE_HIT' ? 'TRUE HIT' : r.cls === 'POSSIBLE_HIT' ? 'POSSIBLE HIT' : r.cls === 'FALSE_HIT' ? 'FALSE HIT' : r.cls === 'IRRELEVANT_MLTF' ? 'IRRELEVANT' : 'NO HIT'}:
+                  ${r.cls === 'TRUE_HIT' ? 'text-red-700' : r.cls === 'POSSIBLE_HIT' ? 'text-purple-700' : r.cls === 'FALSE_HIT' ? 'text-amber-700' : r.cls === 'IRRELEVANT_MLTF' ? 'text-slate-600' : 'text-green-700'}
                 </span>
                 {r.reason.replace(/^(TRUE HIT|FALSE HIT|IRRELEVANT ML\/TF|IRRELEVANT|NO HIT):\s*/i, '')}
               </p>
@@ -1407,6 +1453,25 @@ ${pdfParsingNote}`;
             </div>
             {r.cls === 'TRUE_HIT' && (<div className="flex gap-2 mt-2"><button className="bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-red-100">🚨 標記 STR</button></div>)}
           </div>
+        {r.cls === 'POSSIBLE_HIT' && (
+  <div className="mt-2 space-y-2">
+    {r.missingInfo && r.missingInfo.length > 0 && (
+      <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
+        <div className="text-xs font-bold text-purple-700 mb-1.5">🔍 需要核實的資料</div>
+        <div className="flex flex-wrap gap-1.5">
+          {r.missingInfo.map((info, i) => (
+            <span key={i} className="bg-white text-purple-700 border border-purple-200 px-2 py-1 rounded-lg text-xs font-medium">❓ {info}</span>
+          ))}
+        </div>
+        <div className="text-xs text-purple-600 mt-2">💡 請提供以上資料後重新分析，或由合規人員手動核實。</div>
+      </div>
+    )}
+    <div className="flex gap-2">
+      <button className="bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-green-100">✅ 確認非同人</button>
+      <button className="bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-red-100">🚨 升級為 True Hit</button>
+    </div>
+  </div>
+)}
         )}
       </div>
     );
@@ -1564,6 +1629,25 @@ ${pdfParsingNote}`;
                 <b>📋 操作說明：</b> 點擊「在 Google 開啟搜尋」，確認結果後用 <b>Ctrl+P（Cmd+P）→ 另存為 PDF</b> 儲存第一頁。
               </div>
             </div>
+            
+            {/* ── 補充辨識資料 ── */}
+         <div className="bg-white rounded-xl border shadow-sm p-4">
+         <div className="flex items-center gap-2 mb-3">
+        <span className="text-lg">🪪</span>
+        <h2 className="text-sm font-bold text-gray-800">補充辨識資料（排除同名不同人）</h2>
+        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full border">選填但強烈建議</span>
+        </div>
+       <textarea
+    value={entityContext}
+    onChange={e => setEntityContext(e.target.value)}
+    rows={4}
+    className="w-full border-2 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+    placeholder={`填寫任何可辨識此人/公司的資料，例如：\n• 出生日期：1975-03-15\n• 性別：男\n• 國籍：中國香港\n• 職位：Alpha Holdings Ltd 董事\n• 住址區域：香港九龍觀塘\n• 已知不相關身份：非律師、非醫生`}
+  />
+  <div className="mt-2 text-xs text-gray-400">
+    💡 資料越詳細，AI 越能準確排除同名不同人的誤報。此資料僅用於本次 AI 分析。
+  </div>
+</div>
 
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <div className="flex items-center gap-2 mb-3">
@@ -1605,8 +1689,8 @@ ${pdfParsingNote}`;
                 <div className="bg-white rounded-lg border p-3 text-center"><div className="text-xl font-bold text-gray-800">{results.length}</div><div className="text-xs text-gray-500">Total</div></div>
                 {Object.entries(CLS_CONFIG).map(([key, c]) => { const Icon = c.icon; return (<div key={key} className={`${c.bg} rounded-lg border ${c.border} p-3 text-center`}><div className={`text-xl font-bold ${c.text}`}>{counts[key]}</div><div className={`text-xs ${c.text} flex items-center justify-center gap-1`}><Icon className="w-3 h-3" />{detectedLang === 'zh' ? c.labelZh : c.label}</div></div>); })}
               </div>
-              <div className={`${counts.TRUE_HIT > 0 ? 'bg-red-600' : 'bg-green-600'} rounded-lg p-3 text-white flex items-center justify-between`}>
-                <div className="flex items-center gap-2"><Shield className="w-5 h-5" /><span className="font-bold text-sm">{riskLabel}</span><span className="text-lg font-black">{counts.TRUE_HIT > 0 ? 'HIGH RISK' : 'LOW RISK'}</span></div>
+              <div className={`${${counts.TRUE_HIT > 0 ? 'bg-red-600' : counts.POSSIBLE_HIT > 0 ? 'bg-purple-600' : 'bg-green-600'}} rounded-lg p-3 text-white flex items-center justify-between`}>
+                <div className="flex items-center gap-2"><Shield className="w-5 h-5" /><span className="font-bold text-sm">{riskLabel}</span><span className="text-lg font-black">{{counts.TRUE_HIT > 0 ? 'HIGH RISK' : counts.POSSIBLE_HIT > 0 ? 'REVIEW NEEDED' : 'LOW RISK'}}</span></div>
                 <span className="text-xs opacity-80">{counts.TRUE_HIT > 0 ? riskDescHigh : riskDescLow}</span>
               </div>
               <div className="flex gap-1.5 flex-wrap">{[{ k: 'ALL', l: `全部 (${results.length})` }, ...Object.entries(CLS_CONFIG).map(([k, c]) => ({ k, l: `${detectedLang === 'zh' ? c.labelZh : c.label} (${counts[k]})` }))].map(f => (<button key={f.k} onClick={() => setFilterType(f.k)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition border ${filterType === f.k ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>{f.l}</button>))}</div>
