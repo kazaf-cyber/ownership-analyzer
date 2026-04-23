@@ -237,7 +237,7 @@ const i18n = {
     stepAISanction: 'AI Analysis (Sanctions List)',
     showEdit: 'Show/Edit',
     notSet: '(Not Set)',
-    usingGemini: 'Using Gemini-2.5-Flash (via Poe API)',
+    usingGemini: 'Using Gemini-3-Flash (via Poe API)',
     getPoeKey: 'Get Poe API Key →',
     startAI: 'Start AI Analysis',
     startAISanction: 'Start AI Sanctions Screening',
@@ -372,7 +372,7 @@ const i18n = {
     stepAISanction: 'AI 分析（制裁名單命中）',
     showEdit: '顯示/修改',
     notSet: '(未設定)',
-    usingGemini: '使用 Gemini-2.5-Flash（via Poe API）',
+    usingGemini: '使用 Gemini-3-Flash（via Poe API）',
     getPoeKey: '取得 Poe API Key →',
     startAI: '開始 AI 分析',
     startAISanction: '開始 AI 制裁篩查',
@@ -1461,9 +1461,8 @@ ${pdfParsingNote}`;
             <div className={`${c.bg} rounded-lg p-3`}>
               <div className="flex items-center gap-1.5 mb-1.5"><Brain className={`w-3.5 h-3.5 ${c.text}`} /><span className={`text-xs font-bold ${c.text}`}>AI 分析</span></div>
               <p className="text-xs text-gray-700">
-                <span className={`font-bold mr-1 ${r.cls === 'TRUE_HIT' ? 'text-red-700' : r.cls === 'FALSE_HIT' ? 'text-amber-700' : r.cls === 'IRRELEVANT_MLTF' ? 'text-slate-600' : 'text-green-700'}`}>
+                <span className={`font-bold mr-1 ${r.cls === 'TRUE_HIT' ? 'text-red-700' : r.cls === 'POSSIBLE_HIT' ? 'text-purple-700' : r.cls === 'FALSE_HIT' ? 'text-amber-700' : r.cls === 'IRRELEVANT_MLTF' ? 'text-slate-600' : 'text-green-700'}`}>
                   {r.cls === 'TRUE_HIT' ? 'TRUE HIT' : r.cls === 'POSSIBLE_HIT' ? 'POSSIBLE HIT' : r.cls === 'FALSE_HIT' ? 'FALSE HIT' : r.cls === 'IRRELEVANT_MLTF' ? 'IRRELEVANT' : 'NO HIT'}:
-                  ${r.cls === 'TRUE_HIT' ? 'text-red-700' : r.cls === 'POSSIBLE_HIT' ? 'text-purple-700' : r.cls === 'FALSE_HIT' ? 'text-amber-700' : r.cls === 'IRRELEVANT_MLTF' ? 'text-slate-600' : 'text-green-700'}
                 </span>
                 {r.reason.replace(/^(TRUE HIT|FALSE HIT|IRRELEVANT ML\/TF|IRRELEVANT|NO HIT):\s*/i, '')}
               </p>
@@ -1811,7 +1810,7 @@ ${pdfParsingNote}`;
               <div className="mb-3">
                 <div className="flex items-center justify-between mb-1"><label className="text-xs text-gray-500">POE API Key</label><button onClick={() => setShowKeyInput(!showKeyInput)} className="text-xs text-blue-500 hover:underline">{showKeyInput ? '隱藏' : '顯示/修改'}</button></div>
                 {showKeyInput ? (<input type="text" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-or-v1-..." className="w-full border-2 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none" />) : (<div className="border-2 rounded-lg px-3 py-2 text-sm text-gray-400 bg-gray-50 font-mono">{apiKey ? `${apiKey.slice(0, 10)}${'•'.repeat(Math.min(20, apiKey.length - 10))}` : '（未設定）'}</div>)}
-                <p className="text-xs text-gray-400 mt-1">使用 <b>Gemini-2.5-Flash</b>（via Poe API）。<a href="https://poe.com/api_key" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline ml-1">取得 Poe API Key →</a></p>
+                <p className="text-xs text-gray-400 mt-1">使用 <b>Gemini-3-Flash</b>（via Poe API）。<a href="https://poe.com/api_key" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline ml-1">取得 Poe API Key →</a></p>
               </div>
               {errorMsg && (<div className="mb-3 bg-red-50 border border-red-200 rounded-lg p-2.5 text-xs text-red-700 flex items-center gap-2"><AlertTriangle className="w-4 h-4 shrink-0" />{errorMsg}</div>)}
               <button onClick={runAnalysis} disabled={isAnalyzing || !pdfFile || !searchEntity} className={`w-full ${isSanction ? 'bg-orange-600 hover:bg-orange-700' : 'bg-indigo-600 hover:bg-indigo-700'} text-white py-2.5 rounded-lg text-sm font-bold disabled:opacity-50 flex items-center justify-center gap-2`}>
