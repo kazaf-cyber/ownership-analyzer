@@ -561,6 +561,77 @@ const SANCTION_MOCK_ZH = [
   { rank: 4, title: '全球制裁動態：OFAC發佈金融機構新指引', source: '彭博法律', date: '2026-03-05', snippet: 'OFAC已發佈更新的金融機構制裁篩查最佳實踐指引...', matchedKeywords: ['制裁'], cls: 'NO_HIT', confidence: 0.93, reason: '一般監管指引。全文未提及ABC控股有限公司。', riskCat: 'N/A' }
 ];
 
+/* ========== Google PDF 文字預處理 ========== */
+function cleanGooglePdfText(rawText) {
+  let text = rawText;
+
+  // 1. 移除 AI 概覽區塊（"AI 概覽" 到 "的搜尋結果" 之間）
+  const aiOverviewStart = text.indexOf('AI 概覽');
+  // 也處理英文 "AI Overview"
+  const aiOverviewStartEN = text.indexOf('AI Overview');
+  const actualStart = aiOverviewStart !== -1 ? aiOverviewStart : aiOverviewStartEN;
+
+  if (actualStart !== -1) {
+    // 找到第一個「的搜尋結果」或「search results」標記
+    const searchMarkerZH = text.indexOf('的搜尋結果', actualStart);
+    const searchMarkerEN = text.indexOf('search results', actualStart);
+    const searchMarker = searchMarkerZH !== -1 ? searchMarkerZH : searchMarkerEN;
+    if (searchMarker !== -1 && searchMarker > actualStart) {
+      text = text.substring(0, actualStart) + '\n' + text.substring(searchMarker);
+    }
+  }
+
+  // 2. 移除 Google UI 導航噪音
+  const uiNoisePatterns = [
+    /AI 模式\s*全部\s*新聞\s*圖片\s*購物\s*短片\s*影片\s*更多\s*工具/g,
+    /AI mode\s*All\s*News\s*Images\s*Shopping\s*Videos\s*More\s*Tools/gi,
+    /顯示更多\s*[∨vV>↓]?/g,
+    /Show more/gi,
+    /翻譯這個網頁/g,
+    /Translate this page/gi,
+    /正在顯示個人化結果.*?搜尋結果/gs,
+    /香港\s+觀塘區.*?更新位置/gs,
+    /說明\s+發送意見\s+私隱權政策\s+條款/g,
+    /About\s+Send feedback\s+Privacy\s+Terms/gi,
+    /超過\s*\d+\s*個追蹤者/g,
+    /\d+\s*則回應\s*·\s*\d+\s*年前/g,
+    /--- PAGE BREAK ---/g,
+    /\d+\s*\u2A2F?\s*(下一頁|Next)/g,
+  ];
+  for (const pattern of uiNoisePatterns) {
+    text = text.replace(pattern, '\n');
+  }
+
+  // 3. 如果有「沒有引號」標記，優先取無引號搜尋的結果
+  const unquotedMarkerZH = text.indexOf('沒有引號');
+  const unquotedMarkerEN = text.indexOf('without quotes');
+  const unquotedMarker = unquotedMarkerZH !== -1 ? unquotedMarkerZH : unquotedMarkerEN;
+
+  if (unquotedMarker !== -1) {
+    // 找到「沒有引號」或 "without quotes" 之後的下一行開始
+    const afterMarker = text.indexOf('\n', unquotedMarker);
+    if (afterMarker !== -1) {
+      // 保留標記前的「搵唔到結果」訊息作為上下文，但主要分析後面的結果
+      const beforeQuotedSearch = text.substring(0, text.lastIndexOf('\n', Math.max(0, unquotedMarker - 200)));
+      text = beforeQuotedSearch + '\n--- UNQUOTED SEARCH RESULTS BELOW ---\n' + text.substring(afterMarker);
+    }
+  }
+
+  // 4. 移除頁尾
+  const footerMarkers = ['正在顯示個人化結果', 'Personalized results', '下一頁', 'Next page'];
+  for (const marker of footerMarkers) {
+    const lastIdx = text.lastIndexOf(marker);
+    if (lastIdx !== -1 && lastIdx > text.length * 0.7) {
+      text = text.substring(0, lastIdx);
+    }
+  }
+
+  // 5. 壓縮連續空行
+  text = text.replace(/\n{4,}/g, '\n\n\n');
+
+  return text.trim();
+}
+
 /* ★ GeoRiskMap — Real World Map (D3.js + TopoJSON) */
 function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
   const wrapRef = React.useRef(null);
@@ -943,7 +1014,32 @@ function ScreeningModule({ entityName: initialEntityName, mode }) {
   };
 
   /* ── 生成 AI Prompt（制裁篩查 vs 不良媒體各自不同）── */
-  const buildAIPrompt = (searchEntityName, enrichedContent, resultCount, hasPageContent, lang) => {
+    const buildAIPrompt = (searchEntityName, enrichedContent, resultCount, hasPageContent, lang) => {
+
+    const pdfCleaningNote = `
+═══════════════════════════════════════════
+⚠️ PDF CONTENT PARSING RULES:
+═══════════════════════════════════════════
+1. IGNORE any "AI Overview" or "AI 概覽" section — these are Google's auto-generated summaries, NOT search results.
+2. IGNORE Google UI elements: navigation bars, "顯示更多", "翻譯這個網頁", page numbers, footer text.
+3. The PDF may contain TWO searches:
+   - A quoted search (e.g., "ENTITY NAME" + keywords) that returned NO results — SKIP this entirely.
+   - An unquoted search (entity name + keywords without quotes) that returned actual results — ONLY analyze these.
+4. Each REAL search result has this pattern:
+   - Source icon/name (e.g., "HKEXnews", "KPMG", "LinkedIn")
+   - URL (https://...)
+   - Title (displayed prominently)
+   - Snippet (1-2 lines of description)
+   - Sometimes page count (e.g., "481 頁", "698 頁") or date
+5. LinkedIn profiles, Facebook posts, and PDF documents from HKEXnews are ALL valid search results — do NOT skip them.
+`;
+
+    const reminderText = `REMINDER: Identify and output ALL distinct search results from the PDF content.
+There should be approximately ${resultCount} items (Google typically shows ~10 results per page).
+Do NOT skip or merge any result. Each search result = one JSON item.
+If a result has very little information, still include it with cls "NO_HIT" or "IRRELEVANT_MLTF".
+Start with [ end with ]. Nothing else.`;
+
     if (isSanction) {
       return `You are a senior compliance analyst performing Sanctions List Screening for KYC/AML purposes.
 
@@ -952,7 +1048,7 @@ TASK: Analyze each Google search result from the PDF and classify whether the en
 ═══════════════════════════════════════════
 ENTITY UNDER SCREENING: "${searchEntityName}"
 ═══════════════════════════════════════════
-
+${pdfCleaningNote}
 ${hasPageContent ? `YOU HAVE TWO DATA SOURCES:
 1. Google search result snippets (from PDF)
 2. Full page content of each result (appended below, marked with "--- PAGE CONTENT: [url] ---")
@@ -1016,13 +1112,95 @@ RESPONSE FORMAT — JSON array only, no other text:
   "riskCat": "OFAC SDN / EU Sanctions / UN Sanctions / Sanctions Evasion / Asset Freeze / Proliferation / N/A"
 }]
 
-Analyze ALL ~${resultCount} results from this PDF. Start with [ end with ].
+Analyze ALL search results from this PDF. ${reminderText}
 
 Content:
 ${enrichedContent.slice(0, 80000)}
 
-REMINDER: Output ${resultCount} JSON items. Start with [ end with ]. Nothing else.`;
+${reminderText}`;
     }
+
+    /* ── Adverse Media Prompt ── */
+    return `You are a senior compliance analyst performing Adverse Media Screening for KYC/AML purposes.
+
+TASK: Analyze each Google search result from the PDF and classify it using a strict TWO-STAGE process.
+
+═══════════════════════════════════════════
+ENTITY UNDER SCREENING: "${searchEntityName}"
+═══════════════════════════════════════════
+${pdfCleaningNote}
+${hasPageContent ? `YOU HAVE TWO DATA SOURCES:
+1. Google search result snippets (from PDF)
+2. Full page content of each result (appended below, marked with "--- PAGE CONTENT: [url] ---")
+
+IMPORTANT: Base your classification PRIMARILY on the full page content when available.
+Only fall back to snippets if the full page content is missing for that result.
+A snippet alone is NOT sufficient evidence for TRUE_HIT — you MUST verify with full content when available.
+` : `NOTE: Only Google search snippets are available. Be CONSERVATIVE — if a snippet is ambiguous, classify as IRRELEVANT_MLTF rather than TRUE_HIT.
+`}
+STAGE 1 — NAME VERIFICATION:
+• Does the search result refer to the EXACT same entity (not a similarly named one)?
+• Check: jurisdiction, industry, legal form, key persons mentioned.
+• If different entity → FALSE_HIT (stop here).
+
+STAGE 2 — ML/TF RELEVANCE (only if Stage 1 passes):
+• Is the content DIRECTLY related to ANY of the following predicate offences or regulatory concerns?
+  ✅ RELEVANT (→ TRUE_HIT):
+    - Money laundering / proceeds of crime
+    - Terrorist financing / CFT
+    - Sanctions violations (OFAC, EU, UN)
+    - Bribery / corruption of public officials
+    - Tax evasion / tax fraud (criminal, not civil disputes)
+    - Drug trafficking / human trafficking
+    - Fraud with criminal prosecution (not civil breach of contract)
+    - Proliferation financing
+    - Regulatory enforcement actions by financial regulators (HKMA, MAS, FCA, SEC, FinCEN, etc.)
+    - Designated / listed by government agencies
+
+  ❌ NOT RELEVANT (→ IRRELEVANT_MLTF):
+    - Civil lawsuits / breach of contract / commercial disputes
+    - Employment disputes / labour issues
+    - Product liability / consumer complaints
+    - General corporate news (IPO, merger, earnings)
+    - Keyword appears but in unrelated context
+    - Article merely mentions AML/sanctions as industry background
+    - Regulatory news that does NOT name the entity as a subject
+
+CLASSIFICATION OUTPUT:
+- TRUE_HIT: Stage 1 ✅ AND Stage 2 ✅ — entity confirmed AND content is directly ML/TF related
+- FALSE_HIT: Stage 1 ❌ — different entity with similar name
+- IRRELEVANT_MLTF: Stage 1 ✅ but Stage 2 ❌ — correct entity but NOT ML/TF related
+- NO_HIT: Entity not mentioned at all, or no meaningful content
+
+CRITICAL ANTI-FALSE-POSITIVE RULES:
+1. A keyword match alone is NEVER sufficient for TRUE_HIT.
+2. "sued for breach of contract" = IRRELEVANT_MLTF, even if the word "fraud" appears nearby.
+3. "under investigation" is TRUE_HIT ONLY if the investigation is by law enforcement or financial regulators for ML/TF predicate offences.
+4. News articles about general regulatory changes that mention the entity only as a market participant = NO_HIT.
+5. If uncertain between TRUE_HIT and IRRELEVANT_MLTF, classify as IRRELEVANT_MLTF and set confidence < 0.7.
+
+RESPONSE FORMAT — JSON array only, no other text:
+[{
+  "rank": 1,
+  "title": "Exact article title",
+  "source": "publication name",
+  "date": "YYYY-MM-DD",
+  "snippet": "Verbatim 2-3 sentence excerpt",
+  "matchedKeywords": ["only keywords used in ML/TF context"],
+  "cls": "TRUE_HIT",
+  "confidence": 0.92,
+  "reason": "Write a fluent, natural paragraph combining name verification and ML/TF relevance reasoning. Do NOT use 'STAGE 1' or 'STAGE 2' labels.",
+  "riskCat": "Money Laundering / Sanctions Evasion / Bribery / Tax Evasion (Criminal) / Terrorist Financing / Fraud (Criminal) / Regulatory Action / N/A"
+}]
+
+Analyze ALL search results from this PDF. ${reminderText}
+
+Content:
+${enrichedContent.slice(0, 80000)}
+
+${reminderText}`;
+  };
+
 
     /* ── Adverse Media Prompt (unchanged) ── */
     return `You are a senior compliance analyst performing Adverse Media Screening for KYC/AML purposes.
@@ -1105,23 +1283,33 @@ ${enrichedContent.slice(0, 80000)}
 REMINDER: Output ${resultCount} JSON items. Start with [ end with ]. Nothing else.`;
   };
 
-  const buildSystemPrompt = () => {
+    const buildSystemPrompt = () => {
+    const pdfParsingNote = `
+IMPORTANT: You are analyzing text extracted from a Google Search results PDF. The content may contain:
+- Google "AI Overview" / "AI 概覽" sections — these are NOT search results, IGNORE them.
+- Google UI elements (navigation bars, "顯示更多", "翻譯這個網頁", pagination) — IGNORE them.
+- TWO separate searches: one with quotes (often 0 results) and one without quotes. Only analyze the search that returned actual results.
+- Each real search result typically has: Source name, URL, Title, Snippet (1-2 lines), sometimes page count (e.g. "481 頁").
+Parse EVERY distinct search result you can identify. There are typically about 10 results per Google search page.`;
+
     if (isSanction) {
       return `You are a KYC/AML compliance analyst AI specialising in Sanctions List Screening. You output ONLY valid JSON arrays.
 Your primary goal is ACCURACY — correctly identifying entities that are sanctioned or designated.
 FALSE POSITIVES are worse than false negatives.
 An entity implementing sanctions compliance is NOT the same as an entity BEING sanctioned.
-When in doubt, classify as IRRELEVANT_MLTF rather than TRUE_HIT.`;
+When in doubt, classify as IRRELEVANT_MLTF rather than TRUE_HIT.
+${pdfParsingNote}`;
     }
     return `You are a KYC/AML compliance analyst AI. You output ONLY valid JSON arrays.
 Your primary goal is ACCURACY over quantity of hits.
 FALSE POSITIVES are worse than false negatives in compliance screening.
 When in doubt, classify as IRRELEVANT_MLTF rather than TRUE_HIT.
 A keyword appearing in text does NOT automatically make it a TRUE_HIT —
-the keyword must describe the screened entity's DIRECT involvement in ML/TF predicate offences.`;
+the keyword must describe the screened entity's DIRECT involvement in ML/TF predicate offences.
+${pdfParsingNote}`;
   };
 
-  const runAnalysis = async () => {
+ const runAnalysis = async () => {
     if (!pdfFile) { setErrorMsg('請先上傳搜尋結果 PDF 文件'); return; }
     if (!apiKey.trim()) { setErrorMsg('請輸入 POE API Key'); return; }
     clearAllTimers();
@@ -1147,12 +1335,29 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
       });
       const pdf = await window.pdfjsLib.getDocument({ data: arrayBuf }).promise;
       let pdfText = '';
+
+      /* ★ 修正 1：用座標還原換行，不再用 .join(' ')；頁數上限提升到 5 */
       for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
-        pdfText += content.items.map(x => x.str).join(' ') + '\n';
+        let lastY = null;
+        let pageText = '';
+        for (const item of content.items) {
+          if (!item.str || !item.str.trim()) continue;
+          const y = item.transform ? item.transform[5] : null;
+          if (lastY !== null && y !== null && Math.abs(y - lastY) > 3) {
+            pageText += '\n';
+          }
+          pageText += item.str + ' ';
+          lastY = y;
+        }
+        pdfText += pageText + '\n\n--- PAGE BREAK ---\n\n';
       }
+
       if (!pdfText.trim()) throw new Error('PDF 無法提取文字（可能是掃描圖片格式）');
+
+      /* ★ 修正 2：清理 Google PDF 噪音（AI 概覽、UI 元素、引號搜尋等） */
+      pdfText = cleanGooglePdfText(pdfText);
 
       let enrichedContent = pdfText;
       let scrapedCount = 0;
@@ -1172,7 +1377,11 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
       }
 
       setProgress(45); setStage('Poe AI 分析中...');
-      const resultCount = (pdfText.match(/https?:\/\//g) || []).length;
+
+      /* ★ 修正 3：resultCount 只計算外部 URL，且限制在合理範圍 */
+      const externalUrlCount = (pdfText.match(/https?:\/\/(?!www\.google|google\.com|googleapis|gstatic|schema\.org|accounts\.google)[^\s)>\]"']+/g) || []).length;
+      const resultCount = Math.max(Math.min(externalUrlCount, 15), 8);
+
       const hasPageContent = scrapedCount > 0;
 
       const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, hasPageContent, lang);
@@ -1187,7 +1396,7 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
             { role: 'user', content: fullPrompt }
           ],
           temperature: 0.05,
-          max_tokens: 16384
+          max_tokens: 12288
         })
       });
 
@@ -1224,7 +1433,7 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
       timerIdsRef.current.push(setTimeout(() => { setIsAnalyzing(false); setAnalysisComplete(true); setResults(parsed); }, 300));
     } catch (err) { setIsAnalyzing(false); setProgress(0); setStage(''); setErrorMsg(`分析失敗：${err.message}`); }
   };
-
+    
   const counts = useMemo(() => {
     const c = { TRUE_HIT: 0, FALSE_HIT: 0, IRRELEVANT_MLTF: 0, NO_HIT: 0 };
     results.forEach(r => { if (c[r.cls] !== undefined) c[r.cls]++; });
