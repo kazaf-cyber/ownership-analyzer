@@ -398,6 +398,7 @@ function detectLanguage(text) {
 
 const CLS_CONFIG = {
   'TRUE_HIT': { label: 'True Hit', labelZh: '真實命中', desc: 'The hit is confirmed to be the subject and is associated with negative news related to ML/TF or sanctions', icon: AlertTriangle, bg: 'bg-red-50', border: 'border-red-300', text: 'text-red-700', badge: 'bg-red-100 text-red-800 border-red-200' },
+  'POSSIBLE_HIT': { label: 'Possible Hit', labelZh: '存疑待核實', desc: 'Name matches and content is ML/TF related, but insufficient identifying details to confirm or deny identity', icon: Search, bg: 'bg-purple-50', border: 'border-purple-300', text: 'text-purple-700', badge: 'bg-purple-100 text-purple-800 border-purple-200' },
   'FALSE_HIT': { label: 'False Hit', labelZh: '誤報', desc: 'Full name / gender / DOB / Age not match', icon: XCircle, bg: 'bg-amber-50', border: 'border-amber-300', text: 'text-amber-700', badge: 'bg-amber-100 text-amber-800 border-amber-200' },
   'IRRELEVANT_MLTF': { label: 'Irrelevant to ML/TF', labelZh: '無關 ML/TF', desc: 'No negative news related to ML/TF or sanctions', icon: Info, bg: 'bg-slate-50', border: 'border-slate-300', text: 'text-slate-600', badge: 'bg-slate-100 text-slate-700 border-slate-200' },
   'NO_HIT': { label: 'No Hit', labelZh: '無命中', desc: 'No search keywords found, or the search returned no result', icon: CheckCircle, bg: 'bg-green-50', border: 'border-green-300', text: 'text-green-700', badge: 'bg-green-100 text-green-800 border-green-200' }
@@ -1334,7 +1335,7 @@ ${pdfParsingNote}`;
       if (!Array.isArray(parsed) || parsed.length === 0) {
         parsed = [{ rank: 1, title: lang === 'zh' ? '無分析結果' : 'No results', source: '', date: '', snippet: lang === 'zh' ? 'AI未返回有效結果。' : 'AI returned no valid results.', matchedKeywords: [], cls: 'NO_HIT', confidence: 1.0, reason: lang === 'zh' ? '返回空結果。' : 'Returned empty results.', riskCat: 'N/A' }];
       }
-      const VALID_CLS = ['TRUE_HIT', 'FALSE_HIT', 'IRRELEVANT_MLTF', 'NO_HIT'];
+      const VALID_CLS = ['TRUE_HIT', 'POSSIBLE_HIT', 'FALSE_HIT', 'IRRELEVANT_MLTF', 'NO_HIT'];
       parsed = parsed.map((r, i) => ({ ...r, rank: i + 1, cls: VALID_CLS.includes(r.cls) ? r.cls : 'NO_HIT', confidence: typeof r.confidence === 'number' ? Math.round(Math.min(1, Math.max(0, r.confidence)) * 100) / 100 : 0.8, matchedKeywords: Array.isArray(r.matchedKeywords) ? r.matchedKeywords.slice(0, 5) : [], title: r.title || '', source: r.source || '', date: r.date || '', snippet: r.snippet || '', reason: r.reason || '', riskCat: r.riskCat || 'N/A' }));
 
       parsed = parsed.map(r => {
@@ -1353,7 +1354,7 @@ ${pdfParsingNote}`;
   };
     
   const counts = useMemo(() => {
-    const c = { TRUE_HIT: 0, FALSE_HIT: 0, IRRELEVANT_MLTF: 0, NO_HIT: 0 };
+    const c = { TRUE_HIT: 0, POSSIBLE_HIT: 0, FALSE_HIT: 0, IRRELEVANT_MLTF: 0, NO_HIT: 0 };
     results.forEach(r => { if (c[r.cls] !== undefined) c[r.cls]++; });
     return c;
   }, [results]);
