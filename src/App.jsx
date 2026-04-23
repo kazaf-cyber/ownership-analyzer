@@ -1201,88 +1201,6 @@ ${enrichedContent.slice(0, 80000)}
 ${reminderText}`;
   };
 
-
-    /* ── Adverse Media Prompt (unchanged) ── */
-    return `You are a senior compliance analyst performing Adverse Media Screening for KYC/AML purposes.
-
-TASK: Analyze each Google search result from the PDF and classify it using a strict TWO-STAGE process.
-
-═══════════════════════════════════════════
-ENTITY UNDER SCREENING: "${searchEntityName}"
-═══════════════════════════════════════════
-
-${hasPageContent ? `YOU HAVE TWO DATA SOURCES:
-1. Google search result snippets (from PDF)
-2. Full page content of each result (appended below, marked with "--- PAGE CONTENT: [url] ---")
-
-IMPORTANT: Base your classification PRIMARILY on the full page content when available.
-Only fall back to snippets if the full page content is missing for that result.
-A snippet alone is NOT sufficient evidence for TRUE_HIT — you MUST verify with full content when available.
-` : `NOTE: Only Google search snippets are available. Be CONSERVATIVE — if a snippet is ambiguous, classify as IRRELEVANT_MLTF rather than TRUE_HIT.
-`}
-STAGE 1 — NAME VERIFICATION:
-• Does the search result refer to the EXACT same entity (not a similarly named one)?
-• Check: jurisdiction, industry, legal form, key persons mentioned.
-• If different entity → FALSE_HIT (stop here).
-
-STAGE 2 — ML/TF RELEVANCE (only if Stage 1 passes):
-• Is the content DIRECTLY related to ANY of the following predicate offences or regulatory concerns?
-  ✅ RELEVANT (→ TRUE_HIT):
-    - Money laundering / proceeds of crime
-    - Terrorist financing / CFT
-    - Sanctions violations (OFAC, EU, UN)
-    - Bribery / corruption of public officials
-    - Tax evasion / tax fraud (criminal, not civil disputes)
-    - Drug trafficking / human trafficking
-    - Fraud with criminal prosecution (not civil breach of contract)
-    - Proliferation financing
-    - Regulatory enforcement actions by financial regulators (HKMA, MAS, FCA, SEC, FinCEN, etc.)
-    - Designated / listed by government agencies
-
-  ❌ NOT RELEVANT (→ IRRELEVANT_MLTF):
-    - Civil lawsuits / breach of contract / commercial disputes
-    - Employment disputes / labour issues
-    - Product liability / consumer complaints
-    - General corporate news (IPO, merger, earnings)
-    - Keyword appears but in unrelated context
-    - Article merely mentions AML/sanctions as industry background
-    - Regulatory news that does NOT name the entity as a subject
-
-CLASSIFICATION OUTPUT:
-- TRUE_HIT: Stage 1 ✅ AND Stage 2 ✅ — entity confirmed AND content is directly ML/TF related
-- FALSE_HIT: Stage 1 ❌ — different entity with similar name
-- IRRELEVANT_MLTF: Stage 1 ✅ but Stage 2 ❌ — correct entity but NOT ML/TF related
-- NO_HIT: Entity not mentioned at all, or no meaningful content
-
-CRITICAL ANTI-FALSE-POSITIVE RULES:
-1. A keyword match alone is NEVER sufficient for TRUE_HIT.
-2. "sued for breach of contract" = IRRELEVANT_MLTF, even if the word "fraud" appears nearby.
-3. "under investigation" is TRUE_HIT ONLY if the investigation is by law enforcement or financial regulators for ML/TF predicate offences.
-4. News articles about general regulatory changes that mention the entity only as a market participant = NO_HIT.
-5. If uncertain between TRUE_HIT and IRRELEVANT_MLTF, classify as IRRELEVANT_MLTF and set confidence < 0.7.
-
-RESPONSE FORMAT — JSON array only, no other text:
-[{
-  "rank": 1,
-  "title": "Exact article title",
-  "source": "publication name",
-  "date": "YYYY-MM-DD",
-  "snippet": "Verbatim 2-3 sentence excerpt",
-  "matchedKeywords": ["only keywords used in ML/TF context"],
-  "cls": "TRUE_HIT",
-  "confidence": 0.92,
-  "reason": "Write a fluent, natural paragraph combining name verification and ML/TF relevance reasoning. Do NOT use 'STAGE 1' or 'STAGE 2' labels.",
-  "riskCat": "Money Laundering / Sanctions Evasion / Bribery / Tax Evasion (Criminal) / Terrorist Financing / Fraud (Criminal) / Regulatory Action / N/A"
-}]
-
-Analyze ALL ~${resultCount} results from this PDF. Start with [ end with ].
-
-Content:
-${enrichedContent.slice(0, 80000)}
-
-REMINDER: Output ${resultCount} JSON items. Start with [ end with ]. Nothing else.`;
-  };
-
     const buildSystemPrompt = () => {
     const pdfParsingNote = `
 IMPORTANT: You are analyzing text extracted from a Google Search results PDF. The content may contain:
@@ -1826,7 +1744,7 @@ ${pdfParsingNote}`;
       </div>
     </div> 
     );                                     
-        
+}       
 /* ── Wrapper Components（保持 API 不變）── */
 function AdverseMediaScreening({ entityName }) {
   return <ScreeningModule entityName={entityName} mode="adverseMedia" />;
