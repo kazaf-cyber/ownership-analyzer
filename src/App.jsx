@@ -1452,30 +1452,31 @@ ${pdfParsingNote}`;
               <div className="flex gap-3 mt-2 text-xs text-gray-500"><span>Risk: <b className={c.text}>{r.riskCat}</b></span><span>Confidence: <b>{Math.round(r.confidence * 100)}%</b></span></div>
             </div>
             {r.cls === 'TRUE_HIT' && (<div className="flex gap-2 mt-2"><button className="bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-red-100">🚨 標記 STR</button></div>)}
+            {r.cls === 'POSSIBLE_HIT' && (
+              <div className="mt-2 space-y-2">
+                {r.missingInfo && r.missingInfo.length > 0 && (
+                  <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
+                    <div className="text-xs font-bold text-purple-700 mb-1.5">🔍 需要核實的資料</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {r.missingInfo.map((info, i) => (
+                        <span key={i} className="bg-white text-purple-700 border border-purple-200 px-2 py-1 rounded-lg text-xs font-medium">❓ {info}</span>
+                      ))}
+                    </div>
+                    <div className="text-xs text-purple-600 mt-2">💡 請提供以上資料後重新分析，或由合規人員手動核實。</div>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <button className="bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-green-100">✅ 確認非同人</button>
+                  <button className="bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-red-100">🚨 升級為 True Hit</button>
+                </div>
+              </div>
+            )}
           </div>
-        {r.cls === 'POSSIBLE_HIT' && (
-  <div className="mt-2 space-y-2">
-    {r.missingInfo && r.missingInfo.length > 0 && (
-      <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
-        <div className="text-xs font-bold text-purple-700 mb-1.5">🔍 需要核實的資料</div>
-        <div className="flex flex-wrap gap-1.5">
-          {r.missingInfo.map((info, i) => (
-            <span key={i} className="bg-white text-purple-700 border border-purple-200 px-2 py-1 rounded-lg text-xs font-medium">❓ {info}</span>
-          ))}
-        </div>
-        <div className="text-xs text-purple-600 mt-2">💡 請提供以上資料後重新分析，或由合規人員手動核實。</div>
-      </div>
-    )}
-    <div className="flex gap-2">
-      <button className="bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-green-100">✅ 確認非同人</button>
-      <button className="bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-red-100">🚨 升級為 True Hit</button>
-    </div>
-  </div>
-)}
         )}
       </div>
     );
   };
+
 
   const riskLabel = isSanction ? 'SANCTIONS RISK' : 'Overall Risk Assessment';
   const riskDescHigh = isSanction
