@@ -1308,7 +1308,7 @@ ${pdfParsingNote}`;
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
         body: JSON.stringify({
-          model: 'gpt-5-nano',
+          model: 'gemini-3-flash',
           messages: [
             { role: 'system', content: buildSystemPrompt() },
             { role: 'user', content: fullPrompt }
