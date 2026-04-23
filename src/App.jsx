@@ -1019,7 +1019,7 @@ RESPONSE FORMAT — JSON array only, no other text:
 Analyze ALL ~${resultCount} results from this PDF. Start with [ end with ].
 
 Content:
-${enrichedContent.slice(0, 50000)}
+${enrichedContent.slice(0, 80000)}
 
 REMINDER: Output ${resultCount} JSON items. Start with [ end with ]. Nothing else.`;
     }
@@ -1100,7 +1100,7 @@ RESPONSE FORMAT — JSON array only, no other text:
 Analyze ALL ~${resultCount} results from this PDF. Start with [ end with ].
 
 Content:
-${enrichedContent.slice(0, 50000)}
+${enrichedContent.slice(0, 80000)}
 
 REMINDER: Output ${resultCount} JSON items. Start with [ end with ]. Nothing else.`;
   };
@@ -1147,7 +1147,7 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
       });
       const pdf = await window.pdfjsLib.getDocument({ data: arrayBuf }).promise;
       let pdfText = '';
-      for (let i = 1; i <= Math.min(pdf.numPages, 3); i++) {
+      for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
         pdfText += content.items.map(x => x.str).join(' ') + '\n';
@@ -1187,7 +1187,7 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
             { role: 'user', content: fullPrompt }
           ],
           temperature: 0.05,
-          max_tokens: 12288
+          max_tokens: 16384
         })
       });
 
@@ -1321,7 +1321,7 @@ the keyword must describe the screened entity's DIRECT involvement in ML/TF pred
                 <div className="px-4 pb-4 space-y-3 border-t">
                   <div className="pt-3 bg-teal-50 rounded-lg p-3 text-xs text-teal-700">
                     <b>💡 功能說明：</b>
-                    <br />📰 <b>網頁抓取</b>：AI 分析前自動抓取每個搜尋結果的實際網頁全文（最多 3000 字/頁），大幅提升分類準確度。
+                    <br />📰 <b>網頁抓取</b>：AI 分析前自動抓取每個搜尋結果的實際網頁全文（最多 5000 字/頁），大幅提升分類準確度。
                     <br />若未設定 Worker，仍可使用手動 Google 搜尋 + PDF 上傳流程（AI 僅基於 snippet 分析）。
                   </div>
                   <div><label className="text-xs text-gray-500 mb-1 block">Worker URL</label><input type="text" value={workerUrl} onChange={e => setWorkerUrl(e.target.value)} placeholder="https://kyc-ams-proxy.xxx.workers.dev" className="w-full border-2 rounded-lg px-3 py-2 text-sm font-mono focus:border-teal-500 focus:outline-none" /></div>
