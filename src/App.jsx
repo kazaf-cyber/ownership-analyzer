@@ -563,7 +563,7 @@ const SANCTION_MOCK_ZH = [
 
 /* ========== Google PDF 文字預處理 ========== */
 function cleanGooglePdfText(rawText) {
-  let text = rawText;
+  let text = rawText.normalize('NFKC');
 
   // 1. 移除 AI 概覽區塊（"AI 概覽" 到 "的搜尋結果" 之間）
   const aiOverviewStart = text.indexOf('AI 概覽');
@@ -1298,7 +1298,7 @@ ${pdfParsingNote}`;
 
       /* ★ 修正 3：resultCount 只計算外部 URL，且限制在合理範圍 */
       const externalUrlCount = (pdfText.match(/https?:\/\/(?!www\.google|google\.com|googleapis|gstatic|schema\.org|accounts\.google)[^\s)>\]"']+/g) || []).length;
-      const resultCount = Math.max(Math.min(externalUrlCount, 15), 8);
+      const resultCount = Math.max(Math.min(externalUrlCount, 20), 10);
 
       const hasPageContent = scrapedCount > 0;
 
@@ -1314,7 +1314,7 @@ ${pdfParsingNote}`;
             { role: 'user', content: fullPrompt }
           ],
           temperature: 0.05,
-          max_tokens: 12288
+          max_tokens: 16384
         })
       });
 
