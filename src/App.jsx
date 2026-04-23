@@ -892,7 +892,7 @@ function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
 
 /* ========== GENERIC SCREENING COMPONENT (shared by Adverse Media & Sanction) ========== */
 
-function ScreeningModule({ entityName: initialEntityName, mode }) {
+function ScreeningModule({ entityName: initialEntityName, mode, onFlagSTR }) {
   const isAdverseMedia = mode === 'adverseMedia';
   const isSanction = mode === 'sanction';
   const SESSION_KEY = `${mode}_state_${initialEntityName || 'default'}`;
@@ -1444,10 +1444,25 @@ ${pdfParsingNote}`;
   };
   const [strFlaggedRanks, setStrFlaggedRanks] = useState(new Set());
 
-  const flagSTR = (rank) => {
+ const flagSTR = (rank, resultItem) => {
     setStrFlaggedRanks(prev => {
       const next = new Set(prev);
-      if (next.has(rank)) next.delete(rank); else next.add(rank);
+      const wasFlagged = next.has(rank);
+      if (wasFlagged) {
+        next.delete(rank);
+      } else {
+        next.add(rank);
+        // 寫回 entity STR 狀態
+        if (onFlagSTR) {
+          onFlagSTR({
+            flagged: true,
+            source: mode === 'sanction' ? 'Sanction Screening' : 'Adverse Media Screening',
+            title: resultItem?.title || '',
+            riskCat: resultItem?.riskCat || '',
+            confidence: resultItem?.confidence || 0,
+          });
+        }
+      }
       return next;
     });
   };
@@ -1492,7 +1507,7 @@ ${pdfParsingNote}`;
             {r.cls === 'TRUE_HIT' && (               
             <div className="flex gap-2 mt-2">                 
               <button                   
-                onClick={(e) => { e.stopPropagation(); flagSTR(r.rank); }}                   
+                onClick={(e) => { e.stopPropagation(); flagSTR(r.rank, r); }}                  
                 className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition ${                     
                   strFlaggedRanks.has(r.rank)                       
                   ? 'bg-red-600 text-white border-red-600'                       
@@ -2016,12 +2031,12 @@ ${pdfParsingNote}`;
     );                                     
 }       
 /* ── Wrapper Components（保持 API 不變）── */
-function AdverseMediaScreening({ entityName }) {
-  return <ScreeningModule entityName={entityName} mode="adverseMedia" />;
+function AdverseMediaScreening({ entityName, onFlagSTR }) {
+  return <ScreeningModule entityName={entityName} mode="adverseMedia" onFlagSTR={onFlagSTR} />;
 }
 
-function SanctionScreening({ entityName }) {
-  return <ScreeningModule entityName={entityName} mode="sanction" />;
+function SanctionScreening({ entityName, onFlagSTR }) {
+  return <ScreeningModule entityName={entityName} mode="sanction" onFlagSTR={onFlagSTR} />;
 }
 
 
@@ -2649,13 +2664,55 @@ export default function KYCSystem() {
         </div>)}
 
         {/* ✅ Adverse Media Tab */}
-        <div className={detailTab === 'adverseMedia' ? 'pb-2' : 'hidden'}>
-          <AdverseMediaScreening key={`ams-${ent.id}`} entityName={ent.name} />
+          <div className={detailTab === 'adverseMedia' ? 'pb-2' : 'hidden'}>
+          <AdverseMediaScreening key={`ams-${ent.id}`} entityName={ent.name} onFlagSTR={(info) => {
+            updateEntity(ent.id, {
+              str: {
+                flagged: true,
+                submittedDate: null,
+                mlroApproved: false,
+                mlroDate: null,
+                _source: info.source,
+                _detail: `${info.title} | Risk: ${info.riskCat} | Confidence: ${Math.round(info.confidence * 100)}%`,
+              }
+            });
+            // 自動加入備註
+            updateEntity(ent.id, {
+              str: {
+                flagged: true,
+                submittedDate: null,
+                mlroApproved: false,
+                mlroDate: null,
+              },
+              notes: [...ent.notes, {
+                id: gid(),
+                text: `🚨 STR flagged via ${info.source}: "${info.title}" (${info.riskCat}, ${Math.round(info.confidence * 100)}% confidence)`,
+                date: today,
+                author: 'System',
+              }],
+            });
+            showToast(lang === 'zh' ? '🚨 已標記 STR 並新增備註' : '🚨 STR flagged & note added');
+          }} />
         </div>
 
-        {/* ✅ NEW: Sanction Screening Tab */}
         <div className={detailTab === 'sanctionScreening' ? 'pb-2' : 'hidden'}>
-          <SanctionScreening key={`ss-${ent.id}`} entityName={ent.name} />
+          <SanctionScreening key={`ss-${ent.id}`} entityName={ent.name} onFlagSTR={(info) => {
+            updateEntity(ent.id, {
+              str: {
+                flagged: true,
+                submittedDate: null,
+                mlroApproved: false,
+                mlroDate: null,
+              },
+              notes: [...ent.notes, {
+                id: gid(),
+                text: `🚨 STR flagged via ${info.source}: "${info.title}" (${info.riskCat}, ${Math.round(info.confidence * 100)}% confidence)`,
+                date: today,
+                author: 'System',
+              }],
+            });
+            showToast(lang === 'zh' ? '🚨 已標記 STR 並新增備註' : '🚨 STR flagged & note added');
+          }} />
         </div>
 
         {detailTab === 'documents' && (<div>
