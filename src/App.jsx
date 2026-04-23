@@ -924,7 +924,8 @@ function ScreeningModule({ entityName: initialEntityName, mode }) {
   const [sanctionPart, setSanctionPart] = useState('part1');
   const [workerStatus, setWorkerStatus] = useState('');
   const [copied, setCopied] = useState(false);
-  const [entityContext, setEntityContext] = useState('');
+  const [entityContext, setEntityContext] = useState({   dob: '', nationality: '', gender: '', company: '', idNumber: '', address: '', notes: '' });  const handleExtraChange = (field, value) => {   setEntityContext(prev => ({ ...prev, [field]: value })); };  const formatEntityContext = (info) => {   const parts = [];   if (info.dob) parts.push(`出生日期 / DOB: ${info.dob}`);   if (info.nationality) parts.push(`國籍 / Nationality: ${info.nationality}`);   if (info.gender) parts.push(`性別 / Gender: ${info.gender}`);   if (info.company) parts.push(`公司/職稱 / Company/Title: ${info.company}`);   if (info.idNumber) parts.push(`證件號碼 / ID Number: ${info.idNumber}`);   if (info.address) parts.push(`地址 / Address: ${info.address}`);   if (info.notes) parts.push(`其他 / Other: ${info.notes}`);   return parts.join('
+'); };  const NATIONALITIES = [   '中國大陸', '中國香港', '中國澳門', '中國台灣',   '美國', '英國', '加拿大', '澳洲', '新加坡', '馬來西亞',   '日本', '韓國', '印度', '印尼', '菲律賓', '泰國', '越南',   '德國', '法國', '瑞士', '荷蘭', '俄羅斯', '巴西',   '阿聯酋', '沙特阿拉伯', '南非', '其他' ];
 
   React.useEffect(() => {
     if (analysisComplete && results.length > 0) {
@@ -1054,7 +1055,7 @@ ${entityContext ? `
 ═══════════════════════════════════════════
 🪪 KNOWN IDENTIFYING INFORMATION (provided by compliance officer):
 ═══════════════════════════════════════════
-${entityContext}
+${formatEntityContext(entityContext)}
 
 CRITICAL INSTRUCTION FOR NAME DISAMBIGUATION:
 • The above describes the ACTUAL person/entity being screened.
@@ -1156,7 +1157,7 @@ ${entityContext ? `
 ═══════════════════════════════════════════
 🪪 KNOWN IDENTIFYING INFORMATION (provided by compliance officer):
 ═══════════════════════════════════════════
-${entityContext}
+${formatEntityContext(entityContext)}
 
 CRITICAL INSTRUCTION FOR NAME DISAMBIGUATION:
 • The above describes the ACTUAL person/entity being screened.
@@ -1633,21 +1634,137 @@ ${pdfParsingNote}`;
             
             {/* ── 補充辨識資料 ── */}
          <div className="bg-white rounded-xl border shadow-sm p-4">
-         <div className="flex items-center gap-2 mb-3">
-        <h2 className="text-sm font-bold text-gray-800">補充辨識資料（排除同名不同人）</h2>
-        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full border">選填但強烈建議</span>
-        </div>
-       <textarea
-    value={entityContext}
-    onChange={e => setEntityContext(e.target.value)}
-    rows={4}
-    className="w-full border-2 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-    placeholder={`填寫任何可辨識此人/公司的資料，例如：\n• 出生日期：1975-03-15\n• 性別：男\n• 國籍：中國香港\n• 職位：Alpha Holdings Ltd 董事\n• 住址區域：香港九龍觀塘\n• 已知不相關身份：非律師、非醫生`}
-  />
-  <div className="mt-2 text-xs text-gray-400">
-    💡 資料越詳細，AI 越能準確排除同名不同人的誤報。此資料僅用於本次 AI 分析。
-  </div>
-</div>
+              <div className="flex items-center gap-2 mb-3">
+                <span>📋</span>
+                <h2 className="text-sm font-bold text-gray-800">
+                  {detectedLang === 'zh' ? '補充辨識資料（排除同名不同人）' : 'Supplementary ID Info (Disambiguate)'}
+                </h2>
+                <span className="bg-blue-50 text-blue-600 border border-blue-200 px-2 py-0.5 rounded-full text-xs font-medium">
+                  {detectedLang === 'zh' ? '選填但強烈建議' : 'Optional but recommended'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {/* 出生日期 */}
+                <div>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
+                    📅 {detectedLang === 'zh' ? '出生日期' : 'Date of Birth'}
+                  </label>
+                  <input
+                    type="date"
+                    value={entityContext.dob}
+                    onChange={e => handleExtraChange('dob', e.target.value)}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none transition-all"
+                  />
+                </div>
+
+                {/* 國籍 */}
+                <div>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
+                    🏳️ {detectedLang === 'zh' ? '國籍 / 地區' : 'Nationality / Region'}
+                  </label>
+                  <select
+                    value={entityContext.nationality}
+                    onChange={e => handleExtraChange('nationality', e.target.value)}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none transition-all appearance-none"
+                  >
+                    <option value="">{detectedLang === 'zh' ? '— 請選擇 —' : '— Select —'}</option>
+                    {NATIONALITIES.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </div>
+
+                {/* 性別 */}
+                <div>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
+                    ⚧ {detectedLang === 'zh' ? '性別' : 'Gender'}
+                  </label>
+                  <div className="flex gap-2">
+                    {[
+                      { value: '男', labelZh: '男', labelEn: 'Male' },
+                      { value: '女', labelZh: '女', labelEn: 'Female' },
+                      { value: '其他', labelZh: '其他', labelEn: 'Other' }
+                    ].map(g => (
+                      <button
+                        key={g.value}
+                        type="button"
+                        onClick={() => handleExtraChange('gender', entityContext.gender === g.value ? '' : g.value)}
+                        className={`flex-1 py-2 rounded-lg text-xs font-semibold border transition-all ${
+                          entityContext.gender === g.value
+                            ? 'bg-blue-500 text-white border-blue-500 shadow-sm'
+                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-blue-300 hover:bg-blue-50'
+                        }`}
+                      >
+                        {detectedLang === 'zh' ? g.labelZh : g.labelEn}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 公司/職稱 */}
+                <div>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
+                    🏢 {detectedLang === 'zh' ? '公司 / 職稱' : 'Company / Title'}
+                  </label>
+                  <input
+                    type="text"
+                    value={entityContext.company}
+                    onChange={e => handleExtraChange('company', e.target.value)}
+                    placeholder={detectedLang === 'zh' ? '例：Alpha Holdings Ltd / 董事' : 'e.g. Alpha Holdings Ltd / Director'}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none transition-all placeholder:text-slate-400"
+                  />
+                </div>
+
+                {/* 證件號碼 */}
+                <div>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
+                    🆔 {detectedLang === 'zh' ? '證件號碼' : 'ID Number'}
+                  </label>
+                  <input
+                    type="text"
+                    value={entityContext.idNumber}
+                    onChange={e => handleExtraChange('idNumber', e.target.value)}
+                    placeholder={detectedLang === 'zh' ? '護照 / 身分證 / 統一編號' : 'Passport / ID / Registration No.'}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none transition-all placeholder:text-slate-400"
+                  />
+                </div>
+
+                {/* 地址 */}
+                <div>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
+                    📍 {detectedLang === 'zh' ? '地址' : 'Address'}
+                  </label>
+                  <input
+                    type="text"
+                    value={entityContext.address}
+                    onChange={e => handleExtraChange('address', e.target.value)}
+                    placeholder={detectedLang === 'zh' ? '註冊地址或居住地址' : 'Registered or residential address'}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none transition-all placeholder:text-slate-400"
+                  />
+                </div>
+
+                {/* 其他備註 */}
+                <div className="md:col-span-2">
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
+                    📝 {detectedLang === 'zh' ? '其他備註' : 'Other Notes'}
+                  </label>
+                  <textarea
+                    value={entityContext.notes}
+                    onChange={e => handleExtraChange('notes', e.target.value)}
+                    placeholder={detectedLang === 'zh' ? '任何其他可辨識資訊（例如：已知不相關身份：非律師、非醫生）' : 'Any other identifying info...'}
+                    rows={2}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none transition-all resize-none placeholder:text-slate-400"
+                  />
+                </div>
+              </div>
+
+              <p className="text-xs text-amber-600 mt-3 flex items-start gap-1">
+                <span>💡</span>
+                <span>{detectedLang === 'zh'
+                  ? '資料越詳細，AI 越能準確排除同名不同人的誤報。此資料僅用於本次 AI 分析。'
+                  : 'The more details provided, the better AI can disambiguate. Data is only used for this analysis.'}
+                </span>
+              </p>
+            </div>
 
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <div className="flex items-center gap-2 mb-3">
