@@ -924,7 +924,25 @@ function ScreeningModule({ entityName: initialEntityName, mode }) {
   const [sanctionPart, setSanctionPart] = useState('part1');
   const [workerStatus, setWorkerStatus] = useState('');
   const [copied, setCopied] = useState(false);
-  const [entityContext, setEntityContext] = useState({   dob: '', nationality: '', gender: '', company: '', idNumber: '', address: '', notes: '' });  const handleExtraChange = (field, value) => {   setEntityContext(prev => ({ ...prev, [field]: value })); };  const formatEntityContext = (info) => {   const parts = [];   if (info.dob) parts.push(`出生日期 / DOB: ${info.dob}`);   if (info.nationality) parts.push(`國籍 / Nationality: ${info.nationality}`);   if (info.gender) parts.push(`性別 / Gender: ${info.gender}`);   if (info.company) parts.push(`公司/職稱 / Company/Title: ${info.company}`);   if (info.idNumber) parts.push(`證件號碼 / ID Number: ${info.idNumber}`);   if (info.address) parts.push(`地址 / Address: ${info.address}`);   if (info.notes) parts.push(`其他 / Other: ${info.notes}`);   return parts.join('};  const NATIONALITIES = [   '中國大陸', '中國香港', '中國澳門', '中國台灣',   '美國', '英國', '加拿大', '澳洲', '新加坡', '馬來西亞',   '日本', '韓國', '印度', '印尼', '菲律賓', '泰國', '越南',   '德國', '法國', '瑞士', '荷蘭', '俄羅斯', '巴西',   '阿聯酋', '沙特阿拉伯', '南非', '其他' ];
+  const [entityContext, setEntityContext] = useState({   dob: '', nationality: '', gender: '', company: '', idNumber: '', address: '', notes: '' });  const handleExtraChange = (field, value) => {   setEntityContext(prev => ({ ...prev, [field]: value })); };  
+  const formatEntityContext = (info) => {
+  const parts = [];
+  if (info.dob) parts.push(`出生日期 / DOB: ${info.dob}`);
+  if (info.nationality) {
+    const nat = NATIONALITIES.find(n => n.value === info.nationality);
+    parts.push(`國籍 / Nationality: ${nat ? `${nat.en} / ${nat.zh}` : info.nationality}`);
+  }
+  if (info.gender) {
+    const genderMap = { Male: '男 / Male', Female: '女 / Female', Other: '其他 / Other' };
+    parts.push(`性別 / Gender: ${genderMap[info.gender] || info.gender}`);
+  }
+  if (info.company) parts.push(`公司/職稱 / Company/Title: ${info.company}`);
+  if (info.idNumber) parts.push(`證件號碼 / ID Number: ${info.idNumber}`);
+  if (info.address) parts.push(`地址 / Address: ${info.address}`);
+  if (info.notes) parts.push(`其他 / Other: ${info.notes}`);
+  return parts.join('\n');
+}; 
+  const NATIONALITIES = [   { value: 'CN', zh: '中國大陸', en: 'China (Mainland)' },   { value: 'HK', zh: '中國香港', en: 'Hong Kong' },   { value: 'MO', zh: '中國澳門', en: 'Macau' },   { value: 'TW', zh: '中國台灣', en: 'Taiwan' },   { value: 'US', zh: '美國', en: 'United States' },   { value: 'GB', zh: '英國', en: 'United Kingdom' },   { value: 'CA', zh: '加拿大', en: 'Canada' },   { value: 'AU', zh: '澳洲', en: 'Australia' },   { value: 'SG', zh: '新加坡', en: 'Singapore' },   { value: 'MY', zh: '馬來西亞', en: 'Malaysia' },   { value: 'JP', zh: '日本', en: 'Japan' },   { value: 'KR', zh: '韓國', en: 'South Korea' },   { value: 'IN', zh: '印度', en: 'India' },   { value: 'ID', zh: '印尼', en: 'Indonesia' },   { value: 'PH', zh: '菲律賓', en: 'Philippines' },   { value: 'TH', zh: '泰國', en: 'Thailand' },   { value: 'VN', zh: '越南', en: 'Vietnam' },   { value: 'DE', zh: '德國', en: 'Germany' },   { value: 'FR', zh: '法國', en: 'France' },   { value: 'CH', zh: '瑞士', en: 'Switzerland' },   { value: 'NL', zh: '荷蘭', en: 'Netherlands' },   { value: 'RU', zh: '俄羅斯', en: 'Russia' },   { value: 'BR', zh: '巴西', en: 'Brazil' },   { value: 'AE', zh: '阿聯酋', en: 'UAE' },   { value: 'SA', zh: '沙特阿拉伯', en: 'Saudi Arabia' },   { value: 'ZA', zh: '南非', en: 'South Africa' },   { value: 'OTHER', zh: '其他', en: 'Other' }, ];
 
   React.useEffect(() => {
     if (analysisComplete && results.length > 0) {
@@ -1668,7 +1686,10 @@ ${pdfParsingNote}`;
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none transition-all appearance-none"
                   >
                     <option value="">{detectedLang === 'zh' ? '— 請選擇 —' : '— Select —'}</option>
-                    {NATIONALITIES.map(n => <option key={n} value={n}>{n}</option>)}
+                    {NATIONALITIES.map(n => (                       
+                    <option key={n.value} value={n.value}>                         
+                      {detectedLang === 'zh' ? `${n.zh} (${n.en})` : `${n.en} (${n.zh})`}                       
+                    </option>                     ))}
                   </select>
                 </div>
 
@@ -1679,9 +1700,9 @@ ${pdfParsingNote}`;
                   </label>
                   <div className="flex gap-2">
                     {[
-                      { value: '男', labelZh: '男', labelEn: 'Male' },
-                      { value: '女', labelZh: '女', labelEn: 'Female' },
-                      { value: '其他', labelZh: '其他', labelEn: 'Other' }
+                      { value: 'Male', labelZh: '男', labelEn: 'Male' },
+                      { value: 'Female', labelZh: '女', labelEn: 'Female' },
+                      { value: 'Other', labelZh: '其他', labelEn: 'Other' }
                     ].map(g => (
                       <button
                         key={g.value}
