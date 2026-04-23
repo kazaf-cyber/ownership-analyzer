@@ -1825,8 +1825,7 @@ ${pdfParsingNote}`;
         )}              
       </div>
     </div> 
-    );                  
-  }                     
+    );                                     
         
 /* ── Wrapper Components（保持 API 不變）── */
 function AdverseMediaScreening({ entityName }) {
