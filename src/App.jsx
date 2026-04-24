@@ -918,9 +918,6 @@ function ScreeningModule({ entityName: initialEntityName, mode, onFlagSTR }) {
   const [showQuery, setShowQuery] = useState(false);
   const [detectedLang, setDetectedLang] = useState(_saved?.detectedLang || 'en');
   const [errorMsg, setErrorMsg] = useState('');
-  const [workerUrl, setWorkerUrl] = useState(_saved?.workerUrl || '');
-  const [workerKey, setWorkerKey] = useState(_saved?.workerKey || '');
-  const [showWorkerConfig, setShowWorkerConfig] = useState(false);
   const [sanctionPart, setSanctionPart] = useState('part1');
   const [workerStatus, setWorkerStatus] = useState('');
   const [copied, setCopied] = useState(false);
@@ -949,7 +946,6 @@ function ScreeningModule({ entityName: initialEntityName, mode, onFlagSTR }) {
       try {
         sessionStorage.setItem(SESSION_KEY, JSON.stringify({
           results, searchEntity, analysisComplete, detectedLang, filterType, apiKey,
-          workerUrl, workerKey,
         }));
       } catch {}
     }
@@ -987,24 +983,23 @@ function ScreeningModule({ entityName: initialEntityName, mode, onFlagSTR }) {
   } : null;
 
   const callWorker = async (path, body) => {
-    const base = workerUrl.replace(/\/+$/, '');
-    const resp = await fetch(`${base}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(workerKey ? { 'X-Worker-Key': workerKey } : {}) },
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-    return data;
-  };
+  const cleanPath = path.replace(/^\/api/, '');
+  const resp = await fetch(`/api${cleanPath}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+};
 
-  const fetchPageContent = async (url) => {
-    if (!workerUrl.trim()) return null;
-    try {
-      const data = await callWorker('/api/scrape', { url, maxLength: 3000 });
-      return data.text || null;
-    } catch { return null; }
-  };
+const fetchPageContent = async (url) => {
+  try {
+    const data = await callWorker('/api/scrape', { url, maxLength: 3000 });
+    return data.text || null;
+  } catch { return null; }
+};
 
   const extractUrlsFromPdf = (pdfText) => {
     const urlRegex = /https?:\/\/[^\s)>\]"']+/g;
@@ -1016,16 +1011,16 @@ function ScreeningModule({ entityName: initialEntityName, mode, onFlagSTR }) {
     ).slice(0, 10);
   };
 
-  const testWorkerConnection = async () => {
-    if (!workerUrl.trim()) return;
-    setWorkerStatus('');
-    try {
-      const base = workerUrl.replace(/\/+$/, '');
-      const r = await fetch(`${base}/api/health`, { headers: workerKey ? { 'X-Worker-Key': workerKey } : {} });
-      const d = await r.json();
-      setWorkerStatus(d.ok ? `✅ 連線成功 | 路由: ${d.routes?.join(', ') || 'N/A'}` : '❌ 回應異常');
-    } catch (e) { setWorkerStatus(`❌ ${e.message}`); }
-  };
+const testWorkerConnection = async () => {
+  setWorkerStatus('');
+  try {
+    const r = await fetch('/api/health');
+    const d = await r.json();
+    setWorkerStatus(d.ok
+      ? `✅ 連線成功 | 路由: ${d.routes?.join(', ') || 'N/A'}`
+      : '❌ 回應異常');
+  } catch (e) { setWorkerStatus(`❌ ${e.message}`); }
+};
 
   const handlePdfUpload = (e) => {
     const file = e.target.files[0];
@@ -1343,7 +1338,7 @@ ${pdfParsingNote}`;
 
       let enrichedContent = pdfText;
       let scrapedCount = 0;
-      if (workerUrl.trim()) {
+      {
         setProgress(30); setStage('正在抓取搜尋結果網頁內容...');
         const urls = extractUrlsFromPdf(pdfText);
         if (urls.length > 0) {
@@ -1583,32 +1578,37 @@ ${pdfParsingNote}`;
       <div className="max-w-6xl mx-auto p-4">
         {activeTab === 'demo' && (
           <div className="space-y-4">
-            <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-              <button onClick={() => setShowWorkerConfig(!showWorkerConfig)} className="w-full px-4 py-2.5 flex items-center justify-between text-left hover:bg-gray-50">
-                <div className="flex items-center gap-2">
-                  <Globe className="w-4 h-4 text-teal-600" />
-                  <span className="text-sm font-bold text-gray-700">📰 網頁全文抓取設定</span>
-                  {workerUrl.trim() ? <span className="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full border border-green-200">✅ 已設定</span> : <span className="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full border border-gray-200">選填</span>}
-                </div>
-                {showWorkerConfig ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
-              </button>
-              {showWorkerConfig && (
-                <div className="px-4 pb-4 space-y-3 border-t">
-                  <div className="pt-3 bg-teal-50 rounded-lg p-3 text-xs text-teal-700">
-                    <b>💡 功能說明：</b>
-                    <br />📰 <b>網頁抓取</b>：AI 分析前自動抓取每個搜尋結果的實際網頁全文（最多 5000 字/頁），大幅提升分類準確度。
-                    <br />若未設定 Worker，仍可使用手動 Google 搜尋 + PDF 上傳流程（AI 僅基於 snippet 分析）。
-                  </div>
-                  <div><label className="text-xs text-gray-500 mb-1 block">Worker URL</label><input type="text" value={workerUrl} onChange={e => setWorkerUrl(e.target.value)} placeholder="https://kyc-ams-proxy.xxx.workers.dev" className="w-full border-2 rounded-lg px-3 py-2 text-sm font-mono focus:border-teal-500 focus:outline-none" /></div>
-                  <div><label className="text-xs text-gray-500 mb-1 block">Worker Key（選填）</label><input type="password" value={workerKey} onChange={e => setWorkerKey(e.target.value)} className="w-full border-2 rounded-lg px-3 py-2 text-sm font-mono focus:border-teal-500 focus:outline-none" /></div>
-                  <div className="flex gap-2">
-                    <button onClick={testWorkerConnection} className="bg-slate-700 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-600">🔌 測試連線</button>
-                    {workerUrl.trim() && (<button onClick={() => { setWorkerUrl(''); setWorkerKey(''); setWorkerStatus(''); }} className="text-xs text-gray-400 hover:text-red-500 px-3 py-2">清除</button>)}
-                  </div>
-                  {workerStatus && (<div className={`text-xs rounded-lg p-2 ${workerStatus.startsWith('✅') ? 'text-green-600 bg-green-50' : 'text-red-600 bg-red-50'}`}>{workerStatus}</div>)}
-                </div>
-              )}
-            </div>
+{/* ★ 簡化版：網頁全文抓取狀態 */}
+<div className="bg-white rounded-xl border shadow-sm p-4">
+  <div className="flex items-center justify-between">
+    <div className="flex items-center gap-2">
+      <Globe className="w-4 h-4 text-teal-600" />
+      <span className="text-sm font-bold text-gray-700">📰 網頁全文抓取</span>
+      <span className="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full border border-green-200">
+        ✅ 已內建
+      </span>
+    </div>
+    <button
+      onClick={testWorkerConnection}
+      className="text-xs bg-slate-700 text-white px-3 py-1.5 rounded-lg font-bold hover:bg-slate-600"
+    >
+      🔌 測試連線
+    </button>
+  </div>
+  {workerStatus && (
+    <div className={`mt-2 text-xs rounded-lg p-2 ${
+      workerStatus.startsWith('✅')
+        ? 'text-green-600 bg-green-50'
+        : 'text-red-600 bg-red-50'
+    }`}>
+      {workerStatus}
+    </div>
+  )}
+  <p className="text-xs text-gray-400 mt-2">
+    AI 分析前將自動抓取每個搜尋結果的網頁全文，提升分類準確度。
+  </p>
+</div>
+
 
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <div className="flex items-center gap-2 mb-3">
