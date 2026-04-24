@@ -949,7 +949,7 @@ function ScreeningModule({ entityName: initialEntityName, mode, onFlagSTR }) {
         }));
       } catch {}
     }
-  }, [results, analysisComplete, detectedLang, filterType, searchEntity, apiKey, workerUrl, workerKey]);
+  }, [results, analysisComplete, detectedLang, filterType, searchEntity, apiKey]);
 
   const timerIdsRef = React.useRef([]);
   const clearAllTimers = () => { timerIdsRef.current.forEach(id => clearTimeout(id)); timerIdsRef.current = []; };
@@ -1869,7 +1869,7 @@ ${pdfParsingNote}`;
               <div className="flex items-center gap-2 mb-3">
                 <span className={`w-6 h-6 rounded-full ${isSanction ? 'bg-orange-600' : 'bg-blue-600'} text-white text-xs font-bold flex items-center justify-center`}>3</span>
                 <h2 className="text-sm font-bold text-gray-800">AI 分析{isSanction ? '（制裁名單命中）' : ''}</h2>
-                {workerUrl.trim() && <span className="text-xs text-teal-600 bg-teal-50 px-2 py-0.5 rounded-full border border-teal-200">📰 將自動抓取網頁全文</span>}
+               <span className="text-xs text-teal-600 bg-teal-50 px-2 py-0.5 rounded-full border border-teal-200">📰 將自動抓取網頁全文</span>
               </div>
               <div className="mb-3">
                 <div className="flex items-center justify-between mb-1"><label className="text-xs text-gray-500">POE API Key</label><button onClick={() => setShowKeyInput(!showKeyInput)} className="text-xs text-blue-500 hover:underline">{showKeyInput ? '隱藏' : '顯示/修改'}</button></div>
