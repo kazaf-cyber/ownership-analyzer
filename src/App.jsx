@@ -14,6 +14,224 @@ import { createPortal } from 'react-dom';
 import { PieChart, Pie, Cell, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer } from 'recharts';
 import { Search, Brain, AlertTriangle, CheckCircle, XCircle, Info, ChevronDown, ChevronRight, Globe, ExternalLink, Loader, Shield } from 'lucide-react';
 
+/* ========== UBO DETECTION MODULE ========== */
+
+const UBO_DEFAULTS = Object.freeze({
+  OWNERSHIP_THRESHOLD: 25,
+  CONTROL_THRESHOLD: 25,
+  MAX_ITERATIONS: 100000,
+  MAX_DEPTH: 30,
+});
+
+const UBO_OWNERSHIP = 'ownership';
+const UBO_CONTROL = 'control';
+
+function computeRelPercentage(rel, entityMap) {
+  if (rel.shares != null && rel.shares > 0) {
+    const target = entityMap.get(rel.targetId);
+    if (target && target.totalShares > 0) {
+      return Math.round((rel.shares / target.totalShares) * 10000) / 100;
+    }
+  }
+  return rel.percentage != null ? rel.percentage : null;
+}
+
+function buildGraphIndex(entities, relationships) {
+  const entityMap = new Map();
+  const inboundRels = new Map();
+  const outboundRels = new Map();
+  for (const e of entities) entityMap.set(e.id, e);
+  for (const r of relationships) {
+    if (!inboundRels.has(r.targetId)) inboundRels.set(r.targetId, []);
+    if (!outboundRels.has(r.sourceId)) outboundRels.set(r.sourceId, []);
+    inboundRels.get(r.targetId).push(r);
+    outboundRels.get(r.sourceId).push(r);
+  }
+  return { entityMap, inboundRels, outboundRels };
+}
+
+function findUBOsCore(targetId, graphIndex, options = {}) {
+  const {
+    ownershipThreshold = UBO_DEFAULTS.OWNERSHIP_THRESHOLD,
+    controlThreshold = UBO_DEFAULTS.CONTROL_THRESHOLD,
+    maxIterations = UBO_DEFAULTS.MAX_ITERATIONS,
+    maxDepth = UBO_DEFAULTS.MAX_DEPTH,
+    includeBelowThreshold = false,
+  } = options;
+
+  const { entityMap, inboundRels } = graphIndex;
+  if (!entityMap.has(targetId)) return [];
+
+  const ownershipThresholdBps = Math.round(ownershipThreshold * 100);
+  const controlThresholdBps = Math.round(controlThreshold * 100);
+  const aggregated = new Map();
+  const queue = [{
+    nodeId: targetId,
+    multiplierBps: 10000,
+    chain: [],
+    depth: 0,
+    visitedEdges: new Set(),
+    inheritedControlBps: null,
+  }];
+
+  let iterCount = 0;
+  let truncated = false;
+
+  while (queue.length > 0) {
+    if (++iterCount > maxIterations) { truncated = true; break; }
+    const { nodeId, multiplierBps, chain, depth, visitedEdges, inheritedControlBps } = queue.shift();
+    if (depth >= maxDepth) continue;
+    const inbound = inboundRels.get(nodeId);
+    if (!inbound) continue;
+
+    for (const rel of inbound) {
+      if (rel.type !== UBO_OWNERSHIP && rel.type !== UBO_CONTROL) continue;
+      const edgeKey = `${rel.sourceId}|${rel.targetId}|${rel.type}`;
+      if (visitedEdges.has(edgeKey)) continue;
+      const owner = entityMap.get(rel.sourceId);
+      if (!owner) continue;
+
+      let edgePctBps, isControlEdge;
+      if (rel.type === UBO_OWNERSHIP) {
+        const pct = computeRelPercentage(rel, entityMap);
+        if (pct == null || pct <= 0) continue;
+        edgePctBps = Math.round(pct * 100);
+        isControlEdge = false;
+      } else {
+        const ctrlPct = (rel.percentage != null && rel.percentage > 0) ? rel.percentage : 100;
+        edgePctBps = Math.round(ctrlPct * 100);
+        isControlEdge = true;
+      }
+
+      const flowBps = Math.round((multiplierBps * edgePctBps) / 10000);
+      const pathControlBps = isControlEdge
+        ? (inheritedControlBps == null ? edgePctBps : Math.min(inheritedControlBps, edgePctBps))
+        : inheritedControlBps;
+
+      const newChain = [owner.name, ...chain];
+      const newVisited = new Set(visitedEdges);
+      newVisited.add(edgeKey);
+
+      if (owner.type === 'person') {
+        if (!aggregated.has(owner.id)) {
+          aggregated.set(owner.id, { entity: owner, ownershipBps: 0, maxControlBps: 0, paths: [] });
+        }
+        const rec = aggregated.get(owner.id);
+        const isViaControl = pathControlBps != null;
+        if (isViaControl) {
+          rec.maxControlBps = Math.max(rec.maxControlBps, pathControlBps);
+        } else {
+          rec.ownershipBps += flowBps;
+        }
+        rec.paths.push({
+          percentage: flowBps / 100,
+          controlPct: pathControlBps != null ? pathControlBps / 100 : null,
+          chain: newChain,
+          direct: chain.length === 0,
+          viaControl: isViaControl,
+          edgeType: rel.type,
+        });
+      } else {
+        queue.push({
+          nodeId: owner.id,
+          multiplierBps: flowBps,
+          chain: newChain,
+          depth: depth + 1,
+          visitedEdges: newVisited,
+          inheritedControlBps: pathControlBps,
+        });
+      }
+    }
+  }
+
+  const results = [];
+  for (const rec of aggregated.values()) {
+    const passesOwnership = rec.ownershipBps >= ownershipThresholdBps;
+    const passesControl = rec.maxControlBps >= controlThresholdBps;
+    if (!includeBelowThreshold && !passesOwnership && !passesControl) continue;
+
+    const hasDirect = rec.paths.some(p => p.direct);
+    const hasIndirect = rec.paths.some(p => !p.direct);
+    const hasControl = rec.paths.some(p => p.viaControl);
+    const sortedPaths = rec.paths.slice().sort((a, b) => b.percentage - a.percentage);
+
+    results.push({
+      entity: rec.entity,
+      percentage: Math.round(rec.ownershipBps) / 100,
+      controlPercentage: rec.maxControlBps / 100,
+      direct: hasDirect && !hasIndirect,
+      mixed: hasDirect && hasIndirect,
+      viaControl: hasControl,
+      paths: sortedPaths,
+      path: sortedPaths[0] ? sortedPaths[0].chain : [],
+      qualifiedBy: passesOwnership && passesControl ? 'both' : passesOwnership ? 'ownership' : 'control',
+      exceedsHundred: rec.ownershipBps > 10000,
+    });
+  }
+
+  results.sort((a, b) => {
+    if (b.percentage !== a.percentage) return b.percentage - a.percentage;
+    return b.controlPercentage - a.controlPercentage;
+  });
+
+  if (truncated && typeof console !== 'undefined') {
+    console.warn(`[findUBOs] Iteration cap reached on target=${targetId}; results may be incomplete.`);
+  }
+  return results;
+}
+
+function wouldCreateCycleCore(sourceId, targetId, graphIndex, excludeRelId = null) {
+  if (sourceId === targetId) return true;
+  const { outboundRels } = graphIndex;
+  const visited = new Set();
+  const queue = [targetId];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === sourceId) return true;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    const outs = outboundRels.get(current) || [];
+    for (const r of outs) {
+      if (r.id === excludeRelId) continue;
+      if (r.type !== UBO_OWNERSHIP && r.type !== UBO_CONTROL) continue;
+      queue.push(r.targetId);
+    }
+  }
+  return false;
+}
+
+/* React Hook 包裝 */
+function useUBO(entities, relationships) {
+  const graphIndex = useMemo(
+    () => buildGraphIndex(entities, relationships),
+    [entities, relationships]
+  );
+
+  const findUBOs = useCallback((targetId, thresholdOrOptions, controlThreshold) => {
+    const options = typeof thresholdOrOptions === 'number'
+      ? { ownershipThreshold: thresholdOrOptions, controlThreshold: controlThreshold ?? thresholdOrOptions }
+      : (thresholdOrOptions || {});
+    return findUBOsCore(targetId, graphIndex, options);
+  }, [graphIndex]);
+
+  const wouldCreateCycle = useCallback(
+    (sourceId, targetId, excludeRelId = null) =>
+      wouldCreateCycleCore(sourceId, targetId, graphIndex, excludeRelId),
+    [graphIndex]
+  );
+
+  const getRelPercentage = useCallback(
+    (rel) => computeRelPercentage(rel, graphIndex.entityMap),
+    [graphIndex]
+  );
+
+  return { findUBOs, wouldCreateCycle, getRelPercentage, graphIndex };
+}
+
+/* ========== END UBO MODULE ========== */
+
+
+
 /* ========== STABLE SUB-COMPONENTS ========== */
 function ModalShell({ title, onClose, children, wide, dark }) {
   return (
@@ -2089,6 +2307,8 @@ export default function KYCSystem() {
     .dm .shadow-sm, .dm .shadow-2xl { box-shadow: 0 2px 8px rgba(0,0,0,0.6) !important; }
    ` : '';
     }, [darkMode]);
+   // ★★★ 新增：UBO Hook（一次性建立 graph 索引並提供三個函數）
+  const { findUBOs, wouldCreateCycle, getRelPercentage } = useUBO(entities, relationships);
   const [svgTransform, setSvgTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [hoveredNode, setHoveredNode] = useState(null);
   const [entityFilter, setEntityFilter] = useState('');
@@ -2116,11 +2336,6 @@ export default function KYCSystem() {
   const loadSampleData = () => { setEntities(JSON.parse(JSON.stringify(SAMPLE_ENTITIES))); setRelationships(JSON.parse(JSON.stringify(SAMPLE_RELS))); setBatchSelected(new Set()); setDagSelected(null); setSelectedId(null); showToast(t.sampleLoaded); };
   const clearAllData = () => { setEntities([]); setRelationships([]); setBatchSelected(new Set()); setDagSelected(null); setSelectedId(null); };
 
-  const getRelPercentage = useCallback((rel) => {
-    if (rel.shares != null && rel.shares > 0) { const target = entities.find(e => e.id === rel.targetId); if (target?.totalShares > 0) return Math.round((rel.shares / target.totalShares) * 10000) / 100; }
-    return rel.percentage;
-  }, [entities]);
-
   function getOwnershipDepth(eid, visited = new Set()) {
     if (visited.has(eid)) return 0; visited.add(eid);
     const ch = relationships.filter(r => r.sourceId === eid && (r.type === 'ownership' || r.type === 'control'));
@@ -2130,21 +2345,6 @@ export default function KYCSystem() {
   const isAutoHighRisk = (entity) => AUTO_HIGH_RISK_SUBTYPES.includes(entity.subType);
   const isSddEligible = (entity) => entity.type === 'company' && SDD_ELIGIBLE_CATEGORIES.includes(entity.companyCategory);
   const getCategoryLabel = (cat) => { const map = { private: t.catPrivate, listed: t.catListed, government: t.catGovernment, stateOwned: t.catStateOwned }; return map[cat] || cat || ''; };
-
-  const wouldCreateCycle = useCallback((sourceId, targetId, excludeRelId = null) => {
-    const visited = new Set();
-    const queue = [targetId];
-    while (queue.length > 0) {
-      const current = queue.shift();
-      if (current === sourceId) return true;
-      if (visited.has(current)) continue;
-      visited.add(current);
-      relationships.filter(r => r.sourceId === current && (r.type === 'ownership' || r.type === 'control') && r.id !== excludeRelId)
-        .forEach(r => queue.push(r.targetId));
-    }
-    return false;
-  }, [relationships]);
-
   const hasDuplicateRel = useCallback((sourceId, targetId, type, excludeRelId = null) => {
     return relationships.some(r => r.id !== excludeRelId && r.sourceId === sourceId && r.targetId === targetId && r.type === type);
   }, [relationships]);
@@ -2212,54 +2412,6 @@ export default function KYCSystem() {
   }, [entities, relationships, settings]);
 
   const getEffectiveRating = (entity) => { const crr = calcCRR(entity); if (crr.autoHighRisk) return { ...crr, overridden: false }; if (crr.pepForced) return { ...crr, overridden: false }; return entity.riskOverride ? { ...crr, rating: entity.riskOverride.rating, overridden: true } : { ...crr, overridden: false }; };
-
-  const findUBOs = useCallback((targetId, threshold) => {
-    const po = {};
-    const trace = (curId, mult, chain, vis) => {
-      if (vis.has(curId)) return;
-      vis.add(curId);
-      relationships.filter(r => r.targetId === curId && r.type === 'ownership').forEach(rel => {
-        const owner = entities.find(e => e.id === rel.sourceId);
-        if (!owner) return;
-        const pct = getRelPercentage(rel);
-        if (pct == null || pct <= 0) return;
-        const em = mult * pct / 100;
-        const ep = em * 100;
-        if (owner.type === 'person') {
-          if (!po[owner.id]) po[owner.id] = { entity: owner, totalPct: 0, paths: [] };
-          po[owner.id].totalPct += ep;
-          po[owner.id].paths.push({ percentage: Math.round(ep * 100) / 100, chain: [owner.name, ...chain], direct: chain.length === 0, viaControl: false, controlPct: null });
-        } else { trace(owner.id, em, [owner.name, ...chain], new Set(vis)); }
-      });
-      relationships.filter(r => r.targetId === curId && r.type === 'control').forEach(rel => {
-        const controller = entities.find(e => e.id === rel.sourceId);
-        if (!controller) return;
-        const ctrlPct = (rel.percentage != null && rel.percentage > 0) ? rel.percentage : 0;
-        if (ctrlPct === 0) {
-          if (controller.type === 'person') {
-            if (!po[controller.id]) po[controller.id] = { entity: controller, totalPct: 0, paths: [] };
-            po[controller.id].paths.push({ percentage: 0, chain: [controller.name, ...chain], direct: chain.length === 0, viaControl: true, controlPct: 100 });
-          } else { trace(controller.id, mult, [controller.name, ...chain], new Set(vis)); }
-          return;
-        }
-        const em = mult * ctrlPct / 100;
-        const ep = em * 100;
-        if (controller.type === 'person') {
-          if (!po[controller.id]) po[controller.id] = { entity: controller, totalPct: 0, paths: [] };
-          po[controller.id].totalPct += ep;
-          po[controller.id].paths.push({ percentage: Math.round(ep * 100) / 100, chain: [controller.name, ...chain], direct: chain.length === 0, viaControl: true, controlPct: ctrlPct });
-        } else { trace(controller.id, em, [controller.name, ...chain], new Set(vis)); }
-      });
-    };
-    trace(targetId, 1, [], new Set());
-    return Object.values(po)
-      .filter(({ totalPct, paths }) => Math.round(totalPct * 100) / 100 >= threshold || paths.some(p => p.viaControl && p.controlPct >= 25))
-      .map(({ entity, totalPct, paths }) => {
-        const hd = paths.some(p => p.direct); const hi = paths.some(p => !p.direct); const hasControl = paths.some(p => p.viaControl);
-        return { entity, percentage: Math.round(totalPct * 100) / 100, path: paths[0].chain, paths, direct: hd && !hi, mixed: hd && hi, viaControl: hasControl };
-      });
-  }, [entities, relationships, getRelPercentage]);
-
   const autoTodos = useMemo(() => {
     const todos = [];
     entities.forEach(ent => {
