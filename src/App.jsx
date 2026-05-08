@@ -14,6 +14,31 @@ import { createPortal } from 'react-dom';
 import { PieChart, Pie, Cell, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer } from 'recharts';
 import { Search, Brain, AlertTriangle, CheckCircle, XCircle, Info, ChevronDown, ChevronRight, Globe, ExternalLink, Loader, Shield } from 'lucide-react';
 
+/* ========== DESIGN SYSTEM TOKENS ========== */
+const DS = {
+  // Buttons
+  btnPrimary: 'bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white shadow-md shadow-blue-500/20 hover:shadow-lg hover:shadow-blue-500/30 font-semibold transition-all',
+  btnSecondary: 'bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-slate-300 font-semibold shadow-sm transition-all',
+  btnDanger: 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white shadow-md shadow-red-500/20 font-semibold transition-all',
+  btnSuccess: 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white shadow-md shadow-emerald-500/20 font-semibold transition-all',
+  btnWarning: 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white shadow-md shadow-amber-500/20 font-semibold transition-all',
+  btnGhost: 'bg-transparent hover:bg-slate-100 text-slate-600 hover:text-slate-900 font-semibold transition-all',
+  btnIndigo: 'bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md shadow-indigo-500/20 font-semibold transition-all',
+
+  // Cards
+  card: 'bg-white border border-slate-200 rounded-2xl shadow-[0_2px_8px_rgba(15,23,42,0.04)]',
+  cardHover: 'bg-white border border-slate-200 rounded-2xl shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:shadow-[0_8px_24px_rgba(15,23,42,0.08)] transition-all',
+
+  // Inputs
+  input: 'w-full text-sm rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 focus:outline-none transition-colors',
+  
+  // Section title
+  sectionTitle: 'text-base font-bold tracking-tight text-slate-900',
+  sectionDesc: 'text-xs text-slate-500 mt-0.5',
+};
+
+/* ========== END DESIGN TOKENS ========== */
+
 /* ========== UBO DETECTION MODULE ========== */
 
 const UBO_DEFAULTS = Object.freeze({
@@ -235,24 +260,87 @@ function useUBO(entities, relationships) {
 /* ========== STABLE SUB-COMPONENTS ========== */
 function ModalShell({ title, onClose, children, wide, dark }) {
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-40 flex items-start justify-center z-50 p-4 overflow-y-auto" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={`${dark ? 'bg-gray-800 text-gray-100' : 'bg-white'} rounded-xl shadow-2xl ${wide ? 'max-w-4xl' : 'max-w-2xl'} w-full mt-8 mb-8`}>
-        <div className={`flex items-center justify-between px-5 py-3 border-b ${dark ? 'border-gray-700' : ''}`}>
-          <h3 className={`text-base font-bold ${dark ? 'text-gray-100' : 'text-gray-800'}`}>{title}</h3>
-          <button onClick={onClose} className={`${dark ? 'text-gray-400 hover:text-gray-200' : 'text-gray-400 hover:text-gray-600'} text-lg`}>✕</button>
+    <div 
+      className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-start justify-center z-50 p-4 overflow-y-auto" 
+      style={{ animation: 'kycFadeIn 0.15s ease-out' }}
+      onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div 
+        className={`${dark ? 'bg-slate-900 text-slate-100 border-slate-800' : 'bg-white border-slate-200'} 
+          rounded-2xl shadow-[0_20px_60px_-15px_rgba(15,23,42,0.4)] border 
+          ${wide ? 'max-w-4xl' : 'max-w-2xl'} w-full mt-8 mb-8 overflow-hidden`}
+        style={{ animation: 'kycSlideUp 0.2s ease-out' }}
+      >
+        <div className={`flex items-center justify-between px-6 py-4 border-b ${dark ? 'border-slate-800' : 'border-slate-100'}`}>
+          <h3 className={`text-base font-bold tracking-tight ${dark ? 'text-slate-100' : 'text-slate-900'}`}>
+            {title}
+          </h3>
+          <button 
+            onClick={onClose} 
+            className={`w-8 h-8 rounded-lg flex items-center justify-center transition ${
+              dark 
+                ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-200' 
+                : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
+            }`}
+          >
+            ✕
+          </button>
         </div>
-        <div className="p-5">{children}</div>
+        <div className="p-6">{children}</div>
       </div>
     </div>
   );
 }
-function BadgeC({ color, children }) {
-  const c = { red: 'bg-red-100 text-red-700 border-red-200', amber: 'bg-amber-100 text-amber-700 border-amber-200', green: 'bg-green-100 text-green-700 border-green-200', blue: 'bg-blue-100 text-blue-700 border-blue-200', gray: 'bg-gray-100 text-gray-600 border-gray-200', purple: 'bg-purple-100 text-purple-700 border-purple-200', indigo: 'bg-indigo-100 text-indigo-700 border-indigo-200', teal: 'bg-teal-100 text-teal-700 border-teal-200', cyan: 'bg-cyan-100 text-cyan-700 border-cyan-200' };
-  return <span className={`px-1.5 py-0.5 rounded text-xs font-medium border ${c[color] || c.gray}`}>{children}</span>;
+function BadgeC({ color, children, dot = false, size = 'sm' }) {
+  const colorMap = {
+    red: 'bg-red-50 text-red-700 border-red-200',
+    amber: 'bg-amber-50 text-amber-700 border-amber-200',
+    green: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    blue: 'bg-blue-50 text-blue-700 border-blue-200',
+    gray: 'bg-slate-50 text-slate-600 border-slate-200',
+    purple: 'bg-purple-50 text-purple-700 border-purple-200',
+    indigo: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+    teal: 'bg-teal-50 text-teal-700 border-teal-200',
+    cyan: 'bg-cyan-50 text-cyan-700 border-cyan-200',
+  };
+  const dotColor = {
+    red: 'bg-red-500', amber: 'bg-amber-500', green: 'bg-emerald-500',
+    blue: 'bg-blue-500', gray: 'bg-slate-400', purple: 'bg-purple-500',
+    indigo: 'bg-indigo-500', teal: 'bg-teal-500', cyan: 'bg-cyan-500',
+  };
+  const sizeClass = size === 'xs' ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-0.5 text-[11px]';
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-md font-semibold border ${sizeClass} ${colorMap[color] || colorMap.gray}`}>
+      {dot && <span className={`w-1.5 h-1.5 rounded-full ${dotColor[color] || dotColor.gray}`} />}
+      {children}
+    </span>
+  );
 }
-function RiskBadge({ rating, label }) { return <BadgeC color={rating === 'High' ? 'red' : rating === 'Medium' ? 'amber' : 'green'}>{label || rating}</BadgeC>; }
-function PriorityDot({ p }) { return <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${p === 'critical' ? 'bg-red-500' : p === 'high' ? 'bg-orange-500' : p === 'medium' ? 'bg-yellow-500' : 'bg-green-500'}`} />; }
-function FormField({ label, children }) { return <div><label className="text-xs text-gray-500 block mb-1">{label}</label>{children}</div>; }
+function RiskBadge({ rating, label }) { 
+  return <BadgeC dot color={rating === 'High' ? 'red' : rating === 'Medium' ? 'amber' : 'green'}>{label || rating}</BadgeC>; 
+}
+
+function PriorityDot({ p }) { 
+  const colors = {
+    critical: 'bg-red-500 ring-red-200 animate-pulse',
+    high: 'bg-orange-500 ring-orange-200',
+    medium: 'bg-amber-500 ring-amber-200',
+    low: 'bg-emerald-500 ring-emerald-200',
+  };
+  return <span className={`inline-block w-2 h-2 rounded-full shrink-0 ring-2 ${colors[p] || colors.low}`} />; 
+}
+function FormField({ label, children, required, hint }) {
+  return (
+    <div>
+      <label className="text-[11px] font-semibold text-slate-600 block mb-1.5 tracking-wide uppercase">
+        {label}
+        {required && <span className="text-red-500 ml-0.5 normal-case">*</span>}
+      </label>
+      {children}
+      {hint && <p className="text-[10px] text-slate-400 mt-1">{hint}</p>}
+    </div>
+  );
+}
 
 /* ========== CONSTANTS ========== */
 const gid = () => {
@@ -2277,36 +2365,90 @@ export default function KYCSystem() {
   const [mobileSideOpen, setMobileSideOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   React.useEffect(() => {
-  const id = 'kyc-dark-style';
-  let el = document.getElementById(id);
-  if (!el) { el = document.createElement('style'); el.id = id; document.head.appendChild(el); }
-  el.textContent = darkMode ? `
-    .dm .bg-white { background-color: #1e293b !important; }
-    .dm .bg-gray-50 { background-color: #0f172a !important; }
-    .dm .bg-gray-100 { background-color: #1e2d45 !important; }
-    .dm .bg-gray-200 { background-color: #334155 !important; }
-    .dm .text-gray-800 { color: #f1f5f9 !important; }
-    .dm .text-gray-700 { color: #e2e8f0 !important; }
-    .dm .text-gray-600 { color: #cbd5e1 !important; }
-    .dm .text-gray-500 { color: #94a3b8 !important; }
-    .dm .text-gray-400 { color: #64748b !important; }
-    .dm .border { border-color: #334155 !important; }
-    .dm .border-b { border-color: #334155 !important; }
-    .dm .border-gray-100, .dm .border-gray-200 { border-color: #334155 !important; }
-    .dm input, .dm select, .dm textarea { background-color: #1e293b !important; color: #f1f5f9 !important; border-color: #475569 !important; }
-    .dm .hover\\:bg-gray-50:hover, .dm .hover\\:bg-gray-100:hover { background-color: #334155 !important; }
-    .dm .hover\\:bg-blue-50:hover { background-color: #1e3a5f !important; }
-    .dm .bg-amber-50 { background-color: #292215 !important; }
-    .dm .bg-red-50 { background-color: #2c1a1a !important; }
-    .dm .bg-blue-50 { background-color: #172035 !important; }
-    .dm .bg-green-50 { background-color: #14261e !important; }
-    .dm .bg-indigo-50 { background-color: #1a1f3c !important; }
-    .dm .bg-purple-50 { background-color: #241a35 !important; }
-    .dm .bg-cyan-50 { background-color: #0f2830 !important; }
-    .dm .bg-orange-50 { background-color: #2a1a0f !important; }
-    .dm .shadow-sm, .dm .shadow-2xl { box-shadow: 0 2px 8px rgba(0,0,0,0.6) !important; }
-   ` : '';
-    }, [darkMode]);
+    const id = 'kyc-dark-style';
+    let el = document.getElementById(id);
+    if (!el) { el = document.createElement('style'); el.id = id; document.head.appendChild(el); }
+    el.textContent = `
+      /* Animation Keyframes */
+      @keyframes kycFadeIn { from { opacity: 0 } to { opacity: 1 } }
+      @keyframes kycSlideUp { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: translateY(0) } }
+      @keyframes kycPulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }
+      
+      /* Smooth Scrollbar */
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { 
+        background: ${darkMode ? '#334155' : '#cbd5e1'}; 
+        border-radius: 4px; 
+        transition: background 0.2s;
+      }
+      ::-webkit-scrollbar-thumb:hover { 
+        background: ${darkMode ? '#475569' : '#94a3b8'}; 
+      }
+      
+      /* Body Font Smoothing */
+      body { 
+        -webkit-font-smoothing: antialiased; 
+        -moz-osx-font-smoothing: grayscale;
+      }
+      
+      ${darkMode ? `
+        /* Dark Mode Backgrounds */
+        .dm .bg-white { background-color: #0f172a !important; }
+        .dm .bg-slate-50, .dm .bg-gray-50 { background-color: #020617 !important; }
+        .dm .bg-slate-100, .dm .bg-gray-100 { background-color: #1e293b !important; }
+        .dm .bg-slate-200, .dm .bg-gray-200 { background-color: #334155 !important; }
+        
+        /* Dark Mode Text */
+        .dm .text-slate-900, .dm .text-gray-900, .dm .text-gray-800 { color: #f1f5f9 !important; }
+        .dm .text-slate-800, .dm .text-gray-700 { color: #e2e8f0 !important; }
+        .dm .text-slate-700, .dm .text-gray-600 { color: #cbd5e1 !important; }
+        .dm .text-slate-600 { color: #94a3b8 !important; }
+        .dm .text-slate-500, .dm .text-gray-500 { color: #64748b !important; }
+        .dm .text-slate-400, .dm .text-gray-400 { color: #475569 !important; }
+        
+        /* Dark Mode Borders */
+        .dm .border, .dm .border-b { border-color: #1e293b !important; }
+        .dm .border-slate-100, .dm .border-slate-200, 
+        .dm .border-gray-100, .dm .border-gray-200 { border-color: #1e293b !important; }
+        .dm .border-slate-300, .dm .border-gray-300 { border-color: #334155 !important; }
+        
+        /* Dark Mode Form Inputs */
+        .dm input, .dm select, .dm textarea { 
+          background-color: #1e293b !important; 
+          color: #f1f5f9 !important; 
+          border-color: #334155 !important; 
+        }
+        .dm input::placeholder, .dm textarea::placeholder { color: #475569 !important; }
+        
+        /* Dark Mode Hover States */
+        .dm .hover\\:bg-slate-50:hover, .dm .hover\\:bg-slate-100:hover,
+        .dm .hover\\:bg-gray-50:hover, .dm .hover\\:bg-gray-100:hover { 
+          background-color: #1e293b !important; 
+        }
+        .dm .hover\\:bg-blue-50:hover { background-color: rgba(59,130,246,0.1) !important; }
+        
+        /* Dark Mode Tinted Backgrounds */
+        .dm .bg-amber-50 { background-color: rgba(245,158,11,0.08) !important; }
+        .dm .bg-red-50 { background-color: rgba(239,68,68,0.08) !important; }
+        .dm .bg-blue-50 { background-color: rgba(59,130,246,0.08) !important; }
+        .dm .bg-emerald-50, .dm .bg-green-50 { background-color: rgba(16,185,129,0.08) !important; }
+        .dm .bg-indigo-50 { background-color: rgba(99,102,241,0.08) !important; }
+        .dm .bg-purple-50 { background-color: rgba(168,85,247,0.08) !important; }
+        .dm .bg-cyan-50 { background-color: rgba(6,182,212,0.08) !important; }
+        .dm .bg-orange-50 { background-color: rgba(249,115,22,0.08) !important; }
+        .dm .bg-teal-50 { background-color: rgba(20,184,166,0.08) !important; }
+        
+        /* Dark Mode Shadows */
+        .dm .shadow-sm, .dm .shadow, .dm .shadow-md { 
+          box-shadow: 0 2px 8px rgba(0,0,0,0.4) !important; 
+        }
+        .dm .shadow-lg, .dm .shadow-xl, .dm .shadow-2xl { 
+          box-shadow: 0 8px 32px rgba(0,0,0,0.6) !important; 
+        }
+      ` : ''}
+    `;
+  }, [darkMode]);
    // ★★★ 新增：UBO Hook（一次性建立 graph 索引並提供三個函數）
   const { findUBOs, wouldCreateCycle, getRelPercentage } = useUBO(entities, relationships);
   const [svgTransform, setSvgTransform] = useState({ x: 0, y: 0, scale: 1 });
@@ -2559,14 +2701,33 @@ export default function KYCSystem() {
   };
 
   const EmptyState = useMemo(() => () => (
-    <div className="flex-1 flex items-center justify-center">
-      <div className="text-center max-w-sm">
-        <div className="text-6xl mb-4">🏗️</div>
-        <h3 className="text-lg font-bold text-gray-700 mb-2">{t.emptyStateTitle}</h3>
-        <p className="text-sm text-gray-500 mb-6">{t.emptyStateDesc}</p>
-        <div className="flex flex-col gap-3 items-center">
-          <button onClick={() => openModal('addEntity', { name: '', type: 'company', subType: '', jurisdiction: 'USA', totalShares: '', companyCategory: 'private', industry: '' })} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium shadow-sm hover:bg-blue-700 w-full">{t.addEntity}</button>
-          <button onClick={loadSampleData} className="bg-white border-2 border-dashed border-gray-300 text-gray-600 px-5 py-2.5 rounded-xl text-sm font-medium hover:border-blue-400 hover:text-blue-600 w-full"><div>{t.loadSample}</div><div className="text-xs text-gray-400 mt-0.5">{t.loadSampleDesc}</div></button>
+    <div className="flex-1 flex items-center justify-center p-6">
+      <div className="text-center max-w-md">
+        {/* Decorative Icon */}
+        <div className="relative w-24 h-24 mx-auto mb-6">
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-400 to-indigo-600 rounded-3xl rotate-6 opacity-20 blur-xl" />
+          <div className="relative w-24 h-24 bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-600 rounded-3xl flex items-center justify-center shadow-xl shadow-indigo-500/30">
+            <Shield className="w-12 h-12 text-white" strokeWidth={2} />
+          </div>
+        </div>
+        
+        <h3 className="text-2xl font-bold tracking-tight text-slate-900 mb-2">{t.emptyStateTitle}</h3>
+        <p className="text-sm text-slate-500 mb-8 leading-relaxed">{t.emptyStateDesc}</p>
+        
+        <div className="flex flex-col gap-3">
+          <button 
+            onClick={() => openModal('addEntity', { name: '', type: 'company', subType: '', jurisdiction: 'USA', totalShares: '', companyCategory: 'private', industry: '' })} 
+            className="bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white px-5 py-3 rounded-xl text-sm font-bold shadow-lg shadow-blue-500/30 hover:shadow-xl hover:shadow-blue-500/40 transition-all w-full"
+          >
+            ✨ {t.addEntity}
+          </button>
+          <button 
+            onClick={loadSampleData} 
+            className="bg-white border-2 border-dashed border-slate-300 text-slate-600 px-5 py-3 rounded-xl text-sm font-semibold hover:border-blue-400 hover:bg-blue-50/30 hover:text-blue-600 transition-all w-full"
+          >
+            <div>{t.loadSample}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5 font-normal">{t.loadSampleDesc}</div>
+          </button>
         </div>
       </div>
     </div>
@@ -2592,24 +2753,234 @@ export default function KYCSystem() {
     const expDocCnt = entities.reduce((s, e) => s + e.documents.filter(d => d.status === 'expired' || (d.expiry && d.expiry < today)).length, 0);
     const trendData = ['2025-01', '2025-03', '2025-06', '2025-09', '2025-12', '2026-03'].map(m => { let avg = 0, cnt = 0; entities.forEach(e => { const h = e.riskHistory.filter(r => r.date <= m + '-31'); if (h.length) { avg += h[h.length - 1].score; cnt++; } }); return { month: m, avgScore: cnt ? Math.round(avg / cnt) : 0 }; });
     const ddDist = { SDD: 0, CDD: 0, EDD: 0 }; entities.forEach(e => { const level = getDDLevel(e).toUpperCase(); ddDist[level]++; });
-    const KPI = ({ label, value, color, sub }) => (<div className="bg-white rounded-xl shadow-sm border p-3"><div className="text-xs text-gray-500">{label}</div><div className={`text-xl font-bold ${color || 'text-gray-800'} mt-1`}>{value}</div>{sub && <div className="text-xs text-gray-400 mt-0.5">{sub}</div>}</div>);
+    const KPI = ({ label, value, color, sub, icon, gradient = 'from-blue-500 to-indigo-600' }) => (
+      <div className={`group relative ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'} rounded-2xl border p-4 hover:shadow-[0_8px_24px_rgba(15,23,42,0.08)] transition-all duration-300 overflow-hidden`}>
+        <div className={`absolute -top-8 -right-8 w-24 h-24 rounded-full bg-gradient-to-br ${gradient} opacity-5 group-hover:opacity-10 transition-opacity blur-2xl`} />
+        <div className="relative">
+          <div className="flex items-start justify-between mb-3">
+            <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${gradient} flex items-center justify-center shadow-md group-hover:scale-110 transition-transform text-lg`}>
+              {icon}
+            </div>
+          </div>
+          <div className={`text-2xl font-bold tracking-tight ${color || (darkMode ? 'text-slate-100' : 'text-slate-900')} mb-0.5`}>
+            {value}
+          </div>
+          <div className={`text-[11px] font-semibold ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+            {label}
+          </div>
+          {sub && (
+            <div className={`text-[10px] mt-1.5 ${darkMode ? 'text-slate-600' : 'text-slate-400'}`}>
+              {sub}
+            </div>
+          )}
+        </div>
+      </div>
+    );
     return (<div>
-      <div className="flex items-center justify-between mb-3"><h2 className="text-lg font-bold text-gray-800">{t.dashboard}</h2><div className="flex gap-2"><button onClick={exportCSV} className="text-xs bg-green-600 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-green-700">{t.exportCSV}</button><button onClick={() => openModal('confirmClearAll')} className="text-xs text-gray-400 hover:text-red-500">{t.clearAll}</button></div></div>
+      <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
+        <div>
+          <h2 className={`text-2xl font-bold tracking-tight ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>
+            {t.dashboard}
+          </h2>
+          <p className={`text-xs ${darkMode ? 'text-slate-500' : 'text-slate-500'} mt-1`}>
+            {lang === 'zh' ? `更新於 ${today} · ${entities.length} 個實體` : `Updated ${today} · ${entities.length} entities`}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={exportCSV} className={`${DS.btnSuccess} text-xs px-3.5 py-2 rounded-lg`}>
+            {t.exportCSV}
+          </button>
+          <button onClick={() => openModal('confirmClearAll')} className={`${DS.btnGhost} text-xs px-3 py-2 rounded-lg`}>
+            🗑️ {t.clearAll}
+          </button>
+        </div>
+      </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
-        <KPI label={t.totalEntities} value={entities.length} sub={`${entities.filter(e => e.type === 'company').length} ${t.companies}, ${entities.filter(e => e.type === 'person').length} ${t.persons}`} />
-        <KPI label={t.highRisk} value={riskDist.High} color="text-red-600" sub={t.entitiesRatedHigh} />
-        <KPI label={t.overdueReviews} value={overdue} color={overdue > 0 ? 'text-orange-600' : 'text-green-600'} />
-        <KPI label={t.expiredDocs} value={expDocCnt} color={expDocCnt > 0 ? 'text-amber-600' : 'text-green-600'} />
-        <KPI label={t.strFlagged} value={entities.filter(e => e.str?.flagged).length} />
-        <KPI label={t.dueDiligenceLevel} value={`S:${ddDist.SDD} C:${ddDist.CDD} E:${ddDist.EDD}`} sub="SDD / CDD / EDD" />
+        <KPI 
+          icon="🏢"
+          label={t.totalEntities} 
+          value={entities.length} 
+          sub={`${entities.filter(e => e.type === 'company').length} ${t.companies}, ${entities.filter(e => e.type === 'person').length} ${t.persons}`}
+          gradient="from-blue-500 to-indigo-600"
+        />
+        <KPI 
+          icon="⚠️"
+          label={t.highRisk} 
+          value={riskDist.High} 
+          color="text-red-500" 
+          sub={t.entitiesRatedHigh}
+          gradient="from-red-500 to-rose-600"
+        />
+        <KPI 
+          icon="⏰"
+          label={t.overdueReviews} 
+          value={overdue} 
+          color={overdue > 0 ? 'text-orange-500' : 'text-emerald-500'}
+          gradient="from-amber-500 to-orange-600"
+        />
+        <KPI 
+          icon="📄"
+          label={t.expiredDocs} 
+          value={expDocCnt} 
+          color={expDocCnt > 0 ? 'text-amber-500' : 'text-emerald-500'}
+          gradient="from-purple-500 to-pink-600"
+        />
+        <KPI 
+          icon="🚩"
+          label={t.strFlagged} 
+          value={entities.filter(e => e.str?.flagged).length}
+          gradient="from-rose-500 to-red-600"
+        />
+        <KPI 
+          icon="🛡️"
+          label={t.dueDiligenceLevel} 
+          value={`S:${ddDist.SDD} C:${ddDist.CDD} E:${ddDist.EDD}`} 
+          sub="SDD / CDD / EDD"
+          gradient="from-emerald-500 to-teal-600"
+        />
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-        <div className="bg-white rounded-xl shadow-sm border p-3"><h3 className="text-xs font-semibold text-gray-600 mb-1">{t.riskDistribution}</h3><ResponsiveContainer width="100%" height={150}><PieChart><Pie data={pieData} cx="50%" cy="50%" innerRadius={35} outerRadius={60} dataKey="value" label={({ name, value }) => `${name}:${value}`}>{pieData.map((e, i) => <Cell key={i} fill={RISK_COLORS[e.key] || PIE_COLORS[i]} />)}</Pie></PieChart></ResponsiveContainer></div>
-        <div className="bg-white rounded-xl shadow-sm border p-3"><h3 className="text-xs font-semibold text-gray-600 mb-1">{t.entityTypes}</h3><ResponsiveContainer width="100%" height={150}><BarChart data={barData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" tick={{ fontSize: 8 }} /><YAxis /><Bar dataKey="count" fill="#6366f1" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div>
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+        {/* Risk Distribution */}
+        <div className={`${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'} rounded-2xl border p-4 shadow-[0_2px_8px_rgba(15,23,42,0.04)]`}>
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className={`text-sm font-bold ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>
+                {t.riskDistribution}
+              </h3>
+              <p className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-400'} mt-0.5`}>
+                {lang === 'zh' ? '所有實體分佈' : 'Across all entities'}
+              </p>
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={160}>
+            <PieChart>
+              <defs>
+                {pieData.map((entry, i) => (
+                  <linearGradient key={i} id={`pieGrad-${i}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={RISK_COLORS[entry.key] || PIE_COLORS[i]} stopOpacity={1} />
+                    <stop offset="100%" stopColor={RISK_COLORS[entry.key] || PIE_COLORS[i]} stopOpacity={0.7} />
+                  </linearGradient>
+                ))}
+              </defs>
+              <Pie data={pieData} cx="50%" cy="50%" innerRadius={45} outerRadius={70} paddingAngle={3} dataKey="value" stroke="none">
+                {pieData.map((e, i) => <Cell key={i} fill={`url(#pieGrad-${i})`} />)}
+              </Pie>
+              <RTooltip contentStyle={{ background: darkMode ? '#1e293b' : '#fff', border: 'none', borderRadius: 10, boxShadow: '0 8px 24px rgba(15,23,42,0.12)', fontSize: 12 }} />
+            </PieChart>
+          </ResponsiveContainer>
+          <div className="grid grid-cols-3 gap-2 mt-2">
+            {pieData.map(d => (
+              <div key={d.name} className="text-center">
+                <div className="flex items-center justify-center gap-1 mb-0.5">
+                  <span className="w-2 h-2 rounded-full" style={{ background: RISK_COLORS[d.key] }} />
+                  <span className={`text-[10px] ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>{d.name}</span>
+                </div>
+                <div className={`text-base font-bold ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>{d.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Entity Types */}
+        <div className={`${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'} rounded-2xl border p-4 shadow-[0_2px_8px_rgba(15,23,42,0.04)]`}>
+          <div className="mb-3">
+            <h3 className={`text-sm font-bold ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>
+              {t.entityTypes}
+            </h3>
+            <p className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-400'} mt-0.5`}>
+              {lang === 'zh' ? '按子類型分佈' : 'By sub-type'}
+            </p>
+          </div>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={barData} margin={{ top: 5, right: 5, bottom: 5, left: -20 }}>
+              <defs>
+                <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#6366f1" stopOpacity={1} />
+                  <stop offset="100%" stopColor="#6366f1" stopOpacity={0.4} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#334155' : '#e2e8f0'} vertical={false} />
+              <XAxis dataKey="name" tick={{ fontSize: 9, fill: darkMode ? '#94a3b8' : '#64748b' }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 9, fill: darkMode ? '#94a3b8' : '#64748b' }} axisLine={false} tickLine={false} />
+              <RTooltip contentStyle={{ background: darkMode ? '#1e293b' : '#fff', border: 'none', borderRadius: 10, boxShadow: '0 8px 24px rgba(15,23,42,0.12)', fontSize: 12 }} cursor={{ fill: 'rgba(99,102,241,0.05)' }} />
+              <Bar dataKey="count" fill="url(#barGrad)" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
       </div>
-      <div className="bg-white rounded-xl shadow-sm border p-3 mb-4"><h3 className="text-xs font-semibold text-gray-600 mb-1">{t.avgRiskScoreTrend}</h3><ResponsiveContainer width="100%" height={130}><LineChart data={trendData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="month" tick={{ fontSize: 9 }} /><YAxis domain={[0, 100]} /><RTooltip /><Line type="monotone" dataKey="avgScore" stroke="#ef4444" strokeWidth={2} /></LineChart></ResponsiveContainer></div>
+
+      {/* Trend Chart */}
+      <div className={`${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'} rounded-2xl border p-4 shadow-[0_2px_8px_rgba(15,23,42,0.04)] mb-4`}>
+        <div className="mb-3">
+          <h3 className={`text-sm font-bold ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>
+            {t.avgRiskScoreTrend}
+          </h3>
+          <p className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-400'} mt-0.5`}>
+            {lang === 'zh' ? '過去 12 個月平均 CRR' : 'Past 12 months avg CRR'}
+          </p>
+        </div>
+        <ResponsiveContainer width="100%" height={150}>
+          <LineChart data={trendData} margin={{ top: 5, right: 5, bottom: 5, left: -20 }}>
+            <defs>
+              <linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#ef4444" stopOpacity={0.3} />
+                <stop offset="100%" stopColor="#ef4444" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#334155' : '#e2e8f0'} vertical={false} />
+            <XAxis dataKey="month" tick={{ fontSize: 9, fill: darkMode ? '#94a3b8' : '#64748b' }} axisLine={false} tickLine={false} />
+            <YAxis domain={[0, 100]} tick={{ fontSize: 9, fill: darkMode ? '#94a3b8' : '#64748b' }} axisLine={false} tickLine={false} />
+            <RTooltip contentStyle={{ background: darkMode ? '#1e293b' : '#fff', border: 'none', borderRadius: 10, boxShadow: '0 8px 24px rgba(15,23,42,0.12)', fontSize: 12 }} />
+            <Line type="monotone" dataKey="avgScore" stroke="#ef4444" strokeWidth={2.5} dot={{ fill: '#ef4444', r: 4, strokeWidth: 2, stroke: darkMode ? '#0f172a' : '#fff' }} activeDot={{ r: 6 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
       <GeoRiskMap entities={entities} getEffectiveRating={getEffectiveRating} t={t} lang={lang} />
-      <div className="bg-white rounded-xl shadow-sm border p-3"><h3 className="text-xs font-semibold text-gray-600 mb-2">{t.autoTodos} ({autoTodos.length})</h3><div className="space-y-1 max-h-48 overflow-y-auto">{autoTodos.map(td => (<div key={td.id} className="flex items-center gap-2 p-1.5 rounded bg-gray-50 hover:bg-gray-100 cursor-pointer text-xs" onClick={() => { setSelectedId(td.entityId); setDetailTab('overview'); setView('workspace'); }}><PriorityDot p={td.priority} /><span className="flex-1 text-gray-700">{td.text}</span><span className="text-gray-400 text-xs px-1.5 py-0.5 bg-gray-200 rounded">{td.type}</span></div>))}{autoTodos.length === 0 && <div className="text-xs text-gray-400 text-center py-3">{t.noPendingTodos}</div>}</div></div>
+      <div className={`${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'} rounded-2xl border p-4 shadow-[0_2px_8px_rgba(15,23,42,0.04)]`}>
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className={`text-sm font-bold ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>
+              {t.autoTodos}
+            </h3>
+            <p className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-400'} mt-0.5`}>
+              {lang === 'zh' ? `${autoTodos.length} 個待處理項目` : `${autoTodos.length} pending items`}
+            </p>
+          </div>
+          {autoTodos.length > 0 && (
+            <span className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-[11px] font-bold px-2 py-0.5 rounded-md shadow shadow-blue-500/30">
+              {autoTodos.length}
+            </span>
+          )}
+        </div>
+        <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+          {autoTodos.map(td => (
+            <div 
+              key={td.id} 
+              className={`group flex items-center gap-2.5 p-2.5 rounded-lg cursor-pointer transition-all border ${
+                darkMode 
+                  ? 'bg-slate-800/50 border-slate-800 hover:bg-slate-800 hover:border-slate-700' 
+                  : 'bg-slate-50 border-slate-100 hover:bg-white hover:border-slate-200 hover:shadow-sm'
+              }`}
+              onClick={() => { setSelectedId(td.entityId); setDetailTab('overview'); setView('workspace'); }}
+            >
+              <PriorityDot p={td.priority} />
+              <span className={`flex-1 text-xs ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{td.text}</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold ${
+                darkMode ? 'bg-slate-700 text-slate-400' : 'bg-slate-200 text-slate-600'
+              }`}>
+                {td.type}
+              </span>
+              <ChevronRight className={`w-3.5 h-3.5 ${darkMode ? 'text-slate-600' : 'text-slate-300'} group-hover:translate-x-0.5 transition-transform`} />
+            </div>
+          ))}
+          {autoTodos.length === 0 && (
+            <div className="text-center py-8">
+              <div className="text-3xl mb-2">✅</div>
+              <div className={`text-xs ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>{t.noPendingTodos}</div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>);
   };
 
@@ -2635,11 +3006,19 @@ export default function KYCSystem() {
         </div>
         <div className="flex gap-3 flex-1 overflow-hidden">
           <div className={`flex-col bg-white rounded-xl border overflow-hidden ${workspaceTab === 'diagram' ? 'hidden md:flex' : 'flex'}`} style={{ width: '290px', minWidth: '250px' }}>
-            <div className="p-2 border-b flex items-center justify-between shrink-0">
-              <span className="text-sm font-bold text-gray-700">{t.entityList} ({entities.length})</span>
-              <div className="flex gap-1">
-                <button onClick={() => openModal('addEntity', { name: '', type: 'company', subType: '', jurisdiction: 'USA', totalShares: '', companyCategory: 'private', industry: '' })} className="bg-blue-600 text-white px-2 py-1 rounded text-xs">{t.addEntity}</button>
-                <button onClick={exportCSV} className="text-xs text-gray-400 hover:text-green-600 px-1" title={t.exportCSV}>📥</button>
+            <div className="p-3 border-b flex items-center justify-between shrink-0">
+              <div>
+                <div className="text-sm font-bold text-slate-900">{t.entityList}</div>
+                <div className="text-[10px] text-slate-400">{entities.length} {lang === 'zh' ? '個實體' : 'entities'}</div>
+              </div>
+              <div className="flex gap-1.5">
+                <button 
+                  onClick={() => openModal('addEntity', { name: '', type: 'company', subType: '', jurisdiction: 'USA', totalShares: '', companyCategory: 'private', industry: '' })} 
+                  className={`${DS.btnPrimary} px-2.5 py-1.5 rounded-lg text-[11px]`}
+                >
+                  {t.addEntity}
+                </button>
+                <button onClick={exportCSV} className="w-7 h-7 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-emerald-600 flex items-center justify-center transition" title={t.exportCSV}>📥</button>
               </div>
             </div>
             <div className="px-2 py-1.5 border-b shrink-0"><input value={entityFilter} onChange={e => setEntityFilter(e.target.value)} placeholder={t.filterPlaceholder} className="w-full border rounded px-2 py-1 text-xs focus:ring-1 focus:ring-blue-400 focus:outline-none" /></div>
@@ -2647,20 +3026,69 @@ export default function KYCSystem() {
             <div className="px-2 py-1 border-b bg-gray-50 flex items-center gap-2 shrink-0"><input type="checkbox" checked={allChecked} ref={el => { if (el) el.indeterminate = someChecked && !allChecked; }} onChange={toggleAll} className="shrink-0" /><span className="text-xs text-gray-500 font-medium">{t.selectAll}</span></div>
             <div className="flex-1 overflow-y-auto">
               {filteredEntities.map(ent => {
-                const r = getEffectiveRating(ent); const isActive = dagSelected === ent.id; const isChecked = batchSelected.has(ent.id);
-                const cddCount = (ent.cddRecords || []).length; const autoHR = isAutoHighRisk(ent);
-                return (<div key={ent.id} className={`flex items-center gap-1.5 px-2 py-2 border-b border-gray-50 cursor-pointer hover:bg-blue-50 transition-colors ${isActive ? 'bg-blue-50 border-l-2 border-l-blue-500' : ''} ${isChecked ? 'bg-blue-50/50' : ''}`} onClick={() => setDagSelected(ent.id === dagSelected ? null : ent.id)} onDoubleClick={() => { setSelectedId(ent.id); setDetailTab('overview'); }}>
-                  <input type="checkbox" checked={isChecked} onChange={() => toggleBatch(ent.id)} onClick={e => e.stopPropagation()} className="shrink-0" />
-                  <span className="text-sm shrink-0">{ent.type === 'person' ? '👤' : '🏢'}</span>
-                  <div className="flex-1 min-w-0"><div className="text-xs font-medium text-gray-800 truncate">{ent.name}</div><div className="text-xs text-gray-400 truncate">{ent.subType}{ent.companyCategory && ent.type === 'company' ? ` · ${getCategoryLabel(ent.companyCategory)}` : ''} · {ent.jurisdiction}{cddCount > 0 ? ` · ${cddCount}${t.cddRecordCount}` : ''}</div></div>
-                  <div className="shrink-0 flex items-center gap-1">
-                    {autoHR && <span className="text-xs" title={t.annualReview}>🔒</span>}
-                    <DDLevelBadge entity={ent} />
-                    {ent.isPEP && <span className="w-2 h-2 rounded-full bg-purple-500" title={`PEP${ent.pepCategory ? ` - ${pepCategories.find(c => c.v === ent.pepCategory)?.l || ent.pepCategory}` : ''}`} />}
-                    {ent.str?.flagged && <span className="w-2 h-2 rounded-full bg-red-500" title="STR" />}
-                    <span className={`w-2.5 h-2.5 rounded-full ${r.rating === 'High' ? 'bg-red-500' : r.rating === 'Medium' ? 'bg-amber-500' : 'bg-green-500'}`} />
+                const r = getEffectiveRating(ent);
+                const isActive = dagSelected === ent.id;
+                const isChecked = batchSelected.has(ent.id);
+                const cddCount = (ent.cddRecords || []).length;
+                const autoHR = isAutoHighRisk(ent);
+                return (
+                  <div 
+                    key={ent.id} 
+                    className={`group flex items-center gap-2 px-3 py-2.5 cursor-pointer transition-all border-l-[3px] ${
+                      isActive 
+                        ? 'bg-gradient-to-r from-blue-50 to-transparent border-l-blue-500' 
+                        : isChecked 
+                          ? 'bg-blue-50/40 border-l-transparent'
+                          : 'border-l-transparent hover:bg-slate-50'
+                    }`}
+                    onClick={() => setDagSelected(ent.id === dagSelected ? null : ent.id)}
+                    onDoubleClick={() => { setSelectedId(ent.id); setDetailTab('overview'); }}
+                  >
+                    <input 
+                      type="checkbox" 
+                      checked={isChecked} 
+                      onChange={() => toggleBatch(ent.id)} 
+                      onClick={e => e.stopPropagation()} 
+                      className="shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500 focus:ring-offset-0" 
+                    />
+                    
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0 shadow-sm ${
+                      ent.type === 'person'
+                        ? 'bg-gradient-to-br from-violet-100 to-purple-100 text-purple-700'
+                        : 'bg-gradient-to-br from-blue-100 to-indigo-100 text-blue-700'
+                    }`}>
+                      {ent.type === 'person' ? '👤' : '🏢'}
+                    </div>
+                    
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[12px] font-bold text-slate-800 truncate">{ent.name}</span>
+                        {ent.isPEP && <BadgeC color="purple" size="xs">PEP</BadgeC>}
+                      </div>
+                      <div className="text-[10px] text-slate-400 truncate mt-0.5">
+                        {ent.subType}
+                        {ent.companyCategory && ent.type === 'company' ? ` · ${getCategoryLabel(ent.companyCategory)}` : ''}
+                        {' · '}{ent.jurisdiction}
+                        {cddCount > 0 ? ` · ${cddCount}${t.cddRecordCount}` : ''}
+                      </div>
+                    </div>
+                    
+                    <div className="shrink-0 flex items-center gap-1.5">
+                      {autoHR && <span className="text-xs" title={t.annualReview}>🔒</span>}
+                      <DDLevelBadge entity={ent} />
+                      {ent.str?.flagged && <span className="w-1.5 h-1.5 rounded-full bg-red-500 ring-2 ring-red-100" title="STR" />}
+                      <span 
+                        className={`w-2 h-2 rounded-full ring-2 ${
+                          r.rating === 'High' 
+                            ? 'bg-red-500 ring-red-100' 
+                            : r.rating === 'Medium' 
+                              ? 'bg-amber-500 ring-amber-100' 
+                              : 'bg-emerald-500 ring-emerald-100'
+                        }`} 
+                      />
+                    </div>
                   </div>
-                </div>);
+                );
               })}
             </div>
           </div>
@@ -3048,28 +3476,193 @@ export default function KYCSystem() {
     { id: 'report', icon: '📄', label: t.report },
   ];
 
-  return (
-    <div className={`flex h-screen ${darkMode ? 'bg-gray-900 text-gray-100 dm' : 'bg-gray-50 text-gray-800'} overflow-hidden`} style={{ fontSize: '13px' }}>
-      <div className="md:hidden fixed top-0 left-0 right-0 h-10 bg-slate-800 text-white flex items-center px-3 z-30 shrink-0">
-        <button onClick={() => setMobileSideOpen(!mobileSideOpen)} className="text-white p-1 text-lg leading-none">☰</button>
-        <span className="text-sm font-bold ml-2">🛡️ KYC/AML</span>
-        <span className="text-xs text-slate-400 ml-1">{t.appSub}</span>
-      </div>
-      {toastMsg && <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg text-sm font-medium animate-pulse">{toastMsg}</div>}
-      {mobileSideOpen && (<div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setMobileSideOpen(false)} />)}
-      <div className={`fixed md:relative left-0 top-0 bottom-0 z-50 w-44 bg-slate-800 text-white flex flex-col shrink-0 transition-transform duration-200 ${mobileSideOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}>
-        <div className="p-3 border-b border-slate-700"><div className="text-base font-bold">🛡️ {t.appTitle}</div><div className="text-xs text-slate-400">{t.appSub}</div><div className="mt-2 flex gap-1">
-      <button onClick={() => setLang(l => l === 'zh' ? 'en' : 'zh')} className="flex items-center gap-1 px-2 py-1 rounded text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200">{lang === 'zh' ? 'EN' : '中文'}</button>
-      <button onClick={() => setDarkMode(dm => !dm)} className="flex items-center gap-1 px-2 py-1 rounded text-xs font-bold bg-slate-700 hover:bg-slate-600 text-slate-200">{darkMode ? '☀️' : '🌙'}</button>
-       </div>
+    return (
+    <div className={`flex h-screen ${darkMode ? 'bg-slate-950 text-slate-100 dm' : 'bg-slate-50 text-slate-800'} overflow-hidden`} style={{ fontSize: '13px' }}>
+      
+      {/* ===== Mobile Top Bar ===== */}
+      <div className={`md:hidden fixed top-0 left-0 right-0 h-12 ${
+        darkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-white/90 border-slate-200'
+      } backdrop-blur-md border-b flex items-center px-3 z-30 shrink-0`}>
+        <button 
+          onClick={() => setMobileSideOpen(!mobileSideOpen)} 
+          className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+            darkMode ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-slate-100 text-slate-700'
+          }`}
+        >
+          ☰
+        </button>
+        <div className="flex items-center gap-2 ml-2">
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow shadow-indigo-500/30">
+            <Shield className="w-4 h-4 text-white" strokeWidth={2.5} />
           </div>
-       <nav className="flex-1 py-1">{navItems.map(item => (<button key={item.id} onClick={() => setView(item.id)} className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${view === item.id ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}><span>{item.icon}</span>{item.label}{item.id === 'snapshots' && snapshots.length > 0 && <span className="ml-auto bg-slate-600 text-slate-200 px-1.5 py-0.5 rounded-full text-xs leading-none">{snapshots.length}</span>}</button>))}</nav>
-        {autoTodos.filter(td => td.priority === 'critical' || td.priority === 'high').length > 0 && <div className="p-2 border-t border-slate-700 text-xs text-red-400">🔔 {autoTodos.filter(td => td.priority === 'critical' || td.priority === 'high').length} {t.urgentItems}</div>}
+          <span className={`text-sm font-bold ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>
+            {t.appTitle}
+          </span>
+        </div>
       </div>
-      {view === 'workspace' ? (<div className="flex-1 flex flex-col overflow-hidden p-3 pb-8 pt-10 md:pt-0">{renderWorkspace()}</div>) : (<div className="flex-1 overflow-y-auto p-5 pb-8 pt-10 md:pt-0">{view === 'dashboard' && renderDashboard()}{view === 'search' && renderSearch()}{view === 'snapshots' && renderSnapshots()}{view === 'settings' && renderSettings()}{view === 'report' && renderReport()}</div>)}
+
+      {/* ===== Toast ===== */}
+      {toastMsg && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] bg-gradient-to-r from-emerald-500 to-teal-600 text-white px-5 py-2.5 rounded-xl shadow-lg shadow-emerald-500/30 text-sm font-semibold flex items-center gap-2"
+          style={{ animation: 'kycSlideUp 0.25s ease-out' }}>
+          <CheckCircle className="w-4 h-4" />
+          {toastMsg}
+        </div>
+      )}
+
+      {/* ===== Mobile Sidebar Overlay ===== */}
+      {mobileSideOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-40 md:hidden" onClick={() => setMobileSideOpen(false)} />
+      )}
+
+      {/* ===== Sidebar ===== */}
+      <aside className={`fixed md:relative left-0 top-0 bottom-0 z-50 w-56 ${
+        darkMode ? 'bg-slate-950 border-slate-800' : 'bg-white border-slate-200'
+      } border-r flex flex-col shrink-0 transition-transform duration-200 ${
+        mobileSideOpen ? 'translate-x-0' : '-translate-x-full'
+      } md:translate-x-0`}>
+
+        {/* Logo Header */}
+        <div className={`px-4 py-4 border-b ${darkMode ? 'border-slate-800' : 'border-slate-100'}`}>
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 via-indigo-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+              <Shield className="w-4 h-4 text-white" strokeWidth={2.5} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className={`text-sm font-bold leading-tight ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>
+                {t.appTitle}
+              </div>
+              <div className={`text-[10px] leading-tight ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                {t.appSub}
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 flex gap-1.5">
+            <button 
+              onClick={() => setLang(l => l === 'zh' ? 'en' : 'zh')} 
+              className={`flex-1 px-2 py-1.5 rounded-lg text-[11px] font-bold transition ${
+                darkMode 
+                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' 
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+              }`}
+            >
+              🌐 {lang === 'zh' ? 'EN' : '中文'}
+            </button>
+            <button 
+              onClick={() => setDarkMode(dm => !dm)} 
+              className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition ${
+                darkMode 
+                  ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-400' 
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+              }`}
+              title={darkMode ? t.lightMode : t.darkMode}
+            >
+              {darkMode ? '☀️' : '🌙'}
+            </button>
+          </div>
+        </div>
+
+        {/* Section Title */}
+        <div className={`px-4 mt-4 mb-2 text-[10px] font-bold uppercase tracking-widest ${darkMode ? 'text-slate-600' : 'text-slate-400'}`}>
+          {lang === 'zh' ? '工作區' : 'Workspace'}
+        </div>
+
+        {/* Nav */}
+        <nav className="flex-1 px-2 space-y-0.5 overflow-y-auto">
+          {navItems.map(item => {
+            const isActive = view === item.id;
+            const count = item.id === 'snapshots' ? snapshots.length : 
+                          item.id === 'workspace' ? entities.length : null;
+            return (
+              <button 
+                key={item.id} 
+                onClick={() => { setView(item.id); setMobileSideOpen(false); }}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-semibold transition-all ${
+                  isActive 
+                    ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-500/25' 
+                    : darkMode
+                      ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+              >
+                <span className="text-base">{item.icon}</span>
+                <span className="flex-1 text-left">{item.label}</span>
+                {count != null && count > 0 && (
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-bold ${
+                    isActive 
+                      ? 'bg-white/25 text-white' 
+                      : darkMode ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Urgent Alerts */}
+        {autoTodos.filter(td => td.priority === 'critical' || td.priority === 'high').length > 0 && (
+          <div className="p-2.5">
+            <button
+              onClick={() => setView('dashboard')}
+              className={`w-full text-left rounded-xl p-3 transition ${
+                darkMode 
+                  ? 'bg-gradient-to-br from-red-500/10 to-orange-500/10 border border-red-500/20 hover:from-red-500/15 hover:to-orange-500/15' 
+                  : 'bg-gradient-to-br from-red-50 to-orange-50 border border-red-200 hover:from-red-100 hover:to-orange-100'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1.5">
+                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-red-500 to-orange-500 flex items-center justify-center shadow shadow-red-500/30">
+                  <AlertTriangle className="w-3.5 h-3.5 text-white" strokeWidth={2.5} />
+                </div>
+                <span className={`text-xs font-bold ${darkMode ? 'text-red-300' : 'text-red-900'}`}>
+                  {autoTodos.filter(td => td.priority === 'critical' || td.priority === 'high').length} {t.urgentItems}
+                </span>
+              </div>
+              <p className={`text-[11px] leading-relaxed ${darkMode ? 'text-red-300/80' : 'text-red-700'}`}>
+                {lang === 'zh' ? '需立即處理的高優先級項目' : 'High priority items'}
+              </p>
+            </button>
+          </div>
+        )}
+
+        {/* User */}
+        <div className={`px-3 py-3 border-t ${darkMode ? 'border-slate-800' : 'border-slate-100'} flex items-center gap-2.5`}>
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-400 to-purple-600 flex items-center justify-center text-white text-[11px] font-bold shadow shadow-purple-500/20">
+            KT
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className={`text-xs font-bold truncate ${darkMode ? 'text-slate-200' : 'text-slate-800'}`}>
+              Kazaf Tsui
+            </div>
+            <div className={`text-[10px] truncate ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+              {lang === 'zh' ? '合規分析師' : 'Compliance Officer'}
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* ===== Main Content ===== */}
+      {view === 'workspace' ? (
+        <div className="flex-1 flex flex-col overflow-hidden p-4 pb-10 pt-14 md:pt-4">
+          {renderWorkspace()}
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto p-6 pb-10 pt-14 md:pt-6">
+          {view === 'dashboard' && renderDashboard()}
+          {view === 'search' && renderSearch()}
+          {view === 'snapshots' && renderSnapshots()}
+          {view === 'settings' && renderSettings()}
+          {view === 'report' && renderReport()}
+        </div>
+      )}
+      
       {renderModals()}
+      
+      {/* Footer Portal */}
       {createPortal(
-        <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 9999, background: 'rgba(15,23,42,0.95)', borderTop: '1px solid #334155', textAlign: 'center', padding: '5px 0' }}>
+        <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 9999, background: darkMode ? 'rgba(2,6,23,0.95)' : 'rgba(15,23,42,0.95)', borderTop: '1px solid #334155', textAlign: 'center', padding: '6px 0', backdropFilter: 'blur(8px)' }}>
           <p style={{ margin: 0, fontSize: 11, color: '#94a3b8' }}>
             © 2026 Designed &amp; Developed by{' '}
             <span style={{ color: '#60a5fa', fontWeight: 700 }}>Kazaf Tsui</span>
