@@ -1768,85 +1768,226 @@ ${pdfParsingNote}`;
     });
   };
   
-  const ResultCard = ({ r }) => {
+const ResultCard = ({ r }) => {
     const c = CLS_CONFIG[r.cls] || CLS_CONFIG['NO_HIT'];
     const Icon = c.icon;
     const isOpen = expandedId === r.rank;
+    
+    // 邊框與陰影顏色 mapping
+    const accentColor = {
+      TRUE_HIT: { 
+        border: 'border-red-200', 
+        ring: 'hover:ring-red-200',
+        leftBar: 'bg-gradient-to-b from-red-500 to-rose-600',
+        rankBg: 'bg-gradient-to-br from-red-100 to-rose-200 text-red-700',
+      },
+      POSSIBLE_HIT: { 
+        border: 'border-purple-200', 
+        ring: 'hover:ring-purple-200',
+        leftBar: 'bg-gradient-to-b from-purple-500 to-violet-600',
+        rankBg: 'bg-gradient-to-br from-purple-100 to-violet-200 text-purple-700',
+      },
+      FALSE_HIT: { 
+        border: 'border-amber-200', 
+        ring: 'hover:ring-amber-200',
+        leftBar: 'bg-gradient-to-b from-amber-500 to-orange-600',
+        rankBg: 'bg-gradient-to-br from-amber-100 to-orange-200 text-amber-700',
+      },
+      IRRELEVANT_MLTF: { 
+        border: 'border-slate-200', 
+        ring: 'hover:ring-slate-200',
+        leftBar: 'bg-gradient-to-b from-slate-400 to-slate-500',
+        rankBg: 'bg-gradient-to-br from-slate-100 to-slate-200 text-slate-700',
+      },
+      NO_HIT: { 
+        border: 'border-emerald-200', 
+        ring: 'hover:ring-emerald-200',
+        leftBar: 'bg-gradient-to-b from-emerald-500 to-teal-600',
+        rankBg: 'bg-gradient-to-br from-emerald-100 to-teal-200 text-emerald-700',
+      },
+    }[r.cls] || {};
+
     return (
-      <div className={`border-2 ${c.border} rounded-xl overflow-hidden bg-white`}>
-        <div className="p-3 cursor-pointer hover:bg-gray-50 flex items-start gap-3" onClick={() => setExpandedId(isOpen ? null : r.rank)}>
-          <div className="flex flex-col items-center gap-1">
-            <span className="text-xs font-bold text-gray-400 w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center">{r.rank}</span>
-            <Icon className={`w-4 h-4 ${c.text}`} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap mb-1">
-              <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${c.badge}`}>{detectedLang === 'zh' ? c.labelZh : c.label}</span>
-              <span className="text-xs text-gray-400">{Math.round(r.confidence * 100)}% confidence</span>
-              <span className="text-xs text-gray-400">|</span>
-              <span className="text-xs text-gray-500">{r.source}</span>
-              <span className="text-xs text-gray-400">{r.date}</span>
+      <div className={`relative bg-white border ${accentColor.border} rounded-2xl overflow-hidden shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:shadow-[0_8px_24px_rgba(15,23,42,0.08)] transition-all hover:-translate-y-0.5`}>
+        {/* Left accent bar */}
+        <div className={`absolute left-0 top-0 bottom-0 w-1 ${accentColor.leftBar}`} />
+        
+        <div 
+          className="p-4 pl-5 cursor-pointer flex items-start gap-3" 
+          onClick={() => setExpandedId(isOpen ? null : r.rank)}
+        >
+          {/* Rank + Icon Column */}
+          <div className="flex flex-col items-center gap-1.5 shrink-0">
+            <span className={`text-xs font-black w-7 h-7 rounded-xl ${accentColor.rankBg} flex items-center justify-center shadow-sm`}>
+              {r.rank}
+            </span>
+            <div className={`w-7 h-7 rounded-lg ${c.bg} flex items-center justify-center`}>
+              <Icon className={`w-4 h-4 ${c.text}`} strokeWidth={2.2} />
             </div>
-            <h3 className="text-sm font-bold text-gray-800 leading-snug">{r.title}</h3>
-            <p className="text-xs text-gray-500 mt-1 line-clamp-2">{r.snippet}</p>
-            {r.matchedKeywords.length > 0 && (<div className="flex gap-1 mt-1.5 flex-wrap">{r.matchedKeywords.map((kw, i) => (<span key={i} className={`${isSanction ? 'bg-orange-50 text-orange-600 border-orange-200' : 'bg-red-50 text-red-600 border-red-200'} border px-1.5 py-0.5 rounded text-xs`}>{kw}</span>))}</div>)}
           </div>
-          <div className="text-gray-300 pt-1">{isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}</div>
-        </div>
-        {isOpen && (
-          <div className="px-3 pb-3">
-            <div className={`${c.bg} rounded-lg p-3`}>
-              <div className="flex items-center gap-1.5 mb-1.5"><Brain className={`w-3.5 h-3.5 ${c.text}`} /><span className={`text-xs font-bold ${c.text}`}>AI 分析</span></div>
-              <p className="text-xs text-gray-700">
-                <span className={`font-bold mr-1 ${r.cls === 'TRUE_HIT' ? 'text-red-700' : r.cls === 'POSSIBLE_HIT' ? 'text-purple-700' : r.cls === 'FALSE_HIT' ? 'text-amber-700' : r.cls === 'IRRELEVANT_MLTF' ? 'text-slate-600' : 'text-green-700'}`}>
-                  {r.cls === 'TRUE_HIT' ? 'TRUE HIT' : r.cls === 'POSSIBLE_HIT' ? 'POSSIBLE HIT' : r.cls === 'FALSE_HIT' ? 'FALSE HIT' : r.cls === 'IRRELEVANT_MLTF' ? 'IRRELEVANT' : 'NO HIT'}:
+          
+          {/* Content Column */}
+          <div className="flex-1 min-w-0">
+            {/* Meta Row */}
+            <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
+              <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${c.badge}`}>
+                {detectedLang === 'zh' ? c.labelZh : c.label}
+              </span>
+              <span className="inline-flex items-center gap-1 text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded-md font-bold">
+                <span className={`w-1 h-1 rounded-full ${
+                  r.confidence >= 0.9 ? 'bg-emerald-500' :
+                  r.confidence >= 0.75 ? 'bg-amber-500' : 'bg-red-500'
+                }`} />
+                {Math.round(r.confidence * 100)}%
+              </span>
+              <span className="text-[11px] text-slate-600 font-semibold">{r.source}</span>
+              <span className="text-[10px] text-slate-400">·</span>
+              <span className="text-[10px] text-slate-400 font-mono">{r.date}</span>
+              {r._manualOverride && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded-md font-bold">
+                  ✏️ Manual
                 </span>
+              )}
+            </div>
+            
+            {/* Title */}
+            <h3 className="text-sm font-bold text-slate-900 leading-snug mb-1">{r.title}</h3>
+            
+            {/* Snippet */}
+            <p className="text-xs text-slate-600 leading-relaxed line-clamp-2">{r.snippet}</p>
+            
+            {/* Keywords */}
+            {r.matchedKeywords.length > 0 && (
+              <div className="flex gap-1 mt-2 flex-wrap">
+                {r.matchedKeywords.map((kw, i) => (
+                  <span 
+                    key={i} 
+                    className={`${
+                      isSanction 
+                        ? 'bg-gradient-to-r from-orange-50 to-red-50 text-orange-700 border-orange-200' 
+                        : 'bg-gradient-to-r from-red-50 to-rose-50 text-red-700 border-red-200'
+                    } border px-2 py-0.5 rounded-md text-[10px] font-semibold`}
+                  >
+                    {kw}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          
+          {/* Chevron */}
+          <div className={`shrink-0 w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
+            isOpen ? 'bg-slate-100 rotate-0' : 'hover:bg-slate-100'
+          }`}>
+            {isOpen 
+              ? <ChevronDown className="w-4 h-4 text-slate-600" strokeWidth={2.5} /> 
+              : <ChevronRight className="w-4 h-4 text-slate-400" strokeWidth={2.5} />
+            }
+          </div>
+        </div>
+        
+        {/* Expanded Section */}
+        {isOpen && (
+          <div className="px-4 pb-4 pl-5">
+            {/* AI Analysis Box */}
+            <div className={`${c.bg} rounded-xl p-4 border ${c.border}`}>
+              <div className="flex items-center gap-2 mb-2.5">
+                <div className={`w-8 h-8 rounded-lg ${c.bg} border ${c.border} flex items-center justify-center`}>
+                  <Brain className={`w-4 h-4 ${c.text}`} strokeWidth={2.2} />
+                </div>
+                <div>
+                  <div className={`text-xs font-black ${c.text} tracking-wide uppercase`}>AI 分析</div>
+                  <div className="text-[10px] text-slate-500">
+                    {r.cls === 'TRUE_HIT' ? '🚨 真實命中' 
+                      : r.cls === 'POSSIBLE_HIT' ? '⚠️ 存疑' 
+                      : r.cls === 'FALSE_HIT' ? '❌ 誤報' 
+                      : r.cls === 'IRRELEVANT_MLTF' ? 'ℹ️ 無關' 
+                      : '✅ 無命中'}
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs text-slate-700 leading-relaxed">
                 {r.reason.replace(/^(TRUE HIT|FALSE HIT|IRRELEVANT ML\/TF|IRRELEVANT|NO HIT):\s*/i, '')}
               </p>
-              <div className="flex gap-3 mt-2 text-xs text-gray-500"><span>Risk: <b className={c.text}>{r.riskCat}</b></span><span>Confidence: <b>{Math.round(r.confidence * 100)}%</b></span></div>
+              
+              {/* Stats */}
+              <div className="flex gap-2 mt-3 pt-3 border-t border-current/10">
+                <div className="flex-1 bg-white/60 rounded-lg p-2">
+                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Risk Category</div>
+                  <div className={`text-xs font-bold ${c.text} mt-0.5`}>{r.riskCat}</div>
+                </div>
+                <div className="flex-1 bg-white/60 rounded-lg p-2">
+                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Confidence</div>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <div className="flex-1 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                      <div 
+                        className={`h-full rounded-full ${accentColor.leftBar}`}
+                        style={{ width: `${Math.round(r.confidence * 100)}%` }} 
+                      />
+                    </div>
+                    <span className="text-xs font-black text-slate-900">{Math.round(r.confidence * 100)}%</span>
+                  </div>
+                </div>
+              </div>
             </div>
-            {r.cls === 'TRUE_HIT' && (               
-            <div className="flex gap-2 mt-2">                 
-              <button                   
-                onClick={(e) => { e.stopPropagation(); flagSTR(r.rank, r); }}                  
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition ${                     
-                  strFlaggedRanks.has(r.rank)                       
-                  ? 'bg-red-600 text-white border-red-600'                       
-                  : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'                   
-                }`}                 >                   
-                {strFlaggedRanks.has(r.rank) ? '✅ 已標記 STR' : '🚨 標記 STR'}                
-              </button>                 
-              <button                   
-                onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'FALSE_HIT', 'Manually downgraded from TRUE_HIT'); }}                   
-                className="bg-gray-50 text-gray-600 border border-gray-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-gray-100"                 
-                >                   
-                ↓ 降級為 False Hit                 
-              </button>               
-            </div>             
-          )}
+            
+            {r.cls === 'TRUE_HIT' && (
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={(e) => { e.stopPropagation(); flagSTR(r.rank, r); }}
+                  className={`flex-1 px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                    strFlaggedRanks.has(r.rank)
+                      ? 'bg-gradient-to-r from-red-600 to-rose-700 text-white shadow-lg shadow-red-500/40'
+                      : 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white shadow-md shadow-red-500/30'
+                  }`}
+                >
+                  {strFlaggedRanks.has(r.rank) ? '✅ 已標記 STR' : '🚨 標記 STR'}
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'FALSE_HIT', 'Manually downgraded from TRUE_HIT'); }}
+                  className="px-3 py-2 rounded-xl text-xs font-bold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition flex items-center gap-1.5"
+                >
+                  ↓ 降級
+                </button>
+              </div>
+            )}
+            
             {r.cls === 'POSSIBLE_HIT' && (
-              <div className="mt-2 space-y-2">
+              <div className="mt-3 space-y-3">
                 {r.missingInfo && r.missingInfo.length > 0 && (
-                  <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
-                    <div className="text-xs font-bold text-purple-700 mb-1.5">🔍 需要核實的資料</div>
-                    <div className="flex flex-wrap gap-1.5">
+                  <div className="bg-gradient-to-br from-purple-50 to-violet-100 border border-purple-200 rounded-xl p-3.5">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center shadow shadow-purple-500/30">
+                        <Search className="w-3.5 h-3.5 text-white" strokeWidth={2.5} />
+                      </div>
+                      <div className="text-xs font-black text-purple-900">需要核實的資料</div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 mb-2">
                       {r.missingInfo.map((info, i) => (
-                        <span key={i} className="bg-white text-purple-700 border border-purple-200 px-2 py-1 rounded-lg text-xs font-medium">❓ {info}</span>
+                        <span 
+                          key={i} 
+                          className="bg-white text-purple-700 border border-purple-200 px-2 py-1 rounded-lg text-[11px] font-bold shadow-sm"
+                        >
+                          ❓ {info}
+                        </span>
                       ))}
                     </div>
-                    <div className="text-xs text-purple-600 mt-2">💡 請提供以上資料後重新分析，或由合規人員手動核實。</div>
+                    <div className="text-[11px] text-purple-700 bg-white/60 rounded-lg p-2 flex items-start gap-1.5">
+                      <span>💡</span>
+                      <span>請提供以上資料後重新分析，或由合規人員手動核實。</span>
+                    </div>
                   </div>
                 )}
                 <div className="flex gap-2">
                   <button
                     onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'FALSE_HIT', 'Manually confirmed as different person'); }}
-                    className="bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-green-100"
+                    className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white px-3 py-2 rounded-xl text-xs font-bold shadow-md shadow-emerald-500/30 transition-all"
                   >
                     ✅ 確認非同人
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'TRUE_HIT', 'Manually upgraded from POSSIBLE_HIT'); }}
-                    className="bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-red-100"
+                    className="flex-1 bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-3 py-2 rounded-xl text-xs font-bold shadow-md shadow-red-500/30 transition-all"
                   >
                     🚨 升級為 True Hit
                   </button>
@@ -1869,68 +2010,148 @@ ${pdfParsingNote}`;
     : 'No ML/TF/Sanctions-related hits found';
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className={`${headerBg} text-white px-4 py-3`}>
-        <h1 className="text-base font-bold flex items-center gap-2">{moduleIcon} {moduleTitle}</h1>
-        <p className="text-xs text-slate-400 mt-0.5">{moduleSubtitle}</p>
+    <div className="min-h-screen bg-slate-50">
+      {/* Modern Header with Gradient */}
+      <div className={`relative overflow-hidden ${
+        isSanction
+          ? 'bg-gradient-to-br from-orange-600 via-orange-700 to-red-700'
+          : 'bg-gradient-to-br from-slate-800 via-slate-900 to-indigo-900'
+      } text-white px-6 py-5`}>
+        {/* Decorative blur */}
+        <div className="absolute -top-10 -right-10 w-40 h-40 bg-white/10 rounded-full blur-3xl" />
+        <div className="absolute -bottom-10 -left-10 w-40 h-40 bg-white/5 rounded-full blur-3xl" />
+        <div className="relative">
+          <div className="flex items-center gap-3 mb-1.5">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-lg ${
+              isSanction ? 'bg-white/15 backdrop-blur shadow-orange-900/40' : 'bg-white/15 backdrop-blur shadow-indigo-900/40'
+            }`}>
+              <Shield className="w-5 h-5 text-white" strokeWidth={2.2} />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold tracking-tight">{moduleTitle}</h1>
+              <p className={`text-[11px] mt-0.5 ${isSanction ? 'text-orange-100/80' : 'text-slate-300/80'}`}>
+                {moduleSubtitle}
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
-      <div className="bg-white border-b sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto flex overflow-x-auto">
-          {[{id:'demo',label:'🎬 開始'},{id:'arch',label:'🏗️ 架構說明'},{id:'keywords',label:'🔑 關鍵字配置'}].map(t => (
-            <button key={t.id} onClick={() => setActiveTab(t.id)} className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap ${activeTab === t.id ? (isSanction ? 'border-orange-500 text-orange-700 bg-orange-50' : 'border-blue-500 text-blue-700 bg-blue-50') : 'border-transparent text-gray-500 hover:text-gray-700'}`}>{t.label}</button>
-          ))}
+      <div className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+        <div className="max-w-6xl mx-auto flex overflow-x-auto px-4">
+          {[
+            { id: 'demo', label: '開始', icon: '🎬' },
+            { id: 'arch', label: '架構說明', icon: '🏗️' },
+            { id: 'keywords', label: '關鍵字配置', icon: '🔑' },
+          ].map(tb => {
+            const isActive = activeTab === tb.id;
+            return (
+              <button
+                key={tb.id}
+                onClick={() => setActiveTab(tb.id)}
+                className={`relative px-4 py-3 text-sm font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+                  isActive
+                    ? isSanction ? 'text-orange-700' : 'text-indigo-700'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <span className="text-base">{tb.icon}</span>
+                {tb.label}
+                {isActive && (
+                  <span className={`absolute bottom-0 left-3 right-3 h-[3px] rounded-t-full ${
+                    isSanction
+                      ? 'bg-gradient-to-r from-orange-400 to-red-500'
+                      : 'bg-gradient-to-r from-blue-400 to-indigo-500'
+                  }`} />
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
       <div className="max-w-6xl mx-auto p-4">
         {activeTab === 'demo' && (
           <div className="space-y-4">
-{/* ★ 簡化版：網頁全文抓取狀態 */}
-<div className="bg-white rounded-xl border shadow-sm p-4">
-  <div className="flex items-center justify-between">
-    <div className="flex items-center gap-2">
-      <Globe className="w-4 h-4 text-teal-600" />
-      <span className="text-sm font-bold text-gray-700">📰 網頁全文抓取</span>
-      <span className="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full border border-green-200">
-        ✅ 已內建
-      </span>
+{/* Worker Status Card - Modern */}
+<div className="bg-white rounded-2xl border border-slate-200 shadow-[0_2px_8px_rgba(15,23,42,0.04)] p-4">
+  <div className="flex items-center justify-between flex-wrap gap-2">
+    <div className="flex items-center gap-3">
+      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-400 to-cyan-600 flex items-center justify-center shadow-md shadow-teal-500/25">
+        <Globe className="w-5 h-5 text-white" strokeWidth={2.2} />
+      </div>
+      <div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-bold text-slate-900">📰 網頁全文抓取</span>
+          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            已內建
+          </span>
+        </div>
+        <p className="text-[11px] text-slate-500 mt-0.5">提升分類準確度 · Cloudflare Worker</p>
+      </div>
     </div>
     <button
       onClick={testWorkerConnection}
-      className="text-xs bg-slate-700 text-white px-3 py-1.5 rounded-lg font-bold hover:bg-slate-600"
+      className="text-xs bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-800 hover:to-slate-900 text-white px-3.5 py-2 rounded-lg font-bold shadow-md shadow-slate-700/20 transition-all"
     >
       🔌 測試連線
     </button>
   </div>
   {workerStatus && (
-    <div className={`mt-2 text-xs rounded-lg p-2 ${
+    <div className={`mt-3 text-xs rounded-xl p-3 border flex items-start gap-2 ${
       workerStatus.startsWith('✅')
-        ? 'text-green-600 bg-green-50'
-        : 'text-red-600 bg-red-50'
+        ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+        : 'text-red-700 bg-red-50 border-red-200'
     }`}>
-      {workerStatus}
+      <span className="text-sm">{workerStatus.startsWith('✅') ? '✓' : '⚠'}</span>
+      <span className="flex-1 font-medium">{workerStatus}</span>
     </div>
   )}
-  <p className="text-xs text-gray-400 mt-2">
-    AI 分析前將自動抓取每個搜尋結果的網頁全文，提升分類準確度。
-  </p>
 </div>
 
 
-            <div className="bg-white rounded-xl border shadow-sm p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <span className={`w-6 h-6 rounded-full ${isSanction ? 'bg-orange-600' : 'bg-blue-600'} text-white text-xs font-bold flex items-center justify-center`}>1</span>
-                <h2 className="text-sm font-bold text-gray-800">執行 Google 搜尋</h2>
-              </div>
-              <div className="flex flex-col sm:flex-row gap-3 mb-3">
-                <div className="flex-1">
-                  <label className="text-xs text-gray-500 mb-1 block">實體名稱</label>
-                  <input type="text" value={searchEntity} onChange={e => setSearchEntity(e.target.value)} maxLength={200} className="w-full border-2 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none" placeholder="輸入英文或中文名稱..." />
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-[0_2px_8px_rgba(15,23,42,0.04)] p-5 transition-all hover:shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
+              {/* Step Header */}
+              <div className="flex items-center gap-3 mb-4">
+                <div className={`relative w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg ${
+                  isSanction 
+                    ? 'bg-gradient-to-br from-orange-500 to-red-600 shadow-orange-500/30' 
+                    : 'bg-gradient-to-br from-blue-500 to-indigo-600 shadow-blue-500/30'
+                }`}>
+                  1
+                  <span className="absolute inset-0 rounded-xl ring-2 ring-white" />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500 mb-1 block">自動檢測語言</label>
-                  <div className="h-10 px-4 rounded-lg border-2 bg-gray-50 flex items-center gap-2">
-                    <Globe className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm font-bold">{searchEntity ? (detectLanguage(searchEntity) === 'zh' ? <span className="text-red-600">🇨🇳 中文</span> : <span className="text-blue-600">🇬🇧 英文</span>) : '請輸入名稱'}</span>
+                  <h2 className="text-sm font-bold text-slate-900 tracking-tight">執行 Google 搜尋</h2>
+                  <p className="text-[11px] text-slate-500 mt-0.5">輸入實體名稱，系統自動建立查詢字串</p>
+                </div>
+              </div>
+
+              {/* Inputs */}
+              <div className="flex flex-col sm:flex-row gap-3 mb-4">
+                <div className="flex-1">
+                  <label className="text-[11px] font-semibold text-slate-600 mb-1.5 block uppercase tracking-wide">實體名稱</label>
+                  <input 
+                    type="text" 
+                    value={searchEntity} 
+                    onChange={e => setSearchEntity(e.target.value)} 
+                    maxLength={200} 
+                    className="w-full border border-slate-200 bg-slate-50 rounded-lg px-3 py-2.5 text-sm focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none transition-all placeholder:text-slate-400" 
+                    placeholder="輸入英文或中文名稱..." 
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-600 mb-1.5 block uppercase tracking-wide">自動檢測語言</label>
+                  <div className="h-[42px] px-4 rounded-lg border border-slate-200 bg-gradient-to-br from-slate-50 to-slate-100 flex items-center gap-2 min-w-[140px]">
+                    <Globe className="w-4 h-4 text-slate-400" />
+                    <span className="text-sm font-bold">
+                      {searchEntity ? (
+                        detectLanguage(searchEntity) === 'zh' 
+                          ? <span className="text-red-600">🇨🇳 中文</span> 
+                          : <span className="text-blue-600">🇬🇧 英文</span>
+                      ) : (
+                        <span className="text-slate-400 font-medium">請輸入名稱</span>
+                      )}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -2013,21 +2234,44 @@ ${pdfParsingNote}`;
                 </div>
               )}
 
-              <div className={`mt-3 ${isSanction ? 'bg-orange-50 border-orange-200' : 'bg-blue-50 border-blue-200'} border rounded-lg p-3 text-xs ${isSanction ? 'text-orange-800' : 'text-blue-800'}`}>
-                <b>📋 操作說明：</b> 點擊「在 Google 開啟搜尋」，確認結果後用 <b>Ctrl+P（Cmd+P）→ 另存為 PDF</b> 儲存第一頁。
+             <div className={`mt-4 rounded-xl p-3 border-l-4 ${
+                isSanction 
+                  ? 'bg-gradient-to-r from-orange-50 to-amber-50 border-l-orange-500 border-y border-r border-orange-200' 
+                  : 'bg-gradient-to-r from-blue-50 to-indigo-50 border-l-blue-500 border-y border-r border-blue-200'
+              }`}>
+                <div className="flex items-start gap-2">
+                  <span className="text-base">📋</span>
+                  <div className={`text-xs ${isSanction ? 'text-orange-900' : 'text-blue-900'}`}>
+                    <b className="font-bold">操作說明：</b> 點擊「在 Google 開啟搜尋」，確認結果後用{' '}
+                    <kbd className="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-white border border-slate-300 shadow-sm font-mono text-[10px]">Ctrl+P</kbd>
+                    或
+                    <kbd className="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-white border border-slate-300 shadow-sm font-mono text-[10px]">Cmd+P</kbd>
+                    {' → '}<b>另存為 PDF</b> 儲存第一頁。
+                  </div>
+                </div>
               </div>
             </div>
             
-            {/* ── 補充辨識資料 ── */}
-         <div className="bg-white rounded-xl border shadow-sm p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <span>📋</span>
-                <h2 className="text-sm font-bold text-gray-800">
-                  {detectedLang === 'zh' ? '補充辨識資料（排除同名不同人）' : 'Supplementary ID Info (Disambiguate)'}
-                </h2>
-                <span className="bg-blue-50 text-blue-600 border border-blue-200 px-2 py-0.5 rounded-full text-xs font-medium">
-                  {detectedLang === 'zh' ? '選填但強烈建議' : 'Optional but recommended'}
-                </span>
+           {/* Supplementary Info Card */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-[0_2px_8px_rgba(15,23,42,0.04)] p-5 transition-all hover:shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
+              <div className="flex items-start gap-3 mb-4 flex-wrap">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-lg shadow-purple-500/25">
+                  <span className="text-white text-base">🪪</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-sm font-bold text-slate-900 tracking-tight">
+                      {detectedLang === 'zh' ? '補充辨識資料' : 'Supplementary ID Info'}
+                    </h2>
+                    <span className="inline-flex items-center gap-1 bg-gradient-to-r from-amber-50 to-orange-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full text-[10px] font-bold">
+                      <span>⚡</span>
+                      {detectedLang === 'zh' ? '強烈建議' : 'Recommended'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    {detectedLang === 'zh' ? '提供更多細節可大幅降低同名誤報率' : 'More details = fewer false positives'}
+                  </p>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -2155,51 +2399,288 @@ ${pdfParsingNote}`;
               </p>
             </div>
 
-            <div className="bg-white rounded-xl border shadow-sm p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <span className={`w-6 h-6 rounded-full ${isSanction ? 'bg-orange-600' : 'bg-blue-600'} text-white text-xs font-bold flex items-center justify-center`}>2</span>
-                <h2 className="text-sm font-bold text-gray-800">上傳搜尋結果 PDF</h2>
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-[0_2px_8px_rgba(15,23,42,0.04)] p-5 transition-all hover:shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
+              {/* Step Header */}
+              <div className="flex items-center gap-3 mb-4">
+                <div className={`relative w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg ${
+                  isSanction 
+                    ? 'bg-gradient-to-br from-orange-500 to-red-600 shadow-orange-500/30' 
+                    : 'bg-gradient-to-br from-blue-500 to-indigo-600 shadow-blue-500/30'
+                }`}>
+                  2
+                  <span className="absolute inset-0 rounded-xl ring-2 ring-white" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900 tracking-tight">上傳搜尋結果 PDF</h2>
+                  <p className="text-[11px] text-slate-500 mt-0.5">將 Google 搜尋頁面儲存為 PDF 後上傳</p>
+                </div>
               </div>
-              <div className="flex flex-col sm:flex-row gap-3 items-start">
+
+              {/* Upload Zone */}
+              <div className="flex flex-col sm:flex-row gap-3 items-stretch">
                 <label className="flex-1 cursor-pointer">
-                  <div className={`border-2 border-dashed rounded-lg p-4 text-center transition ${pdfFile ? 'border-green-400 bg-green-50' : 'border-gray-300 hover:border-blue-400 hover:bg-blue-50'}`}>
-                    {pdfFile ? (<div className="flex items-center justify-center gap-2"><CheckCircle className="w-5 h-5 text-green-500" /><div className="text-left"><div className="text-sm font-bold text-green-700">{pdfFile.name}</div><div className="text-xs text-green-600">{(pdfFile.size / 1024).toFixed(0)} KB · PDF</div></div></div>) : (<div><div className="text-2xl mb-1">📄</div><div className="text-sm font-bold text-gray-600">點擊上傳 PDF</div><div className="text-xs text-gray-400 mt-0.5">支援 Google 搜尋結果頁面 PDF</div></div>)}
+                  <div className={`relative overflow-hidden border-2 border-dashed rounded-2xl p-6 text-center transition-all group ${
+                    pdfFile 
+                      ? 'border-emerald-400 bg-gradient-to-br from-emerald-50 to-teal-50' 
+                      : 'border-slate-300 hover:border-blue-400 bg-gradient-to-br from-slate-50 to-blue-50/30 hover:from-blue-50 hover:to-indigo-50'
+                  }`}>
+                    {pdfFile ? (
+                      <div className="flex items-center justify-center gap-3">
+                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-500/30">
+                          <CheckCircle className="w-6 h-6 text-white" strokeWidth={2.2} />
+                        </div>
+                        <div className="text-left">
+                          <div className="text-sm font-bold text-emerald-700">{pdfFile.name}</div>
+                          <div className="text-[11px] text-emerald-600 mt-0.5 flex items-center gap-1.5">
+                            <span className="inline-block px-1.5 py-0.5 bg-emerald-100 rounded text-[10px] font-bold">PDF</span>
+                            {(pdfFile.size / 1024).toFixed(0)} KB
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="w-14 h-14 mx-auto mb-2 rounded-2xl bg-gradient-to-br from-blue-100 to-indigo-100 flex items-center justify-center text-3xl group-hover:scale-110 transition-transform">📄</div>
+                        <div className="text-sm font-bold text-slate-700 mb-0.5">點擊上傳 PDF</div>
+                        <div className="text-[11px] text-slate-500">支援 Google 搜尋結果頁面 PDF</div>
+                      </div>
+                    )}
                   </div>
                   <input type="file" accept="application/pdf" onChange={handlePdfUpload} className="hidden" />
                 </label>
-                {pdfFile && (<button onClick={() => setPdfFile(null)} className="text-xs text-gray-400 hover:text-red-500 flex items-center gap-1 px-2 py-1 border rounded-lg"><XCircle className="w-3 h-3" /> 移除</button>)}
+                {pdfFile && (
+                  <button 
+                    onClick={() => setPdfFile(null)} 
+                    className="self-stretch sm:self-auto text-xs text-slate-500 hover:text-red-600 hover:bg-red-50 flex items-center gap-1.5 px-4 py-2 border border-slate-200 hover:border-red-200 rounded-xl transition-all font-semibold"
+                  >
+                    <XCircle className="w-4 h-4" /> 移除
+                  </button>
+                )}
               </div>
             </div>
 
-            <div className="bg-white rounded-xl border shadow-sm p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <span className={`w-6 h-6 rounded-full ${isSanction ? 'bg-orange-600' : 'bg-blue-600'} text-white text-xs font-bold flex items-center justify-center`}>3</span>
-                <h2 className="text-sm font-bold text-gray-800">AI 分析{isSanction ? '（制裁名單命中）' : ''}</h2>
-               <span className="text-xs text-teal-600 bg-teal-50 px-2 py-0.5 rounded-full border border-teal-200">📰 將自動抓取網頁全文</span>
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-[0_2px_8px_rgba(15,23,42,0.04)] p-5 transition-all hover:shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
+              {/* Step Header */}
+              <div className="flex items-start gap-3 mb-4 flex-wrap">
+                <div className={`relative w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg ${
+                  isSanction 
+                    ? 'bg-gradient-to-br from-orange-500 to-red-600 shadow-orange-500/30' 
+                    : 'bg-gradient-to-br from-blue-500 to-indigo-600 shadow-blue-500/30'
+                }`}>
+                  3
+                  <span className="absolute inset-0 rounded-xl ring-2 ring-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-sm font-bold text-slate-900 tracking-tight">
+                      AI 分析{isSanction ? '（制裁名單命中）' : ''}
+                    </h2>
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-full">
+                      📰 自動抓取網頁
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">使用 Gemini-3 進行語義分析與分類</p>
+                </div>
               </div>
-              <div className="mb-3">
-                <div className="flex items-center justify-between mb-1"><label className="text-xs text-gray-500">POE API Key</label><button onClick={() => setShowKeyInput(!showKeyInput)} className="text-xs text-blue-500 hover:underline">{showKeyInput ? '隱藏' : '顯示/修改'}</button></div>
-                {showKeyInput ? (<input type="text" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-or-v1-..." className="w-full border-2 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none" />) : (<div className="border-2 rounded-lg px-3 py-2 text-sm text-gray-400 bg-gray-50 font-mono">{apiKey ? `${apiKey.slice(0, 10)}${'•'.repeat(Math.min(20, apiKey.length - 10))}` : '（未設定）'}</div>)}
-                <p className="text-xs text-gray-400 mt-1">使用 <b>Gemini-3-Flash</b>（via Poe API）。<a href="https://poe.com/api_key" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline ml-1">取得 Poe API Key →</a></p>
+
+              {/* API Key Section */}
+              <div className="mb-4 bg-gradient-to-br from-slate-50 to-blue-50/30 rounded-xl p-3 border border-slate-200">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
+                    🔑 POE API Key
+                  </label>
+                  <button 
+                    onClick={() => setShowKeyInput(!showKeyInput)} 
+                    className="text-[11px] text-blue-600 hover:text-blue-700 font-bold hover:underline transition"
+                  >
+                    {showKeyInput ? '🙈 隱藏' : '👁️ 顯示/修改'}
+                  </button>
+                </div>
+                {showKeyInput ? (
+                  <input 
+                    type="text" 
+                    value={apiKey} 
+                    onChange={e => setApiKey(e.target.value)} 
+                    placeholder="sk-or-v1-..." 
+                    className="w-full border border-slate-200 bg-white rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none transition-all" 
+                  />
+                ) : (
+                  <div className="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-400 bg-white font-mono flex items-center gap-2">
+                    {apiKey ? (
+                      <>
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                        <span>{apiKey.slice(0, 10)}{'•'.repeat(Math.min(20, apiKey.length - 10))}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                        <span>（未設定）</span>
+                      </>
+                    )}
+                  </div>
+                )}
+                <p className="text-[10px] text-slate-500 mt-2 flex items-center gap-1 flex-wrap">
+                  <span>使用</span>
+                  <span className="inline-block px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-bold text-[9px]">Gemini-3-Flash</span>
+                  <span>via Poe API</span>
+                  <a href="https://poe.com/api_key" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-700 hover:underline ml-auto font-semibold">
+                    取得 API Key →
+                  </a>
+                </p>
               </div>
-              {errorMsg && (<div className="mb-3 bg-red-50 border border-red-200 rounded-lg p-2.5 text-xs text-red-700 flex items-center gap-2"><AlertTriangle className="w-4 h-4 shrink-0" />{errorMsg}</div>)}
-              <button onClick={runAnalysis} disabled={isAnalyzing || !pdfFile || !searchEntity} className={`w-full ${isSanction ? 'bg-orange-600 hover:bg-orange-700' : 'bg-indigo-600 hover:bg-indigo-700'} text-white py-2.5 rounded-lg text-sm font-bold disabled:opacity-50 flex items-center justify-center gap-2`}>
-                {isAnalyzing ? <><Loader className="w-4 h-4 animate-spin" />AI 分析中...</> : <><Brain className="w-4 h-4" />開始 AI {isSanction ? '制裁篩查' : '分析'}</>}
+
+              {/* Error Message */}
+              {errorMsg && (
+                <div className="mb-3 bg-gradient-to-r from-red-50 to-rose-50 border border-red-200 rounded-xl p-3 text-xs text-red-700 flex items-start gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
+                    <AlertTriangle className="w-4 h-4 text-red-600" />
+                  </div>
+                  <span className="flex-1 font-medium pt-0.5">{errorMsg}</span>
+                </div>
+              )}
+
+              {/* Submit Button */}
+              <button 
+                onClick={runAnalysis} 
+                disabled={isAnalyzing || !pdfFile || !searchEntity} 
+                className={`w-full py-3 rounded-xl text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all shadow-lg ${
+                  isSanction 
+                    ? 'bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white shadow-orange-500/30 hover:shadow-orange-500/50' 
+                    : 'bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-indigo-500/30 hover:shadow-indigo-500/50'
+                }`}
+              >
+                {isAnalyzing 
+                  ? <><Loader className="w-4 h-4 animate-spin" />AI 分析中...</> 
+                  : <><Brain className="w-4 h-4" />開始 AI {isSanction ? '制裁篩查' : '分析'}</>
+                }
               </button>
             </div>
 
-            {isAnalyzing && (<div className={`${isSanction ? 'bg-orange-50' : 'bg-indigo-50'} rounded-lg p-3`}><div className="flex justify-between text-xs mb-1.5"><span className={`${isSanction ? 'text-orange-700' : 'text-indigo-700'} font-medium`}>{stage}</span><span className={isSanction ? 'text-orange-500' : 'text-indigo-500'}>{progress}%</span></div><div className={`h-2 ${isSanction ? 'bg-orange-100' : 'bg-indigo-100'} rounded-full overflow-hidden`}><div className={`h-full ${isSanction ? 'bg-orange-500' : 'bg-indigo-500'} rounded-full transition-all duration-500`} style={{ width: `${progress}%` }} /></div></div>)}
+            {isAnalyzing && (
+              <div className={`relative overflow-hidden rounded-2xl p-4 border ${
+                isSanction 
+                  ? 'bg-gradient-to-r from-orange-50 to-red-50 border-orange-200' 
+                  : 'bg-gradient-to-r from-indigo-50 to-purple-50 border-indigo-200'
+              }`}>
+                <div className="absolute top-0 right-0 w-32 h-32 rounded-full blur-3xl opacity-30" style={{ background: isSanction ? '#f97316' : '#6366f1' }} />
+                <div className="relative">
+                  <div className="flex justify-between items-center mb-2">
+                    <div className="flex items-center gap-2">
+                      <Loader className={`w-4 h-4 animate-spin ${isSanction ? 'text-orange-600' : 'text-indigo-600'}`} />
+                      <span className={`text-xs font-bold ${isSanction ? 'text-orange-700' : 'text-indigo-700'}`}>{stage}</span>
+                    </div>
+                    <span className={`text-base font-black ${isSanction ? 'text-orange-600' : 'text-indigo-600'}`}>
+                      {progress}%
+                    </span>
+                  </div>
+                  <div className="h-2.5 bg-white/70 rounded-full overflow-hidden shadow-inner">
+                    <div 
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        isSanction 
+                          ? 'bg-gradient-to-r from-orange-400 via-orange-500 to-red-500' 
+                          : 'bg-gradient-to-r from-indigo-400 via-indigo-500 to-purple-500'
+                      }`}
+                      style={{ 
+                        width: `${progress}%`,
+                        boxShadow: `0 0 12px ${isSanction ? 'rgba(249,115,22,0.5)' : 'rgba(99,102,241,0.5)'}`,
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
 
             {analysisComplete && (<>
-              <div className="grid grid-cols-5 gap-2">
-                <div className="bg-white rounded-lg border p-3 text-center"><div className="text-xl font-bold text-gray-800">{results.length}</div><div className="text-xs text-gray-500">Total</div></div>
-                {Object.entries(CLS_CONFIG).map(([key, c]) => { const Icon = c.icon; return (<div key={key} className={`${c.bg} rounded-lg border ${c.border} p-3 text-center`}><div className={`text-xl font-bold ${c.text}`}>{counts[key]}</div><div className={`text-xs ${c.text} flex items-center justify-center gap-1`}><Icon className="w-3 h-3" />{detectedLang === 'zh' ? c.labelZh : c.label}</div></div>); })}
+              {/* Statistics Grid - Modern */}
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
+                <div className="bg-white rounded-2xl border border-slate-200 p-3 text-center shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:shadow-[0_4px_16px_rgba(15,23,42,0.08)] transition-all">
+                  <div className="text-2xl font-black text-slate-900 tracking-tight">{results.length}</div>
+                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-0.5">Total</div>
+                </div>
+                {Object.entries(CLS_CONFIG).map(([key, c]) => { 
+                  const Icon = c.icon; 
+                  const colorMap = {
+                    TRUE_HIT: 'from-red-50 to-rose-100 border-red-200 hover:shadow-red-200/50',
+                    POSSIBLE_HIT: 'from-purple-50 to-violet-100 border-purple-200 hover:shadow-purple-200/50',
+                    FALSE_HIT: 'from-amber-50 to-orange-100 border-amber-200 hover:shadow-amber-200/50',
+                    IRRELEVANT_MLTF: 'from-slate-50 to-slate-100 border-slate-200 hover:shadow-slate-200/50',
+                    NO_HIT: 'from-emerald-50 to-teal-100 border-emerald-200 hover:shadow-emerald-200/50',
+                  };
+                  return (
+                    <div key={key} className={`bg-gradient-to-br ${colorMap[key]} rounded-2xl border p-3 text-center shadow-sm hover:shadow-md transition-all`}>
+                      <div className={`text-2xl font-black ${c.text} tracking-tight`}>{counts[key]}</div>
+                      <div className={`text-[10px] ${c.text} font-bold uppercase tracking-wider mt-0.5 flex items-center justify-center gap-1`}>
+                        <Icon className="w-3 h-3" />
+                        <span className="truncate">{detectedLang === 'zh' ? c.labelZh : c.label}</span>
+                      </div>
+                    </div>
+                  ); 
+                })}
               </div>
-              <div className={`${counts.TRUE_HIT > 0 ? 'bg-red-600' : counts.POSSIBLE_HIT > 0 ? 'bg-purple-600' : 'bg-green-600'} rounded-lg p-3 text-white flex items-center justify-between`}>
-  <div className="flex items-center gap-2"><Shield className="w-5 h-5" /><span className="font-bold text-sm">{riskLabel}</span><span className="text-lg font-black">{counts.TRUE_HIT > 0 ? 'HIGH RISK' : counts.POSSIBLE_HIT > 0 ? 'REVIEW NEEDED' : 'LOW RISK'}</span></div>
-                <span className="text-xs opacity-80">{counts.TRUE_HIT > 0 ? riskDescHigh : riskDescLow}</span>
+
+              {/* Risk Assessment Banner - Bold */}
+              <div className={`relative overflow-hidden rounded-2xl p-4 text-white shadow-lg ${
+                counts.TRUE_HIT > 0 
+                  ? 'bg-gradient-to-r from-red-500 via-red-600 to-rose-700 shadow-red-500/30' 
+                  : counts.POSSIBLE_HIT > 0 
+                    ? 'bg-gradient-to-r from-purple-500 via-purple-600 to-violet-700 shadow-purple-500/30' 
+                    : 'bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-700 shadow-emerald-500/30'
+              }`}>
+                <div className="absolute -top-8 -right-8 w-32 h-32 bg-white/10 rounded-full blur-3xl" />
+                <div className="absolute -bottom-8 -left-8 w-32 h-32 bg-black/10 rounded-full blur-3xl" />
+                <div className="relative flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center">
+                      <Shield className="w-6 h-6" strokeWidth={2.5} />
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-bold uppercase tracking-widest opacity-80">{riskLabel}</div>
+                      <div className="text-xl font-black tracking-tight">
+                        {counts.TRUE_HIT > 0 ? '🚨 HIGH RISK' : counts.POSSIBLE_HIT > 0 ? '⚠️ REVIEW NEEDED' : '✅ LOW RISK'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-xs opacity-90 max-w-xs text-right">
+                    {counts.TRUE_HIT > 0 ? riskDescHigh : riskDescLow}
+                  </div>
+                </div>
               </div>
-              <div className="flex gap-1.5 flex-wrap">{[{ k: 'ALL', l: `全部 (${results.length})` }, ...Object.entries(CLS_CONFIG).map(([k, c]) => ({ k, l: `${detectedLang === 'zh' ? c.labelZh : c.label} (${counts[k]})` }))].map(f => (<button key={f.k} onClick={() => setFilterType(f.k)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition border ${filterType === f.k ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>{f.l}</button>))}</div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-2 shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
+                <div className="flex gap-1 flex-wrap">
+                  {[
+                    { k: 'ALL', l: `全部`, count: results.length, color: 'slate' },
+                    ...Object.entries(CLS_CONFIG).map(([k, c]) => ({ 
+                      k, 
+                      l: detectedLang === 'zh' ? c.labelZh : c.label, 
+                      count: counts[k],
+                      color: k === 'TRUE_HIT' ? 'red' : k === 'POSSIBLE_HIT' ? 'purple' : k === 'FALSE_HIT' ? 'amber' : k === 'IRRELEVANT_MLTF' ? 'slate' : 'emerald'
+                    }))
+                  ].map(f => {
+                    const isActive = filterType === f.k;
+                    return (
+                      <button 
+                        key={f.k} 
+                        onClick={() => setFilterType(f.k)} 
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                          isActive 
+                            ? f.color === 'red' ? 'bg-gradient-to-r from-red-500 to-rose-600 text-white shadow-md shadow-red-500/30'
+                            : f.color === 'purple' ? 'bg-gradient-to-r from-purple-500 to-violet-600 text-white shadow-md shadow-purple-500/30'
+                            : f.color === 'amber' ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-md shadow-amber-500/30'
+                            : f.color === 'emerald' ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/30'
+                            : 'bg-gradient-to-r from-slate-700 to-slate-800 text-white shadow-md shadow-slate-700/30'
+                            : 'text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        {f.l}
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-black ${
+                          isActive ? 'bg-white/25' : 'bg-slate-200 text-slate-700'
+                        }`}>
+                          {f.count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               <div className="space-y-2">{filteredResults.length === 0 ? <div className="text-center py-8 text-sm text-gray-400">無結果</div> : filteredResults.map(r => <ResultCard key={r.rank} r={r} />)}</div>
               <button onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); }} className="w-full py-2 rounded-lg text-xs text-gray-500 border border-dashed hover:border-gray-400 hover:text-gray-700">🔄 重新分析（清除結果)
                   </button>         
@@ -2239,18 +2720,54 @@ ${pdfParsingNote}`;
 
         {activeTab === 'arch' && (
           <div className="space-y-4">
-            <div className="bg-white rounded-xl border shadow-sm p-5">
-              <h2 className="text-sm font-bold text-gray-800 mb-4">🔄 {isSanction ? '制裁篩查' : '搜尋'}流程（含網頁全文抓取）</h2>
-              {[
-                { n: 1, icon: '📝', t: '輸入實體名稱', d: `系統自動生成 ${isSanction ? '制裁篩查' : 'Google'} 搜尋查詢字串` },
-                { n: 2, icon: '🔍', t: '執行 Google 搜尋', d: '點擊連結在 Google 搜尋，確認搜尋結果' },
-                { n: 3, icon: '📄', t: '儲存為 PDF', d: '使用 Ctrl+P → 另存為 PDF' },
-                { n: 4, icon: '⬆️', t: '上傳 PDF', d: '在步驟 2 上傳剛儲存的 PDF 文件' },
-                { n: 5, icon: '📰', t: '網頁全文抓取（自動）', d: '若已設定 Worker，系統自動從 PDF 中提取外部 URL，透過 /api/scrape 抓取每個網頁的實際內容' },
-                { n: 6, icon: '🤖', t: `AI 分析（${isSanction ? '制裁名單命中' : '基於全文'}）`, d: isSanction ? '將 PDF snippet + 網頁全文合併，AI 基於完整內容判斷是否命中制裁名單' : '將 PDF snippet + 網頁全文合併為 enrichedContent，AI 基於完整內容分析分類' },
-                { n: 7, icon: '🛡️', t: '後處理自動降級', d: '信心度 < 75% 或無匹配關鍵字的 TRUE_HIT 自動降為 IRRELEVANT_MLTF' },
-                { n: 8, icon: '📊', t: '顯示分類結果', d: '按 True Hit / False Hit / Irrelevant / No Hit 分類展示' }
-              ].map(s => (<div key={s.n} className="flex items-start gap-3 pb-3 mb-3 border-b last:border-0"><div className={`w-8 h-8 rounded-lg ${isSanction ? 'bg-orange-100 text-orange-700' : 'bg-indigo-100 text-indigo-700'} flex items-center justify-center text-sm font-bold shrink-0`}>{s.n}</div><div><div className="flex items-center gap-1.5"><span>{s.icon}</span><span className="font-bold text-gray-800 text-sm">{s.t}</span></div><p className="text-xs text-gray-600 mt-0.5">{s.d}</p></div></div>))}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-[0_2px_8px_rgba(15,23,42,0.04)] p-6">
+              <div className="mb-5">
+                <h2 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                  🔄 {isSanction ? '制裁篩查' : '搜尋'}流程
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">含網頁全文抓取 · 8 步驟完整流程</p>
+              </div>
+              
+              {/* Timeline */}
+              <div className="relative">
+                {/* Vertical Line */}
+                <div className={`absolute left-[19px] top-2 bottom-2 w-0.5 ${
+                  isSanction ? 'bg-gradient-to-b from-orange-300 via-red-300 to-rose-200' : 'bg-gradient-to-b from-blue-300 via-indigo-300 to-purple-200'
+                }`} />
+                
+                {[
+                  { n: 1, icon: '📝', t: '輸入實體名稱', d: `系統自動生成 ${isSanction ? '制裁篩查' : 'Google'} 搜尋查詢字串` },
+                  { n: 2, icon: '🔍', t: '執行 Google 搜尋', d: '點擊連結在 Google 搜尋，確認搜尋結果' },
+                  { n: 3, icon: '📄', t: '儲存為 PDF', d: '使用 Ctrl+P → 另存為 PDF' },
+                  { n: 4, icon: '⬆️', t: '上傳 PDF', d: '在步驟 2 上傳剛儲存的 PDF 文件' },
+                  { n: 5, icon: '📰', t: '網頁全文抓取（自動）', d: '系統自動從 PDF 中提取外部 URL，透過 /api/scrape 抓取每個網頁的實際內容' },
+                  { n: 6, icon: '🤖', t: `AI 分析（${isSanction ? '制裁名單命中' : '基於全文'}）`, d: isSanction ? '將 PDF snippet + 網頁全文合併，AI 基於完整內容判斷是否命中制裁名單' : '將 PDF snippet + 網頁全文合併為 enrichedContent，AI 基於完整內容分析分類' },
+                  { n: 7, icon: '🛡️', t: '後處理自動降級', d: '信心度 < 75% 或無匹配關鍵字的 TRUE_HIT 自動降為 IRRELEVANT_MLTF' },
+                  { n: 8, icon: '📊', t: '顯示分類結果', d: '按 True Hit / False Hit / Irrelevant / No Hit 分類展示' },
+                ].map(s => (
+                  <div key={s.n} className="relative flex items-start gap-4 pb-5 last:pb-0">
+                    <div className={`relative shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-sm shadow-lg z-10 ${
+                      isSanction 
+                        ? 'bg-gradient-to-br from-orange-500 to-red-600 shadow-orange-500/30' 
+                        : 'bg-gradient-to-br from-blue-500 to-indigo-600 shadow-indigo-500/30'
+                    }`}>
+                      {s.n}
+                      <span className="absolute inset-0 rounded-xl ring-2 ring-white" />
+                    </div>
+                    <div className={`flex-1 rounded-xl p-3 border transition-all hover:shadow-md ${
+                      isSanction 
+                        ? 'bg-gradient-to-br from-orange-50/50 to-red-50/50 border-orange-100 hover:border-orange-200' 
+                        : 'bg-gradient-to-br from-blue-50/50 to-indigo-50/50 border-blue-100 hover:border-blue-200'
+                    }`}>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-base">{s.icon}</span>
+                        <span className="font-bold text-slate-900 text-sm">{s.t}</span>
+                      </div>
+                      <p className="text-xs text-slate-600 leading-relaxed">{s.d}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -2258,84 +2775,147 @@ ${pdfParsingNote}`;
           {activeTab === 'keywords' && (
           <div className="space-y-4">
             {isSanction ? (
-              /* ── 制裁篩查：3 Parts × 3 Languages ── */
               <>
                 {['part1', 'part2', 'part3'].map((p, idx) => {
-                  const en  = [SANCTION_EN_PART1, SANCTION_EN_PART2, SANCTION_EN_PART3][idx];
-                  const tw  = [SANCTION_ZH_TW_PART1, SANCTION_ZH_TW_PART2, SANCTION_ZH_TW_PART3][idx];
-                  const cn  = [SANCTION_ZH_CN_PART1, SANCTION_ZH_CN_PART2, SANCTION_ZH_CN_PART3][idx];
+                  const en = [SANCTION_EN_PART1, SANCTION_EN_PART2, SANCTION_EN_PART3][idx];
+                  const tw = [SANCTION_ZH_TW_PART1, SANCTION_ZH_TW_PART2, SANCTION_ZH_TW_PART3][idx];
+                  const cn = [SANCTION_ZH_CN_PART1, SANCTION_ZH_CN_PART2, SANCTION_ZH_CN_PART3][idx];
+                  const partColors = [
+                    { bg: 'from-red-500 to-rose-600', text: 'text-red-700', cardBg: 'from-red-50/30 to-rose-50/30' },
+                    { bg: 'from-orange-500 to-amber-600', text: 'text-orange-700', cardBg: 'from-orange-50/30 to-amber-50/30' },
+                    { bg: 'from-yellow-500 to-orange-500', text: 'text-yellow-700', cardBg: 'from-yellow-50/30 to-orange-50/30' },
+                  ][idx];
                   return (
-                    <div key={p} className="bg-white rounded-xl border shadow-sm p-5">
-                      <h2 className="text-sm font-bold text-orange-700 mb-3">
-                        Part {idx + 1} — {en.length} countries
-                      </h2>
+                    <div key={p} className={`bg-gradient-to-br ${partColors.cardBg} rounded-2xl border border-slate-200 shadow-[0_2px_8px_rgba(15,23,42,0.04)] p-5`}>
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${partColors.bg} flex items-center justify-center text-white font-black shadow-lg`}>
+                          {idx + 1}
+                        </div>
+                        <div>
+                          <h2 className="text-sm font-bold text-slate-900 tracking-tight">Part {idx + 1}</h2>
+                          <p className="text-[11px] text-slate-500">{en.length} countries · 3 languages</p>
+                        </div>
+                      </div>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <div>
-                          <h3 className="text-xs font-bold text-blue-700 mb-2">🇬🇧 English</h3>
-                          <div className="flex flex-wrap gap-1.5">
-                            {en.map((kw, i) => (
-                              <span key={i} className="bg-orange-50 text-orange-700 border-orange-200 border px-2 py-1 rounded-lg text-xs">{kw}</span>
-                            ))}
+                        {[
+                          { lang: '🇬🇧 English', list: en, color: 'blue', count: en.length },
+                          { lang: '🇹🇼 繁體中文', list: tw, color: 'red', count: tw.length },
+                          { lang: '🇨🇳 简体中文', list: cn, color: 'emerald', count: cn.length },
+                        ].map(group => (
+                          <div key={group.lang} className="bg-white rounded-xl border border-slate-200 p-3">
+                            <div className="flex items-center justify-between mb-2 pb-2 border-b border-slate-100">
+                              <h3 className="text-xs font-bold text-slate-700">{group.lang}</h3>
+                              <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-md ${
+                                group.color === 'blue' ? 'bg-blue-100 text-blue-700' :
+                                group.color === 'red' ? 'bg-red-100 text-red-700' :
+                                'bg-emerald-100 text-emerald-700'
+                              }`}>
+                                {group.count}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {group.list.map((kw, i) => (
+                                <span 
+                                  key={i} 
+                                  className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border ${
+                                    group.color === 'blue' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                                    group.color === 'red' ? 'bg-red-50 text-red-700 border-red-200' :
+                                    'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  }`}
+                                >
+                                  {kw}
+                                </span>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                        <div>
-                          <h3 className="text-xs font-bold text-red-700 mb-2">🇹🇼 繁體中文</h3>
-                          <div className="flex flex-wrap gap-1.5">
-                            {tw.map((kw, i) => (
-                              <span key={i} className="bg-red-50 text-red-700 border-red-200 border px-2 py-1 rounded-lg text-xs">{kw}</span>
-                            ))}
-                          </div>
-                        </div>
-                        <div>
-                          <h3 className="text-xs font-bold text-green-700 mb-2">🇨🇳 简体中文</h3>
-                          <div className="flex flex-wrap gap-1.5">
-                            {cn.map((kw, i) => (
-                              <span key={i} className="bg-green-50 text-green-700 border-green-200 border px-2 py-1 rounded-lg text-xs">{kw}</span>
-                            ))}
-                          </div>
-                        </div>
+                        ))}
                       </div>
                     </div>
                   );
                 })}
-                <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-xs text-orange-700">
-                  📊 <b>合計：</b>
-                  Part 1 = {SANCTION_EN_PART1.length} | 
-                  Part 2 = {SANCTION_EN_PART2.length} | 
-                  Part 3 = {SANCTION_EN_PART3.length} | 
-                  <b>Total = {SANCTION_EN_PART1.length + SANCTION_EN_PART2.length + SANCTION_EN_PART3.length} countries</b>
+                <div className="bg-gradient-to-r from-orange-500 to-red-600 rounded-2xl p-4 text-white shadow-lg shadow-orange-500/30">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center">📊</div>
+                    <div className="flex-1 flex flex-wrap gap-3 text-xs">
+                      <div>
+                        <div className="text-[10px] uppercase tracking-wider opacity-75">Part 1</div>
+                        <div className="text-base font-black">{SANCTION_EN_PART1.length}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase tracking-wider opacity-75">Part 2</div>
+                        <div className="text-base font-black">{SANCTION_EN_PART2.length}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase tracking-wider opacity-75">Part 3</div>
+                        <div className="text-base font-black">{SANCTION_EN_PART3.length}</div>
+                      </div>
+                      <div className="ml-auto pl-3 border-l border-white/30">
+                        <div className="text-[10px] uppercase tracking-wider opacity-75">Total</div>
+                        <div className="text-xl font-black">
+                          {SANCTION_EN_PART1.length + SANCTION_EN_PART2.length + SANCTION_EN_PART3.length}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </>
             ) : (
-              /* ── Adverse Media：原有關鍵字顯示 ── */
-              <div className="bg-white rounded-xl border shadow-sm p-5">
-                <h2 className="text-sm font-bold text-gray-800 mb-2">🔑 搜尋關鍵字</h2>
-                <div className="grid grid-cols-2 gap-4">
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-[0_2px_8px_rgba(15,23,42,0.04)] p-5">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+                    <span className="text-white text-base">🔑</span>
+                  </div>
                   <div>
-                    <h3 className="text-sm font-bold text-blue-700 mb-2">🇬🇧 English Keywords ({EN_KEYWORDS.length})</h3>
+                    <h2 className="text-sm font-bold text-slate-900 tracking-tight">搜尋關鍵字</h2>
+                    <p className="text-[11px] text-slate-500">EN + ZH 雙語 · 自動偵測</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="bg-gradient-to-br from-blue-50/50 to-indigo-50/50 rounded-xl border border-blue-100 p-4">
+                    <div className="flex items-center justify-between mb-3 pb-2 border-b border-blue-100">
+                      <h3 className="text-sm font-bold text-blue-700">🇬🇧 English Keywords</h3>
+                      <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-blue-500 text-white">
+                        {EN_KEYWORDS.length}
+                      </span>
+                    </div>
                     <div className="flex flex-wrap gap-1.5">
                       {EN_KEYWORDS.map((kw, i) => (
-                        <span key={i} className="bg-blue-50 text-blue-700 border-blue-200 border px-2 py-1 rounded-lg text-xs">{kw}</span>
+                        <span 
+                          key={i} 
+                          className="bg-white text-blue-700 border border-blue-200 px-2 py-1 rounded-md text-[11px] font-semibold shadow-sm hover:shadow-md transition-all"
+                        >
+                          {kw}
+                        </span>
                       ))}
                     </div>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-red-700 mb-2">🇨🇳 中文關鍵字 ({ZH_KEYWORDS.length})</h3>
+                  <div className="bg-gradient-to-br from-red-50/50 to-rose-50/50 rounded-xl border border-red-100 p-4">
+                    <div className="flex items-center justify-between mb-3 pb-2 border-b border-red-100">
+                      <h3 className="text-sm font-bold text-red-700">🇨🇳 中文關鍵字</h3>
+                      <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-red-500 text-white">
+                        {ZH_KEYWORDS.length}
+                      </span>
+                    </div>
                     <div className="flex flex-wrap gap-1.5">
                       {ZH_KEYWORDS.map((kw, i) => (
-                        <span key={i} className="bg-red-50 text-red-700 border-red-200 border px-2 py-1 rounded-lg text-xs">{kw}</span>
+                        <span 
+                          key={i} 
+                          className="bg-white text-red-700 border border-red-200 px-2 py-1 rounded-md text-[11px] font-semibold shadow-sm hover:shadow-md transition-all"
+                        >
+                          {kw}
+                        </span>
                       ))}
                     </div>
                   </div>
                 </div>
               </div>
-              )}          
-          </div>        
-        )}              
+            )}
+          </div>
+        )}
       </div>
-    </div> 
-    );                                     
-}       
+    </div>
+    );
+}
 /* ── Wrapper Components（保持 API 不變）── */
 function AdverseMediaScreening({ entityName, onFlagSTR }) {
   return <ScreeningModule entityName={entityName} mode="adverseMedia" onFlagSTR={onFlagSTR} />;
