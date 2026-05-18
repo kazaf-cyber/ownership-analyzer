@@ -841,7 +841,8 @@ function buildSanctionQueryForPart(entityName, part) {
   const lang = detectLanguageDetail(entityName);
   const kws = getSanctionKeywordsByPart(lang)[part];
   const kString = kws.map(k => `"${k}"`).join(' OR ');
-  return { query: `"${entityName}" (${kString})`, detectedLang: lang, keywords: kws };
+  // ★ 新格式：實體名稱在前 + 關鍵字在後（OR 連接，無外層括號）
+  return { query: `"${entityName}" ${kString}`, detectedLang: lang, keywords: kws };
 }
 
 /* ── 保留舊 API（合併全部 Parts，供 Mock / 向下相容）── */
@@ -850,7 +851,8 @@ function buildSanctionQueryAuto(entityName) {
   const all = getSanctionKeywordsByPart(lang);
   const keywords = [...all.part1, ...all.part2, ...all.part3];
   const kString = keywords.map(k => `"${k}"`).join(' OR ');
-  return { query: `"${entityName}" (${kString})`, detectedLang: lang === 'zh_cn' ? 'zh' : lang === 'zh_tw' ? 'zh' : 'en', keywords };
+  // ★ 新格式：實體名稱在前 + 關鍵字在後（OR 連接，無外層括號）
+  return { query: `"${entityName}" ${kString}`, detectedLang: lang === 'zh_cn' ? 'zh' : lang === 'zh_tw' ? 'zh' : 'en', keywords };
 }
 
 const SANCTION_MOCK_EN = [
