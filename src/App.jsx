@@ -732,7 +732,8 @@ function buildQueryAuto(entityName) {
   const detectedLang = detectLanguage(entityName);
   const keywords = detectedLang === 'zh' ? ZH_KEYWORDS : EN_KEYWORDS;
   const keywordString = keywords.map(k => `"${k}"`).join(' OR ');
-  const query = `"${entityName}" (${keywordString})`;
+  // ★ 新格式：實體名稱在前 + 關鍵字在後（OR 連接，無外層括號）
+  const query = `"${entityName}" ${keywordString}`;
   return { query, detectedLang, keywords };
 }
 
