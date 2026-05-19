@@ -1676,7 +1676,7 @@ ${pdfParsingNote}`;
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
         body: JSON.stringify({
-          model: 'gemini-3.1-pro',
+          model: 'gpt-5.5',
           messages: [
             { role: 'system', content: buildSystemPrompt() },
             { role: 'user', content: fullPrompt }
@@ -2523,7 +2523,7 @@ const ResultCard = ({ r }) => {
                 )}
                 <p className="text-[10px] text-slate-500 mt-2 flex items-center gap-1 flex-wrap">
                   <span>使用</span>
-                  <span className="inline-block px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-bold text-[9px]">Gemini-3-Flash</span>
+                  <span className="inline-block px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-bold text-[9px]">Gemini-3.1 pro</span>
                   <span>via Poe API</span>
                   <a href="https://poe.com/api_key" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-700 hover:underline ml-auto font-semibold">
                     取得 API Key →
