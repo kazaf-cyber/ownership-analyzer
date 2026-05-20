@@ -1337,7 +1337,7 @@ const testWorkerConnection = async () => {
   };
 
   /* ── 生成 AI Prompt（制裁篩查 vs 不良媒體各自不同）── */
-    const buildAIPrompt = (searchEntityName, enrichedContent, resultCount, hasPageContent, lang, entityContext) => {
+    const buildAIPrompt = (searchEntityName, enrichedContent, resultCount, hasPageContent, lang, entityContext, resultUrls = []) => {
 
    const pdfCleaningNote = `
 ═══════════════════════════════════════════════════════════
@@ -1846,13 +1846,15 @@ You are a precision instrument, not a coverage maximizer. Conservative, defensib
       if (!pdfText.trim()) throw new Error('PDF 無法提取文字（可能是掃描圖片格式）');
 
       /* ★ 修正 2：清理 Google PDF 噪音（AI 概覽、UI 元素、引號搜尋等） */
-      pdfText = cleanGooglePdfText(pdfText);
-      /* ★ 修正 2.5:Pre-extract URL anchors as ground truth */
+      /* ★ 修正 2:清理 Google PDF 噪音(AI 概覽、UI 元素、引號搜尋等) */
+pdfText = cleanGooglePdfText(pdfText);
+
+/* ★ 修正 2.5:Pre-extract URL anchors as ground truth */
 const urlAnchorPattern = /https?:\/\/[^\s)>\]"'›]+/g;
 const allUrlsRaw = pdfText.match(urlAnchorPattern) || [];
 const resultUrls = [...new Set(
   allUrlsRaw
-    .map(u => u.replace(/[.,;:!?)\]>'"]+$/, '')) // 移除尾部標點
+    .map(u => u.replace(/[.,;:!?)\]>'"]+$/, ''))
     .filter(u =>
       !u.includes('google.com/search') &&
       !u.includes('googleapis.com') &&
@@ -1862,38 +1864,38 @@ const resultUrls = [...new Set(
       !u.includes('translate.google') &&
       !u.includes('support.google') &&
       !u.includes('policies.google') &&
-      u.length > 15 // 過濾過短的偽 URL
+      u.length > 15
     )
 )];
 
 console.log(`🔗 Pre-extracted ${resultUrls.length} URL anchors:`, resultUrls);
 
-      let enrichedContent = pdfText;
-      let scrapedCount = 0;
-      {
-        setProgress(30); setStage('正在抓取搜尋結果網頁內容...');
-        const urls = extractUrlsFromPdf(pdfText);
-        if (urls.length > 0) {
-          const pageResults = await Promise.allSettled(urls.map(url => fetchPageContent(url)));
-          const enrichments = urls.map((url, i) => {
-            const result = pageResults[i];
-            const text = result.status === 'fulfilled' ? result.value : null;
-            if (text) scrapedCount++;
-            return text ? `\n--- PAGE CONTENT: ${url} ---\n${text}\n--- END ---` : '';
-          }).filter(Boolean).join('\n');
-          if (enrichments) enrichedContent = pdfText + '\n\n=== FULL PAGE CONTENTS ===\n' + enrichments;
-        }
-      }
+let enrichedContent = pdfText;
+let scrapedCount = 0;
+{
+  setProgress(30); setStage('正在抓取搜尋結果網頁內容...');
+  const urls = extractUrlsFromPdf(pdfText);
+  if (urls.length > 0) {
+    const pageResults = await Promise.allSettled(urls.map(url => fetchPageContent(url)));
+    const enrichments = urls.map((url, i) => {
+      const result = pageResults[i];
+      const text = result.status === 'fulfilled' ? result.value : null;
+      if (text) scrapedCount++;
+      return text ? `\n--- PAGE CONTENT: ${url} ---\n${text}\n--- END ---` : '';
+    }).filter(Boolean).join('\n');
+    if (enrichments) enrichedContent = pdfText + '\n\n=== FULL PAGE CONTENTS ===\n' + enrichments;
+  }
+}
 
-      setProgress(45); setStage('Poe AI 分析中...');
+setProgress(45); setStage('Poe AI 分析中...');
 
-      /* ★ 修正 3：resultCount 只計算外部 URL，且限制在合理範圍 */
-      const externalUrlCount = (pdfText.match(/https?:\/\/(?!www\.google|google\.com|googleapis|gstatic|schema\.org|accounts\.google)[^\s)>\]"']+/g) || []).length;
-      const resultCount = Math.max(Math.min(externalUrlCount, 20), 10);
+/* ★ 用真實的 resultUrls 數量,移除舊的 externalUrlCount 計算 */
+const resultCount = resultUrls.length > 0 ? resultUrls.length : 10;
 
-      const hasPageContent = scrapedCount > 0;
+const hasPageContent = scrapedCount > 0;
 
-      const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, hasPageContent, lang, entityContext, resultUrls);
+/* ★ 必須傳入 resultUrls 作為第 7 個參數 */
+const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, hasPageContent, lang, entityContext, resultUrls);
 
       const res = await fetch('https://api.poe.com/v1/chat/completions', {
         method: 'POST',
