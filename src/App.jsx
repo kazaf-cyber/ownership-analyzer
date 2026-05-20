@@ -1423,6 +1423,59 @@ Some results may appear with only [Source + URL + Title] and no snippet
 ═══════════════════════════════════════════════════════════
 `;
 
+
+const urlAnchorBlock = resultUrls.length > 0 ? `
+═══════════════════════════════════════════════════════════
+🎯 PRE-EXTRACTED URL ANCHORS — AUTHORITATIVE GROUND TRUTH
+═══════════════════════════════════════════════════════════
+
+The system has automatically scanned the PDF and detected EXACTLY 
+${resultUrls.length} unique search result URLs:
+
+${resultUrls.map((u, i) => `  [${String(i+1).padStart(2, '0')}] ${u}`).join('\n')}
+
+🚨🚨🚨 MANDATORY OUTPUT CONTRACT 🚨🚨🚨
+
+  Your JSON array MUST contain EXACTLY ${resultUrls.length} items.
+  Each item corresponds to ONE URL above. No more. No less.
+
+  If your output has fewer than ${resultUrls.length} items → WRONG.
+  If your output has more  than ${resultUrls.length} items → WRONG.
+
+📖 HOW TO USE THESE ANCHORS
+
+For each URL, locate it in the PDF text, then gather its content:
+  • SOURCE NAME → typically 1-2 lines IMMEDIATELY ABOVE the URL
+  • TITLE       → typically the line(s) IMMEDIATELY BELOW the URL
+                  (often blue, often ends with "...")
+  • SNIPPET     → typically the descriptive prose further below the title
+                  (may contain dates, authors, "由 X 著作", etc.)
+
+⚠️ TEXT ORDER ANOMALIES (CRITICAL)
+
+PDF text extraction sometimes places content OUT OF VISUAL ORDER:
+  • A snippet may appear BEFORE its corresponding title
+  • A snippet may appear BEFORE the URL anchor itself
+  • Two consecutive snippets may belong to two DIFFERENT results
+
+Strategy: Always trust the URL anchor list above as your skeleton.
+Walk OUT from each URL (both up and down) to find its content.
+
+⚠️ SPLIT RESULTS ACROSS PAGE BREAKS
+
+If a URL appears on page 1 but its snippet appears on page 2 
+(after "--- PAGE BREAK ---"), they still belong to the SAME result.
+Merge them into one JSON item.
+
+⚠️ IF YOU CAN'T FIND CONTENT FOR A URL
+
+Still output the result. Use the URL itself or domain as the source,
+and put "(Content not clearly extractable)" in the snippet.
+NEVER skip a URL just because its content is hard to parse.
+
+═══════════════════════════════════════════════════════════
+` : '';
+
     const reminderText = `REMINDER: Identify and output ALL distinct search results from the PDF content.
 
 ⚠️ EXPECTED COUNT: Approximately ${resultCount} items in TOTAL across ALL PDF pages.
@@ -1627,6 +1680,7 @@ ${taskLine}
 ENTITY UNDER SCREENING: "${searchEntityName}"
 ═══════════════════════════════════════════
 ${identityBlock}
+${urlAnchorBlock} 
 ${pdfCleaningNote}
 ${dataSourceNote}
 ${moduleSpecificScopeNote}
@@ -1793,6 +1847,26 @@ You are a precision instrument, not a coverage maximizer. Conservative, defensib
 
       /* ★ 修正 2：清理 Google PDF 噪音（AI 概覽、UI 元素、引號搜尋等） */
       pdfText = cleanGooglePdfText(pdfText);
+      /* ★ 修正 2.5:Pre-extract URL anchors as ground truth */
+const urlAnchorPattern = /https?:\/\/[^\s)>\]"'›]+/g;
+const allUrlsRaw = pdfText.match(urlAnchorPattern) || [];
+const resultUrls = [...new Set(
+  allUrlsRaw
+    .map(u => u.replace(/[.,;:!?)\]>'"]+$/, '')) // 移除尾部標點
+    .filter(u =>
+      !u.includes('google.com/search') &&
+      !u.includes('googleapis.com') &&
+      !u.includes('gstatic.com') &&
+      !u.includes('accounts.google') &&
+      !u.includes('schema.org') &&
+      !u.includes('translate.google') &&
+      !u.includes('support.google') &&
+      !u.includes('policies.google') &&
+      u.length > 15 // 過濾過短的偽 URL
+    )
+)];
+
+console.log(`🔗 Pre-extracted ${resultUrls.length} URL anchors:`, resultUrls);
 
       let enrichedContent = pdfText;
       let scrapedCount = 0;
@@ -1819,7 +1893,7 @@ You are a precision instrument, not a coverage maximizer. Conservative, defensib
 
       const hasPageContent = scrapedCount > 0;
 
-      const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, hasPageContent, lang, entityContext);
+      const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, hasPageContent, lang, entityContext, resultUrls);
 
       const res = await fetch('https://api.poe.com/v1/chat/completions', {
         method: 'POST',
