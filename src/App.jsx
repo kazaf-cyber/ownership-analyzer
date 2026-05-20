@@ -905,7 +905,6 @@ function cleanGooglePdfText(rawText) {
     /About\s+Send feedback\s+Privacy\s+Terms/gi,
     /超過\s*\d+\s*個追蹤者/g,
     /\d+\s*則回應\s*·\s*\d+\s*年前/g,
-    /--- PAGE BREAK ---/g,
     /\d+\s*\u2A2F?\s*(下一頁|Next)/g,
   ];
   for (const pattern of uiNoisePatterns) {
@@ -1346,20 +1345,48 @@ const testWorkerConnection = async () => {
 ═══════════════════════════════════════════
 1. IGNORE any "AI Overview" or "AI 概覽" section — these are Google's auto-generated summaries, NOT search results.
 2. IGNORE Google UI elements: navigation bars, "顯示更多", "翻譯這個網頁", page numbers, footer text.
-3. The PDF may contain TWO searches:
-   - A quoted search (e.g., "ENTITY NAME" + keywords) that returned NO results — SKIP this entirely.
-   - An unquoted search (entity name + keywords without quotes) that returned actual results — ONLY analyze these.
-4. Each REAL search result has this pattern:
+
+3. ⚠️ CRITICAL — PDF PAGINATION RULE:
+   A SINGLE Google search of 10 results is OFTEN split across 2 OR MORE PDF pages
+   (because the browser's "Print to PDF" wraps content when it doesn't fit on one paper).
+   
+   "--- PAGE BREAK ---" markers indicate PDF paper boundaries — but the SAME search continues.
+   
+   ⚠️ YOU MUST ANALYZE EVERY SEARCH RESULT ACROSS ALL PDF PAGES.
+   ⚠️ DO NOT stop after the first page. DO NOT treat "--- PAGE BREAK ---" as the end of the search.
+   ⚠️ Example: If the PDF has 2 pages with 6 results on page 1 and 4 results on page 2, 
+        you MUST output 10 JSON items, NOT 6.
+
+4. SEPARATELY (different concept from rule 3): If the PDF contains TWO COMPLETELY DIFFERENT searches:
+   - One quoted search (e.g., "ENTITY NAME" + keywords) that returned ZERO results / "沒有任何文件符合您所指定的搜尋字詞"
+   - One unquoted search that returned actual results
+   ONLY in this case, skip the quoted search and analyze only the unquoted results.
+   This is rare — most PDFs are just ONE search split across multiple pages.
+
+5. Each REAL search result has this pattern:
    - Source icon/name (e.g., "HKEXnews", "KPMG", "LinkedIn")
    - URL (https://...)
    - Title (displayed prominently)
    - Snippet (1-2 lines of description)
    - Sometimes page count (e.g., "481 頁", "698 頁") or date
-5. LinkedIn profiles, Facebook posts, and PDF documents from HKEXnews are ALL valid search results — do NOT skip them.
+
+6. LinkedIn profiles, Facebook posts, and PDF documents from HKEXnews are ALL valid search results — do NOT skip them.
+
+7. If a search result is SPLIT across a "--- PAGE BREAK ---" (title on page 1, snippet on page 2),
+   merge them into ONE result. Do not duplicate or skip it.
 `;
 
     const reminderText = `REMINDER: Identify and output ALL distinct search results from the PDF content.
-There should be approximately ${resultCount} items (Google typically shows ~10 results per page).
+
+⚠️ EXPECTED COUNT: Approximately ${resultCount} items in TOTAL across ALL PDF pages.
+⚠️ A single Google search of 10 results is COMMONLY split across 2 PDF pages — count ALL of them.
+⚠️ The presence of "--- PAGE BREAK ---" does NOT mean a different search; it just means the PDF paper changed.
+
+CHECKLIST BEFORE OUTPUTTING:
+□ Did I count results from page 1 AND page 2 (and beyond if present)?
+□ Is my JSON array length close to ${resultCount}? If not, did I accidentally stop after the first PDF page?
+□ Did I merge any result that was split across "--- PAGE BREAK ---"?
+
 Do NOT skip or merge any result. Each search result = one JSON item.
 If a result has very little information, still include it with cls "NO_HIT" or "IRRELEVANT_MLTF".
 Start with [ end with ]. Nothing else.`;
