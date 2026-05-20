@@ -704,10 +704,11 @@ function detectLanguage(text) {
 
 const CLS_CONFIG = {
   'TRUE_HIT': { label: 'True Hit', labelZh: '真實命中', desc: 'The hit is confirmed to be the subject and is associated with negative news related to ML/TF or sanctions', icon: AlertTriangle, bg: 'bg-red-50', border: 'border-red-300', text: 'text-red-700', badge: 'bg-red-100 text-red-800 border-red-200' },
-  'POSSIBLE_HIT': { label: 'Possible Hit', labelZh: '存疑待核實', desc: 'Name matches and content is ML/TF related, but insufficient identifying details to confirm or deny identity', icon: Search, bg: 'bg-purple-50', border: 'border-purple-300', text: 'text-purple-700', badge: 'bg-purple-100 text-purple-800 border-purple-200' },
-  'FALSE_HIT': { label: 'False Hit', labelZh: '誤報', desc: 'Full name / gender / DOB / Age not match', icon: XCircle, bg: 'bg-amber-50', border: 'border-amber-300', text: 'text-amber-700', badge: 'bg-amber-100 text-amber-800 border-amber-200' },
-  'IRRELEVANT_MLTF': { label: 'Irrelevant to ML/TF', labelZh: '無關 ML/TF', desc: 'No negative news related to ML/TF or sanctions', icon: Info, bg: 'bg-slate-50', border: 'border-slate-300', text: 'text-slate-600', badge: 'bg-slate-100 text-slate-700 border-slate-200' },
-  'NO_HIT': { label: 'No Hit', labelZh: '無命中', desc: 'No search keywords found, or the search returned no result', icon: CheckCircle, bg: 'bg-green-50', border: 'border-green-300', text: 'text-green-700', badge: 'bg-green-100 text-green-800 border-green-200' }
+  'POSSIBLE_HIT': { label: 'Possible Hit', labelZh: '存疑待核實', desc: 'Name matches and content is ML/TF related, with 1-2 partial identifiers corroborating but not fully confirmed', icon: Search, bg: 'bg-purple-50', border: 'border-purple-300', text: 'text-purple-700', badge: 'bg-purple-100 text-purple-800 border-purple-200' },
+  'PENDING_INFO': { label: 'Pending Info', labelZh: '待補資料', desc: 'Name matches with ML/TF content, but ZERO identifying info provided — CDD must supply identifiers before this can be classified as TRUE/FALSE/POSSIBLE', icon: Loader, bg: 'bg-indigo-50', border: 'border-indigo-300', text: 'text-indigo-700', badge: 'bg-indigo-100 text-indigo-800 border-indigo-200' },
+  'FALSE_HIT': { label: 'False Hit', labelZh: '誤報', desc: 'Identifiers (DOB / nationality / role / company) clearly contradict the customer — different person/entity', icon: XCircle, bg: 'bg-amber-50', border: 'border-amber-300', text: 'text-amber-700', badge: 'bg-amber-100 text-amber-800 border-amber-200' },
+  'IRRELEVANT_MLTF': { label: 'Irrelevant to ML/TF', labelZh: '無關 ML/TF', desc: 'Identity matches or plausibly matches, but content is NOT within ML/TF scope — reviewed and documented', icon: Info, bg: 'bg-slate-50', border: 'border-slate-300', text: 'text-slate-600', badge: 'bg-slate-100 text-slate-700 border-slate-200' },
+  'NO_HIT': { label: 'No Hit', labelZh: '無命中', desc: 'No search keywords found, or the search returned no result, or entity is clearly different', icon: CheckCircle, bg: 'bg-green-50', border: 'border-green-300', text: 'text-green-700', badge: 'bg-green-100 text-green-800 border-green-200' }
 };
 
 
@@ -1498,18 +1499,17 @@ Start with [ end with ]. Nothing else.`;
 ═══════════════════════════════════════════════════════════
 
 ──────────────────────────────────────────────
-STEP 1 — SUBJECT MATCH (Is this the TARGET subject?)
+STEP 1 — IDENTITY (Is this the TARGET subject?)
 ──────────────────────────────────────────────
-Compare result against entity name + ALL provided identifying details:
-  • Exact name match (English/Chinese)
-  • Company / jurisdiction / industry / role
-  • DOB / age range / time period
-  • ID number / address / other identifiers
+Compare result against entity name + KNOWN IDENTIFYING INFORMATION provided.
 
-Decision:
-  ✅ FULL MATCH (name + ≥1 identifier corroborates)        → go to STEP 2
-  ⚠️ NAME MATCH ONLY (no identifying details to confirm)   → STEP 2 with subjectMatch="AMBIGUOUS"
-  ❌ CONTRADICTED (identifiers point to DIFFERENT person)  → FALSE_HIT (stop)
+Decision branches:
+  🟢 FULL_MATCH     = name + ≥ 2 identifiers match               → go to STEP 2
+  🟡 PARTIAL_MATCH  = name + 1 identifier matches, others unknown → go to STEP 2
+  🔵 NO_INFO        = name matches, but ZERO identifying info     → go to STEP 2
+                       was provided by compliance officer
+  🔴 CONTRADICTED   = identifiers clearly differ                  → FALSE_HIT (stop)
+  ⚫ DIFFERENT_NAME = clearly different entity/person             → NO_HIT (stop)
 
 ──────────────────────────────────────────────
 STEP 2 — ADVERSE CONTENT (Any negative information?)
@@ -1523,14 +1523,14 @@ Adverse signals:
   • Bankruptcy / insolvency
   • PEP exposure with risk indicators
 
-If NO adverse content → NO_HIT (stop)
+If NO adverse content → STEP 3 = FAIL (move to final mapping)
 If YES → go to STEP 3
 
 ──────────────────────────────────────────────
 STEP 3 — ML/TF SCOPE (Is the adverse content within ML/TF predicate offenses?)
 ──────────────────────────────────────────────
 
-✅ IN-SCOPE (TRUE_HIT or POSSIBLE_HIT):
+✅ IN-SCOPE:
   1.  Money Laundering / proceeds of crime
   2.  Terrorist Financing / CFT
   3.  Sanctions violations (OFAC, UN, EU, HKMA, UK OFSI, MAS)
@@ -1545,10 +1545,10 @@ STEP 3 — ML/TF SCOPE (Is the adverse content within ML/TF predicate offenses?)
   12. Cybercrime with financial motive (ransomware, BEC)
   13. Regulatory enforcement by AML authorities (HKMA, MAS, SFC, SEC, FCA, FinCEN)
 
-❌ OUT-OF-SCOPE (IRRELEVANT_MLTF):
+❌ OUT-OF-SCOPE:
   1.  Civil disputes WITHOUT fraud (contract, IP, defamation)
   2.  Labor / employment disputes (unless forced labor)
-  3.  Traffic violations (DUI, speeding)
+  3.  Traffic violations
   4.  Environmental violations (unless deliberate / large-scale)
   5.  Family / personal matters
   6.  Health / accident events
@@ -1560,15 +1560,26 @@ STEP 3 — ML/TF SCOPE (Is the adverse content within ML/TF predicate offenses?)
   12. Personal lifestyle controversies without legal consequence
 
 ═══════════════════════════════════════════════════════════
-📋 FINAL CLASSIFICATION (5 categories)
+📋 FINAL CLASSIFICATION MATRIX (6 categories)
 ═══════════════════════════════════════════════════════════
-  • TRUE_HIT        = STEP 1 FULL MATCH + STEP 2 YES + STEP 3 IN-SCOPE
-  • POSSIBLE_HIT    = STEP 1 AMBIGUOUS + STEP 2 YES + STEP 3 IN-SCOPE
-                      (name matches, ML/TF content, BUT identity unconfirmed)
-  • FALSE_HIT       = STEP 1 CONTRADICTED (different person)
-  • IRRELEVANT_MLTF = STEP 1 MATCH/AMBIGUOUS + STEP 2 YES + STEP 3 OUT-OF-SCOPE
-  • NO_HIT          = STEP 1 MATCH/AMBIGUOUS + STEP 2 NO (no adverse content)
-                      OR entity not mentioned at all
+
+┌──────────────────────┬─────────────────────────┬─────────────────────────┐
+│  STEP 1 Identity     │  STEP 2/3 = ML/TF FOUND │  STEP 2/3 = NO ML/TF    │
+├──────────────────────┼─────────────────────────┼─────────────────────────┤
+│ DIFFERENT_NAME       │  NO_HIT                 │  NO_HIT                 │
+│ CONTRADICTED         │  FALSE_HIT              │  FALSE_HIT              │
+│ NO_INFO              │  🆕 PENDING_INFO        │  IRRELEVANT_MLTF        │
+│ PARTIAL_MATCH        │  POSSIBLE_HIT           │  IRRELEVANT_MLTF        │
+│ FULL_MATCH           │  TRUE_HIT               │  IRRELEVANT_MLTF        │
+└──────────────────────┴─────────────────────────┴─────────────────────────┘
+
+🚨 CRITICAL — DO NOT CONFUSE THESE THREE STATES:
+  • PENDING_INFO  = name match + ML/TF content + ZERO identifiers provided
+                    → "Cannot determine yet, CDD must supply identifiers"
+  • POSSIBLE_HIT  = name match + ML/TF content + 1-2 identifiers partially match
+                    → "Probable hit, needs minor corroboration"
+  • TRUE_HIT      = name match + ML/TF content + ≥ 2 identifiers fully match
+                    → "Confirmed hit"
 
 ⚠️ ANTI-FALSE-POSITIVE RULES:
   1. A keyword match alone is NEVER sufficient for TRUE_HIT.
@@ -1576,8 +1587,9 @@ STEP 3 — ML/TF SCOPE (Is the adverse content within ML/TF predicate offenses?)
   3. "under investigation" = TRUE_HIT only if by law enforcement/regulators for ML/TF.
   4. Entity IMPLEMENTING sanctions/AML compliance ≠ TRUE_HIT.
   5. Chinese names have extremely high duplication — name-only match is NEVER enough for TRUE_HIT.
-  6. When in doubt between TRUE_HIT and IRRELEVANT_MLTF → IRRELEVANT_MLTF (confidence < 0.7).
-  7. When in doubt between TRUE_HIT and FALSE_HIT → POSSIBLE_HIT.
+  6. When NO KNOWN INFO is provided and ML/TF content exists → MUST be PENDING_INFO (not TRUE_HIT).
+  7. When in doubt between TRUE_HIT and IRRELEVANT_MLTF → IRRELEVANT_MLTF (confidence < 0.7).
+  8. When in doubt between POSSIBLE_HIT and FALSE_HIT → POSSIBLE_HIT.
 `;
 
     /* ═══════════════════════════════════════════════════════
@@ -1596,24 +1608,42 @@ STEP 3 — ML/TF SCOPE (Is the adverse content within ML/TF predicate offenses?)
     "snippet": "Verbatim 2-3 sentence excerpt",
     "matchedKeywords": ["only keywords used in ML/TF context"],
     "cls": "TRUE_HIT",
-    "subjectMatch": "FULL_MATCH",
+    "identityMatch": "FULL_MATCH",
     "confidence": 0.92,
-    "reason": "Fluent natural paragraph (2-4 sentences) explaining: (a) subject match assessment, (b) adverse content assessment, (c) ML/TF scope assessment. Do NOT use 'STEP 1/2/3' labels.",
+    "reason": "Fluent natural paragraph (2-4 sentences) explaining: (a) identity assessment, (b) adverse content assessment, (c) ML/TF scope assessment. Do NOT use 'STEP 1/2/3' labels.",
     "riskCat": "${isSanction ? 'OFAC SDN / EU Sanctions / UN Sanctions / Sanctions Evasion / Asset Freeze / Proliferation / N/A' : 'Money Laundering / Sanctions Evasion / Bribery / Tax Evasion (Criminal) / Terrorist Financing / Fraud (Criminal) / Regulatory Action / N/A'}",
-    "missingInfo": ["DOB", "company affiliation", "jurisdiction"]
+    "missingInfo": ["DOB", "nationality", "role / position", "company"]
   }
 ]
 
-FIELD NOTES:
-  • subjectMatch: one of "FULL_MATCH" | "AMBIGUOUS" | "CONTRADICTED" | "NOT_MENTIONED"
-  • missingInfo: ONLY populate if cls="POSSIBLE_HIT". Otherwise use empty array [].
-  • confidence: 0.0–1.0. If cls="TRUE_HIT" and confidence < 0.75, system will auto-downgrade.
+FIELD GUIDELINES:
+  • cls: one of "TRUE_HIT" | "POSSIBLE_HIT" | "PENDING_INFO" | "FALSE_HIT" | "IRRELEVANT_MLTF" | "NO_HIT"
+
+  • identityMatch: REQUIRED. One of:
+      - "FULL_MATCH"     = ≥ 2 KNOWN INFO identifiers independently match
+      - "PARTIAL_MATCH"  = 1 identifier matches, others unknown
+      - "NO_INFO"        = NO KNOWN INFO was provided (cannot verify either way)
+      - "CONTRADICTED"   = KNOWN INFO clearly differs (different person)
+      - "DIFFERENT_NAME" = name does not match at all
+
+  • missingInfo: REQUIRED when cls = "PENDING_INFO" or "POSSIBLE_HIT".
+      Suggest specific identifiers that CDD should supply, e.g.:
+      ["DOB / age", "nationality", "role / position", "company affiliation", "jurisdiction"]
+      Use empty array [] for all other cls.
+
+  • confidence calibration:
+      - TRUE_HIT:        0.80 - 1.00 (must be ≥ 0.75 or auto-downgraded)
+      - POSSIBLE_HIT:    0.50 - 0.79
+      - PENDING_INFO:    0.40 - 0.65 (uncertainty by design — cannot verify identity)
+      - FALSE_HIT:       0.70 - 0.95 (confidence it is NOT the customer)
+      - IRRELEVANT_MLTF: 0.30 - 0.60
+      - NO_HIT:          0.00 - 0.30
 `;
 
     /* ═══════════════════════════════════════════════════════
        ⭐ 已知身份背景(disambiguation 用)
        ═══════════════════════════════════════════════════════ */
-    const identityBlock = entityContext && Object.values(entityContext).some(v => v) ? `
+   const identityBlock = entityContext && Object.values(entityContext).some(v => v) ? `
 ═══════════════════════════════════════════
 🪪 KNOWN IDENTIFYING INFORMATION (provided by compliance officer):
 ═══════════════════════════════════════════
@@ -1622,16 +1652,45 @@ ${formatEntityContext(entityContext)}
 ⚠️ CRITICAL USE OF THIS DATA:
   • This is the ACTUAL person/entity being screened.
   • If a result shows DIFFERENT identifying details (different age, profession, jurisdiction, company)
-    → classify as FALSE_HIT (even if content is ML/TF related, it's a different person).
-  • If a result shows NO identifying details to confirm OR deny → POSSIBLE_HIT (not TRUE_HIT).
-  • TRUE_HIT requires: (1) name match AND (2) at least ONE identifier corroborates.
+    → identityMatch = "CONTRADICTED" → classify as FALSE_HIT.
+  • If a result shows 1 matching identifier and others unknown
+    → identityMatch = "PARTIAL_MATCH" → POSSIBLE_HIT (if ML/TF) or IRRELEVANT_MLTF (if not).
+  • If a result shows ≥ 2 matching identifiers
+    → identityMatch = "FULL_MATCH" → TRUE_HIT (if ML/TF) or IRRELEVANT_MLTF (if not).
 ` : `
-⚠️ NO IDENTIFYING INFORMATION PROVIDED:
-  • Chinese names have extremely high duplication rates.
-  • Without identifying details, a name-only match is NEVER sufficient for TRUE_HIT.
-  • If a result shows the name + ML/TF content but no corroborating details → POSSIBLE_HIT.
-  • TRUE_HIT requires the article itself to contain ≥1 detail (jurisdiction, role, company) 
-    consistent with the screened entity.
+═══════════════════════════════════════════
+⚠️ NO KNOWN IDENTIFYING INFORMATION PROVIDED
+═══════════════════════════════════════════
+
+  🚨 THIS IS A CRITICAL CONSTRAINT — READ CAREFULLY:
+
+  The compliance officer did NOT provide any identifying details (DOB, nationality,
+  role, company, ID number, address). This means you CANNOT verify whether a result
+  is the actual customer or a DIFFERENT person with the same name.
+
+  Chinese personal names ESPECIALLY have extremely high duplication rates
+  (e.g. "陳志明", "李偉明", "王小明" — thousands of holders each).
+
+  MANDATORY CLASSIFICATION RULES IN THIS SCENARIO:
+
+  ┌────────────────────────────────┬──────────────────────────────┐
+  │  Result has ML/TF content      │  Result has NO ML/TF content │
+  ├────────────────────────────────┼──────────────────────────────┤
+  │  → identityMatch = "NO_INFO"   │  → identityMatch = "NO_INFO" │
+  │  → cls = "PENDING_INFO"        │  → cls = "IRRELEVANT_MLTF"   │
+  │  → confidence ≤ 0.65           │  → confidence ≤ 0.55         │
+  │  → missingInfo MUST list       │  → missingInfo = []          │
+  │     specific identifiers       │                              │
+  │     needed (DOB, role, etc.)   │                              │
+  └────────────────────────────────┴──────────────────────────────┘
+
+  🚫 ABSOLUTELY FORBIDDEN in this scenario:
+    • Do NOT classify as TRUE_HIT (impossible without identifier verification)
+    • Do NOT classify as POSSIBLE_HIT (reserved for PARTIAL_MATCH only)
+    • Do NOT classify as FALSE_HIT (cannot disprove identity without info)
+
+  ✅ The ONLY valid classifications with no KNOWN INFO are:
+     PENDING_INFO, IRRELEVANT_MLTF, NO_HIT
 `;
 
     /* ═══════════════════════════════════════════════════════
@@ -1746,13 +1805,19 @@ Apply this discipline to EVERY result, in this exact order:
   STEP 2 -> ADVERSE CONTENT    (Any negative information?)
   STEP 3 -> ML/TF SCOPE        (Is it within ${scopeWord} scope?)
 
-Decision summary:
-  - STEP 1 CONTRADICTED (different person/entity)                -> FALSE_HIT
-  - STEP 1 PASS + STEP 2 FAIL (no adverse content)               -> NO_HIT
-  - STEP 1 PASS + STEP 2 PASS + STEP 3 FAIL (out of scope)       -> IRRELEVANT_MLTF
-  - STEP 1 PASS + STEP 2 PASS + STEP 3 PASS (full corroboration) -> TRUE_HIT
-  - STEP 1 AMBIGUOUS + STEP 2 PASS + STEP 3 PASS                 -> POSSIBLE_HIT
-  - Entity not mentioned / no meaningful content                 -> NO_HIT
+Decision summary (apply LITERALLY):
+  - Different entity / clearly not the subject                       -> NO_HIT
+  - KNOWN INFO contradicts (different person)                        -> FALSE_HIT
+  - No KNOWN INFO + name match + ML/TF content                       -> PENDING_INFO + missingInfo
+  - No KNOWN INFO + name match + NO ML/TF content                    -> IRRELEVANT_MLTF
+  - PARTIAL KNOWN INFO match + ML/TF content                         -> POSSIBLE_HIT + missingInfo
+  - PARTIAL KNOWN INFO match + NO ML/TF content                      -> IRRELEVANT_MLTF
+  - FULL KNOWN INFO match + ML/TF content within scope               -> TRUE_HIT
+  - FULL KNOWN INFO match + NO ML/TF content (or out of scope)       -> IRRELEVANT_MLTF
+  - Entity not mentioned / no meaningful content                     -> NO_HIT
+
+⚠️ HARD RULE: TRUE_HIT and POSSIBLE_HIT require at least 1 KNOWN INFO identifier to corroborate.
+  If no KNOWN INFO was provided, the maximum classification is PENDING_INFO.
 
 ANTI-FALSE-POSITIVE PRINCIPLES
 ==============================
@@ -1927,16 +1992,85 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
       if (!Array.isArray(parsed) || parsed.length === 0) {
         parsed = [{ rank: 1, title: lang === 'zh' ? '無分析結果' : 'No results', source: '', date: '', snippet: lang === 'zh' ? 'AI未返回有效結果。' : 'AI returned no valid results.', matchedKeywords: [], cls: 'NO_HIT', confidence: 1.0, reason: lang === 'zh' ? '返回空結果。' : 'Returned empty results.', riskCat: 'N/A' }];
       }
-      const VALID_CLS = ['TRUE_HIT', 'POSSIBLE_HIT', 'FALSE_HIT', 'IRRELEVANT_MLTF', 'NO_HIT'];
-      parsed = parsed.map((r, i) => ({ ...r, rank: i + 1, cls: VALID_CLS.includes(r.cls) ? r.cls : 'NO_HIT', confidence: typeof r.confidence === 'number' ? Math.round(Math.min(1, Math.max(0, r.confidence)) * 100) / 100 : 0.8, matchedKeywords: Array.isArray(r.matchedKeywords) ? r.matchedKeywords.slice(0, 5) : [], title: r.title || '', source: r.source || '', date: r.date || '', snippet: r.snippet || '', reason: r.reason || '', riskCat: r.riskCat || 'N/A' }));
+      const VALID_CLS = ['TRUE_HIT', 'POSSIBLE_HIT', 'PENDING_INFO', 'FALSE_HIT', 'IRRELEVANT_MLTF', 'NO_HIT'];
+      parsed = parsed.map((r, i) => ({
+        ...r,
+        rank: i + 1,
+        cls: VALID_CLS.includes(r.cls) ? r.cls : 'NO_HIT',
+        identityMatch: ['FULL_MATCH', 'PARTIAL_MATCH', 'NO_INFO', 'CONTRADICTED', 'DIFFERENT_NAME'].includes(r.identityMatch) ? r.identityMatch : 'NO_INFO',
+        confidence: typeof r.confidence === 'number' ? Math.round(Math.min(1, Math.max(0, r.confidence)) * 100) / 100 : 0.8,
+        matchedKeywords: Array.isArray(r.matchedKeywords) ? r.matchedKeywords.slice(0, 5) : [],
+        missingInfo: Array.isArray(r.missingInfo) ? r.missingInfo.slice(0, 8) : [],
+        title: r.title || '',
+        source: r.source || '',
+        date: r.date || '',
+        snippet: r.snippet || '',
+        reason: r.reason || '',
+        riskCat: r.riskCat || 'N/A'
+      }));
+
+      // ═══════════════════════════════════════════════════════
+      // POST-PROCESSING SAFETY NET
+      // ═══════════════════════════════════════════════════════
+      const hasKnownInfo = entityContext && Object.values(entityContext).some(v => v && String(v).trim() !== '');
 
       parsed = parsed.map(r => {
+        const hasMLTF = r.matchedKeywords && r.matchedKeywords.length > 0;
+
+        // 🛡️ Rule 1: TRUE_HIT confidence < 0.75 → downgrade to IRRELEVANT_MLTF
         if (r.cls === 'TRUE_HIT' && r.confidence < 0.75) {
           return { ...r, cls: 'IRRELEVANT_MLTF', reason: `[Auto-downgraded: confidence ${r.confidence} < 0.75] ${r.reason}`, riskCat: 'N/A (Low Confidence)' };
         }
+
+        // 🛡️ Rule 2: TRUE_HIT with empty matchedKeywords → downgrade to IRRELEVANT_MLTF
         if (r.cls === 'TRUE_HIT' && r.matchedKeywords.length === 0) {
           return { ...r, cls: 'IRRELEVANT_MLTF', reason: `[Auto-downgraded: no matched keywords] ${r.reason}`, riskCat: 'N/A (No Keywords)' };
         }
+
+        // 🛡️ Rule 3: No KNOWN INFO + name match + ML/TF content
+        //           → MUST be PENDING_INFO (block TRUE_HIT/POSSIBLE_HIT upgrades)
+        if (
+          !hasKnownInfo &&
+          (r.identityMatch === 'NO_INFO' || r.identityMatch === 'PARTIAL_MATCH' || r.identityMatch === 'FULL_MATCH') &&
+          hasMLTF &&
+          (r.cls === 'TRUE_HIT' || r.cls === 'POSSIBLE_HIT')
+        ) {
+          const defaultMissing = ['DOB / age', 'nationality', 'role / position', 'company affiliation', 'jurisdiction'];
+          return {
+            ...r,
+            cls: 'PENDING_INFO',
+            identityMatch: 'NO_INFO',
+            confidence: Math.min(r.confidence || 0.5, 0.60),
+            missingInfo: r.missingInfo && r.missingInfo.length > 0 ? r.missingInfo : defaultMissing,
+            reason: `[Auto-downgraded: no KNOWN INFO provided — identity cannot be confirmed; awaiting CDD identifiers.] ${r.reason}`
+          };
+        }
+
+        // 🛡️ Rule 4: identityMatch=CONTRADICTED → force FALSE_HIT
+        if (r.identityMatch === 'CONTRADICTED' && r.cls !== 'FALSE_HIT' && r.cls !== 'NO_HIT') {
+          return {
+            ...r,
+            cls: 'FALSE_HIT',
+            confidence: Math.max(r.confidence || 0.7, 0.75),
+            reason: `[Auto-corrected: KNOWN INFO contradicts — different person.] ${r.reason}`
+          };
+        }
+
+        // 🛡️ Rule 5: identityMatch=FULL/PARTIAL + NO ML/TF + cls=NO_HIT
+        //           → upgrade to IRRELEVANT_MLTF (audit trail)
+        if (
+          (r.identityMatch === 'FULL_MATCH' || r.identityMatch === 'PARTIAL_MATCH') &&
+          !hasMLTF &&
+          r.cls === 'NO_HIT'
+        ) {
+          return {
+            ...r,
+            cls: 'IRRELEVANT_MLTF',
+            confidence: Math.min(r.confidence || 0.5, 0.50),
+            reason: `[Auto-upgraded: identity matches KNOWN INFO but content is non-ML/TF — documented as reviewed.] ${r.reason}`
+          };
+        }
+
         return r;
       });
 
@@ -1946,7 +2080,7 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
   };
     
   const counts = useMemo(() => {
-    const c = { TRUE_HIT: 0, POSSIBLE_HIT: 0, FALSE_HIT: 0, IRRELEVANT_MLTF: 0, NO_HIT: 0 };
+    const c = { TRUE_HIT: 0, POSSIBLE_HIT: 0, PENDING_INFO: 0, FALSE_HIT: 0, IRRELEVANT_MLTF: 0, NO_HIT: 0 };
     results.forEach(r => { if (c[r.cls] !== undefined) c[r.cls]++; });
     return c;
   }, [results]);
@@ -2014,6 +2148,12 @@ const ResultCard = ({ r }) => {
         ring: 'hover:ring-purple-200',
         leftBar: 'bg-gradient-to-b from-purple-500 to-violet-600',
         rankBg: 'bg-gradient-to-br from-purple-100 to-violet-200 text-purple-700',
+      },
+      PENDING_INFO: { 
+        border: 'border-indigo-200', 
+        ring: 'hover:ring-indigo-200',
+        leftBar: 'bg-gradient-to-b from-indigo-500 to-blue-600',
+        rankBg: 'bg-gradient-to-br from-indigo-100 to-blue-200 text-indigo-700',
       },
       FALSE_HIT: { 
         border: 'border-amber-200', 
@@ -2177,6 +2317,61 @@ const ResultCard = ({ r }) => {
                 >
                   ↓ 降級
                 </button>
+              </div>
+            )}
+            {r.cls === 'PENDING_INFO' && (
+              <div className="mt-3 space-y-3">
+                <div className="bg-gradient-to-br from-indigo-50 to-blue-100 border border-indigo-200 rounded-xl p-3.5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center shadow shadow-indigo-500/30">
+                      <Loader className="w-3.5 h-3.5 text-white" strokeWidth={2.5} />
+                    </div>
+                    <div className="text-xs font-black text-indigo-900">⏳ 待 CDD 補充以下資料</div>
+                  </div>
+                  {r.missingInfo && r.missingInfo.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {r.missingInfo.map((info, i) => (
+                        <span 
+                          key={i} 
+                          className="bg-white text-indigo-700 border border-indigo-200 px-2 py-1 rounded-lg text-[11px] font-bold shadow-sm"
+                        >
+                          ❓ {info}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-indigo-600 mb-2 italic">
+                      AI 未指定具體欄位 — 請至少補充:DOB、國籍、職務、公司關聯
+                    </div>
+                  )}
+                  <div className="text-[11px] text-indigo-700 bg-white/60 rounded-lg p-2 flex items-start gap-1.5">
+                    <span>🚨</span>
+                    <span>
+                      <b>名字匹配 + 有 ML/TF 內容,但缺乏身份驗證資料。</b>
+                      請補充上方資料後重新分析,即可升級為 TRUE_HIT / POSSIBLE_HIT 或下調為 FALSE_HIT。
+                    </span>
+                  </div>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'FALSE_HIT', 'CDD confirmed: different person after identifier check'); }}
+                    className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white px-3 py-2 rounded-xl text-xs font-bold shadow-md shadow-emerald-500/30 transition-all"
+                  >
+                    ✅ 確認非同人
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'POSSIBLE_HIT', 'CDD supplied partial identifiers — partial match confirmed'); }}
+                    className="flex-1 bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 text-white px-3 py-2 rounded-xl text-xs font-bold shadow-md shadow-purple-500/30 transition-all"
+                  >
+                    🟣 升為 Possible
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'TRUE_HIT', 'CDD supplied full identifiers — confirmed same person'); }}
+                    className="flex-1 bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-3 py-2 rounded-xl text-xs font-bold shadow-md shadow-red-500/30 transition-all"
+                  >
+                    🚨 升為 True Hit
+                  </button>
+                </div>
               </div>
             )}
             
@@ -2819,7 +3014,7 @@ const ResultCard = ({ r }) => {
 
             {analysisComplete && (<>
               {/* Statistics Grid - Modern */}
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
+              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
                 <div className="bg-white rounded-2xl border border-slate-200 p-3 text-center shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:shadow-[0_4px_16px_rgba(15,23,42,0.08)] transition-all">
                   <div className="text-2xl font-black text-slate-900 tracking-tight">{results.length}</div>
                   <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-0.5">Total</div>
@@ -2829,6 +3024,7 @@ const ResultCard = ({ r }) => {
                   const colorMap = {
                     TRUE_HIT: 'from-red-50 to-rose-100 border-red-200 hover:shadow-red-200/50',
                     POSSIBLE_HIT: 'from-purple-50 to-violet-100 border-purple-200 hover:shadow-purple-200/50',
+                    PENDING_INFO: 'from-indigo-50 to-blue-100 border-indigo-200 hover:shadow-indigo-200/50',
                     FALSE_HIT: 'from-amber-50 to-orange-100 border-amber-200 hover:shadow-amber-200/50',
                     IRRELEVANT_MLTF: 'from-slate-50 to-slate-100 border-slate-200 hover:shadow-slate-200/50',
                     NO_HIT: 'from-emerald-50 to-teal-100 border-emerald-200 hover:shadow-emerald-200/50',
@@ -2849,9 +3045,11 @@ const ResultCard = ({ r }) => {
               <div className={`relative overflow-hidden rounded-2xl p-4 text-white shadow-lg ${
                 counts.TRUE_HIT > 0 
                   ? 'bg-gradient-to-r from-red-500 via-red-600 to-rose-700 shadow-red-500/30' 
-                  : counts.POSSIBLE_HIT > 0 
-                    ? 'bg-gradient-to-r from-purple-500 via-purple-600 to-violet-700 shadow-purple-500/30' 
-                    : 'bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-700 shadow-emerald-500/30'
+                  : counts.PENDING_INFO > 0
+                    ? 'bg-gradient-to-r from-indigo-500 via-indigo-600 to-blue-700 shadow-indigo-500/30'
+                    : counts.POSSIBLE_HIT > 0 
+                      ? 'bg-gradient-to-r from-purple-500 via-purple-600 to-violet-700 shadow-purple-500/30' 
+                      : 'bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-700 shadow-emerald-500/30'
               }`}>
                 <div className="absolute -top-8 -right-8 w-32 h-32 bg-white/10 rounded-full blur-3xl" />
                 <div className="absolute -bottom-8 -left-8 w-32 h-32 bg-black/10 rounded-full blur-3xl" />
@@ -2863,12 +3061,17 @@ const ResultCard = ({ r }) => {
                     <div>
                       <div className="text-[11px] font-bold uppercase tracking-widest opacity-80">{riskLabel}</div>
                       <div className="text-xl font-black tracking-tight">
-                        {counts.TRUE_HIT > 0 ? '🚨 HIGH RISK' : counts.POSSIBLE_HIT > 0 ? '⚠️ REVIEW NEEDED' : '✅ LOW RISK'}
+                        {counts.TRUE_HIT > 0 ? '🚨 HIGH RISK' 
+                          : counts.PENDING_INFO > 0 ? '⏳ AWAITING CDD INFO'
+                          : counts.POSSIBLE_HIT > 0 ? '⚠️ REVIEW NEEDED' 
+                          : '✅ LOW RISK'}
                       </div>
                     </div>
                   </div>
                   <div className="text-xs opacity-90 max-w-xs text-right">
-                    {counts.TRUE_HIT > 0 ? riskDescHigh : riskDescLow}
+                    {counts.TRUE_HIT > 0 ? riskDescHigh 
+                      : counts.PENDING_INFO > 0 ? `${counts.PENDING_INFO} result(s) require CDD identifier follow-up` 
+                      : riskDescLow}
                   </div>
                 </div>
               </div>
@@ -2880,7 +3083,7 @@ const ResultCard = ({ r }) => {
                       k, 
                       l: detectedLang === 'zh' ? c.labelZh : c.label, 
                       count: counts[k],
-                      color: k === 'TRUE_HIT' ? 'red' : k === 'POSSIBLE_HIT' ? 'purple' : k === 'FALSE_HIT' ? 'amber' : k === 'IRRELEVANT_MLTF' ? 'slate' : 'emerald'
+                      color: k === 'TRUE_HIT' ? 'red' : k === 'POSSIBLE_HIT' ? 'purple' : k === 'PENDING_INFO' ? 'indigo' : k === 'FALSE_HIT' ? 'amber' : k === 'IRRELEVANT_MLTF' ? 'slate' : 'emerald'
                     }))
                   ].map(f => {
                     const isActive = filterType === f.k;
@@ -2892,6 +3095,7 @@ const ResultCard = ({ r }) => {
                           isActive 
                             ? f.color === 'red' ? 'bg-gradient-to-r from-red-500 to-rose-600 text-white shadow-md shadow-red-500/30'
                             : f.color === 'purple' ? 'bg-gradient-to-r from-purple-500 to-violet-600 text-white shadow-md shadow-purple-500/30'
+                            : f.color === 'indigo' ? 'bg-gradient-to-r from-indigo-500 to-blue-600 text-white shadow-md shadow-indigo-500/30'
                             : f.color === 'amber' ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-md shadow-amber-500/30'
                             : f.color === 'emerald' ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/30'
                             : 'bg-gradient-to-r from-slate-700 to-slate-800 text-white shadow-md shadow-slate-700/30'
