@@ -1339,26 +1339,88 @@ const testWorkerConnection = async () => {
   /* ── 生成 AI Prompt（制裁篩查 vs 不良媒體各自不同）── */
     const buildAIPrompt = (searchEntityName, enrichedContent, resultCount, hasPageContent, lang, entityContext) => {
 
-    const pdfCleaningNote = `
-═══════════════════════════════════════════
-⚠️ PDF CONTENT PARSING RULES:
-═══════════════════════════════════════════
-1. IGNORE any "AI Overview" or "AI 概覽" section — these are Google's auto-generated summaries, NOT search results.
-2. IGNORE Google UI elements: navigation bars, "顯示更多", "翻譯這個網頁", page numbers, footer text.
+   const pdfCleaningNote = `
+═══════════════════════════════════════════════════════════
+⚠️  PDF CONTENT PARSING RULES — READ CAREFULLY BEFORE PARSING
+═══════════════════════════════════════════════════════════
 
-3. ⚠️ CRITICAL — PDF PAGINATION RULE:
-   A SINGLE Google search of 10 results is OFTEN split across 2 OR MORE PDF pages.
-   "--- PAGE BREAK ---" markers indicate PDF paper boundaries — but the SAME search continues.
-   ⚠️ YOU MUST ANALYZE EVERY SEARCH RESULT ACROSS ALL PDF PAGES.
+【RULE 1】IGNORE NON-RESULT CONTENT
+- Skip "AI Overview" / "AI 概覽" / "AI 模式" sections entirely.
+- Skip Google UI: navigation tabs (全部/新聞/圖片/影片/網頁/工具), 
+  pagination ("1 2 3 4 5 ... 下一頁", "Goooooogle"), 
+  footers ("說明", "私隱權政策", "條款", "正在顯示個人化結果"),
+  location info ("香港", "馬鞍山", "根據你的活動記錄"),
+  page markers ("第1/2頁", "第2/2頁"),
+  URLs at the very bottom (the google.com/search?... URL).
 
-4. SEPARATELY: If the PDF contains TWO COMPLETELY DIFFERENT searches:
-   - One quoted search that returned ZERO results
-   - One unquoted search that returned actual results
-   ONLY in this case, skip the quoted search and analyze only the unquoted results.
+【RULE 2】RECOGNIZE A SEARCH RESULT
+Every Google search result has this structure:
+  ┌─────────────────────────────────────┐
+  │ [Source Name]                       │  ← e.g. "China Daily"
+  │ [URL fragment] (e.g. site.com › ...)│  ← short breadcrumb URL
+  │ [Title — usually a blue hyperlink]  │  ← e.g. "Sanctions are coming"
+  │ [Snippet — 1-3 lines of text]       │  ← description with date/author
+  └─────────────────────────────────────┘
+Each such block = ONE result. Count them ALL.
 
-5. Each REAL search result has: Source icon/name, URL, Title, Snippet.
-6. LinkedIn, Facebook, HKEXnews PDFs are ALL valid search results — do NOT skip them.
-7. If a result is SPLIT across "--- PAGE BREAK ---", merge into ONE result.
+【RULE 3】 🚨🚨🚨 SPLIT RESULTS ACROSS PAGE BREAKS 🚨🚨🚨
+This is the #1 cause of missed results. READ THIS TWICE.
+
+When a result is split by "--- PAGE BREAK ---", you MUST merge it.
+
+⚠️ DETECTION PATTERN:
+  If the LAST item before "--- PAGE BREAK ---" looks like a [Title] 
+  (often ending with "...") and has NO snippet after it,
+  AND the FIRST line after "--- PAGE BREAK ---" looks like a snippet
+  (starts with: "由 X 著作", "AU - ", "by X", "YYYY年M月D日 —", 
+   "Updated:", a date pattern, or descriptive prose),
+  → They belong to the SAME result. Merge them.
+
+⚠️ CONCRETE EXAMPLE FROM REAL PDF:
+  ┌─ Page 1 (ending) ──────────────────────────────────┐
+  │ CityUHK Scholars                                    │
+  │ https://scholars.cityu.edu.hk › investig...         │
+  │ Investigating pedestrian-level greenery in urban... │
+  │                                                      │
+  │ --- PAGE BREAK ---                                  │
+  ├─ Page 2 (starting) ────────────────────────────────┤
+  │ 由 J Hua 著作 · 2022 · 被引用 64 次 — We conducted  │
+  │ a citywide investigation of urban greenery...       │
+  │ AU - Cai, Meng. AU - Shi, Yuan...                  │
+  │                                                      │
+  │ 中华护理杂志                                          │  ← NEXT result starts here
+  │ https://zh.zhhlzzs.com › lexeme › show...           │
+  │ 179所三级医院ICU导尿管...                              │
+  └─────────────────────────────────────────────────────┘
+  
+  ✅ CORRECT parsing: 2 results
+     #N   = CityUHK Scholars (title + snippet merged across page break)
+     #N+1 = 中华护理杂志
+  
+  ❌ WRONG parsing: 1 result (skipping CityUHK because it "had no snippet")
+  ❌ WRONG parsing: merging "由 J Hua..." into 中华护理杂志's snippet
+
+【RULE 4】 🔢 MANDATORY COUNT VERIFICATION
+Before producing JSON output, perform this check:
+  STEP A: Scan the entire PDF and count distinct result-URL fragments
+          (lines matching pattern: "domain.com › path" or "https://...").
+          EXCLUDE the google.com/search URL at the bottom.
+  STEP B: Your JSON array MUST have the same number of items as STEP A.
+  STEP C: If counts differ, RE-SCAN — you missed a split result or 
+          mis-grouped two results into one.
+
+【RULE 5】RESULTS WITHOUT VISIBLE SNIPPETS STILL COUNT
+Some results may appear with only [Source + URL + Title] and no snippet
+(common for the last result on a page, or thin results).
+→ Still include them. Set the snippet field to the title or empty string.
+
+【RULE 6】DO NOT FABRICATE
+- Never invent results not in the PDF.
+- Never duplicate a result to reach a target count.
+- If you're unsure whether two blocks are one-or-two results, 
+  prefer treating them as TWO (false-positive results are safer 
+  than missed results, since classification will filter them).
+═══════════════════════════════════════════════════════════
 `;
 
     const reminderText = `REMINDER: Identify and output ALL distinct search results from the PDF content.
