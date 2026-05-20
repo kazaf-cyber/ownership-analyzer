@@ -1347,143 +1347,229 @@ const testWorkerConnection = async () => {
 2. IGNORE Google UI elements: navigation bars, "顯示更多", "翻譯這個網頁", page numbers, footer text.
 
 3. ⚠️ CRITICAL — PDF PAGINATION RULE:
-   A SINGLE Google search of 10 results is OFTEN split across 2 OR MORE PDF pages
-   (because the browser's "Print to PDF" wraps content when it doesn't fit on one paper).
-   
+   A SINGLE Google search of 10 results is OFTEN split across 2 OR MORE PDF pages.
    "--- PAGE BREAK ---" markers indicate PDF paper boundaries — but the SAME search continues.
-   
    ⚠️ YOU MUST ANALYZE EVERY SEARCH RESULT ACROSS ALL PDF PAGES.
-   ⚠️ DO NOT stop after the first page. DO NOT treat "--- PAGE BREAK ---" as the end of the search.
-   ⚠️ Example: If the PDF has 2 pages with 6 results on page 1 and 4 results on page 2, 
-        you MUST output 10 JSON items, NOT 6.
 
-4. SEPARATELY (different concept from rule 3): If the PDF contains TWO COMPLETELY DIFFERENT searches:
-   - One quoted search (e.g., "ENTITY NAME" + keywords) that returned ZERO results / "沒有任何文件符合您所指定的搜尋字詞"
+4. SEPARATELY: If the PDF contains TWO COMPLETELY DIFFERENT searches:
+   - One quoted search that returned ZERO results
    - One unquoted search that returned actual results
    ONLY in this case, skip the quoted search and analyze only the unquoted results.
-   This is rare — most PDFs are just ONE search split across multiple pages.
 
-5. Each REAL search result has this pattern:
-   - Source icon/name (e.g., "HKEXnews", "KPMG", "LinkedIn")
-   - URL (https://...)
-   - Title (displayed prominently)
-   - Snippet (1-2 lines of description)
-   - Sometimes page count (e.g., "481 頁", "698 頁") or date
-
-6. LinkedIn profiles, Facebook posts, and PDF documents from HKEXnews are ALL valid search results — do NOT skip them.
-
-7. If a search result is SPLIT across a "--- PAGE BREAK ---" (title on page 1, snippet on page 2),
-   merge them into ONE result. Do not duplicate or skip it.
+5. Each REAL search result has: Source icon/name, URL, Title, Snippet.
+6. LinkedIn, Facebook, HKEXnews PDFs are ALL valid search results — do NOT skip them.
+7. If a result is SPLIT across "--- PAGE BREAK ---", merge into ONE result.
 `;
 
     const reminderText = `REMINDER: Identify and output ALL distinct search results from the PDF content.
 
 ⚠️ EXPECTED COUNT: Approximately ${resultCount} items in TOTAL across ALL PDF pages.
 ⚠️ A single Google search of 10 results is COMMONLY split across 2 PDF pages — count ALL of them.
-⚠️ The presence of "--- PAGE BREAK ---" does NOT mean a different search; it just means the PDF paper changed.
 
 CHECKLIST BEFORE OUTPUTTING:
 □ Did I count results from page 1 AND page 2 (and beyond if present)?
-□ Is my JSON array length close to ${resultCount}? If not, did I accidentally stop after the first PDF page?
+□ Is my JSON array length close to ${resultCount}?
 □ Did I merge any result that was split across "--- PAGE BREAK ---"?
 
 Do NOT skip or merge any result. Each search result = one JSON item.
-If a result has very little information, still include it with cls "NO_HIT" or "IRRELEVANT_MLTF".
 Start with [ end with ]. Nothing else.`;
 
-    if (isSanction) {
-      return `You are a senior compliance analyst performing Sanctions List Screening for KYC/AML purposes.
+    /* ═══════════════════════════════════════════════════════
+       ⭐ 共用:3 步驟決策樹 + 5 類分類定義
+       ═══════════════════════════════════════════════════════ */
+    const decisionTree = `
+═══════════════════════════════════════════════════════════
+🧭 3-STEP DECISION TREE — APPLY TO EVERY RESULT
+═══════════════════════════════════════════════════════════
 
-TASK: Analyze each Google search result from the PDF and classify whether the entity appears on any sanctions list or is involved in sanctions-related violations.
+──────────────────────────────────────────────
+STEP 1 — SUBJECT MATCH (Is this the TARGET subject?)
+──────────────────────────────────────────────
+Compare result against entity name + ALL provided identifying details:
+  • Exact name match (English/Chinese)
+  • Company / jurisdiction / industry / role
+  • DOB / age range / time period
+  • ID number / address / other identifiers
 
-═══════════════════════════════════════════
-ENTITY UNDER SCREENING: "${searchEntityName}"
-═══════════════════════════════════════════
-${entityContext ? `
+Decision:
+  ✅ FULL MATCH (name + ≥1 identifier corroborates)        → go to STEP 2
+  ⚠️ NAME MATCH ONLY (no identifying details to confirm)   → STEP 2 with subjectMatch="AMBIGUOUS"
+  ❌ CONTRADICTED (identifiers point to DIFFERENT person)  → FALSE_HIT (stop)
+
+──────────────────────────────────────────────
+STEP 2 — ADVERSE CONTENT (Any negative information?)
+──────────────────────────────────────────────
+Adverse signals:
+  • Criminal charges / convictions / investigations
+  • Regulatory enforcement actions
+  • Lawsuits / litigation
+  • Media reports of misconduct
+  • Sanctions / watchlist mentions
+  • Bankruptcy / insolvency
+  • PEP exposure with risk indicators
+
+If NO adverse content → NO_HIT (stop)
+If YES → go to STEP 3
+
+──────────────────────────────────────────────
+STEP 3 — ML/TF SCOPE (Is the adverse content within ML/TF predicate offenses?)
+──────────────────────────────────────────────
+
+✅ IN-SCOPE (TRUE_HIT or POSSIBLE_HIT):
+  1.  Money Laundering / proceeds of crime
+  2.  Terrorist Financing / CFT
+  3.  Sanctions violations (OFAC, UN, EU, HKMA, UK OFSI, MAS)
+  4.  Sanctions evasion / circumvention / front companies
+  5.  Bribery / corruption (FCPA, UKBA, ICAC)
+  6.  Tax evasion / tax fraud (CRIMINAL level only)
+  7.  Drug trafficking / human trafficking / arms trafficking
+  8.  Fraud with criminal prosecution (Ponzi, securities, investment)
+  9.  Insider trading / market manipulation
+  10. Proliferation financing (WMD-related)
+  11. Organized crime (triads, mafia, syndicates)
+  12. Cybercrime with financial motive (ransomware, BEC)
+  13. Regulatory enforcement by AML authorities (HKMA, MAS, SFC, SEC, FCA, FinCEN)
+
+❌ OUT-OF-SCOPE (IRRELEVANT_MLTF):
+  1.  Civil disputes WITHOUT fraud (contract, IP, defamation)
+  2.  Labor / employment disputes (unless forced labor)
+  3.  Traffic violations (DUI, speeding)
+  4.  Environmental violations (unless deliberate / large-scale)
+  5.  Family / personal matters
+  6.  Health / accident events
+  7.  Trademark / patent / commercial litigation (no fraud)
+  8.  Routine consumer complaints / product liability
+  9.  Administrative (non-criminal) tax disputes
+  10. Entity IMPLEMENTING compliance programmes (positive news)
+  11. General regulatory news where entity is NOT a target
+  12. Personal lifestyle controversies without legal consequence
+
+═══════════════════════════════════════════════════════════
+📋 FINAL CLASSIFICATION (5 categories)
+═══════════════════════════════════════════════════════════
+  • TRUE_HIT        = STEP 1 FULL MATCH + STEP 2 YES + STEP 3 IN-SCOPE
+  • POSSIBLE_HIT    = STEP 1 AMBIGUOUS + STEP 2 YES + STEP 3 IN-SCOPE
+                      (name matches, ML/TF content, BUT identity unconfirmed)
+  • FALSE_HIT       = STEP 1 CONTRADICTED (different person)
+  • IRRELEVANT_MLTF = STEP 1 MATCH/AMBIGUOUS + STEP 2 YES + STEP 3 OUT-OF-SCOPE
+  • NO_HIT          = STEP 1 MATCH/AMBIGUOUS + STEP 2 NO (no adverse content)
+                      OR entity not mentioned at all
+
+⚠️ ANTI-FALSE-POSITIVE RULES:
+  1. A keyword match alone is NEVER sufficient for TRUE_HIT.
+  2. "sued for breach of contract" = IRRELEVANT_MLTF, even if "fraud" appears nearby.
+  3. "under investigation" = TRUE_HIT only if by law enforcement/regulators for ML/TF.
+  4. Entity IMPLEMENTING sanctions/AML compliance ≠ TRUE_HIT.
+  5. Chinese names have extremely high duplication — name-only match is NEVER enough for TRUE_HIT.
+  6. When in doubt between TRUE_HIT and IRRELEVANT_MLTF → IRRELEVANT_MLTF (confidence < 0.7).
+  7. When in doubt between TRUE_HIT and FALSE_HIT → POSSIBLE_HIT.
+`;
+
+    /* ═══════════════════════════════════════════════════════
+       ⭐ JSON 輸出格式(統一,修正逗號 bug)
+       ═══════════════════════════════════════════════════════ */
+    const outputFormat = `
+═══════════════════════════════════════════════════════════
+📤 RESPONSE FORMAT — JSON ARRAY ONLY, NO OTHER TEXT
+═══════════════════════════════════════════════════════════
+[
+  {
+    "rank": 1,
+    "title": "Exact article title",
+    "source": "publication name",
+    "date": "YYYY-MM-DD",
+    "snippet": "Verbatim 2-3 sentence excerpt",
+    "matchedKeywords": ["only keywords used in ML/TF context"],
+    "cls": "TRUE_HIT",
+    "subjectMatch": "FULL_MATCH",
+    "confidence": 0.92,
+    "reason": "Fluent natural paragraph (2-4 sentences) explaining: (a) subject match assessment, (b) adverse content assessment, (c) ML/TF scope assessment. Do NOT use 'STEP 1/2/3' labels.",
+    "riskCat": "${isSanction ? 'OFAC SDN / EU Sanctions / UN Sanctions / Sanctions Evasion / Asset Freeze / Proliferation / N/A' : 'Money Laundering / Sanctions Evasion / Bribery / Tax Evasion (Criminal) / Terrorist Financing / Fraud (Criminal) / Regulatory Action / N/A'}",
+    "missingInfo": ["DOB", "company affiliation", "jurisdiction"]
+  }
+]
+
+FIELD NOTES:
+  • subjectMatch: one of "FULL_MATCH" | "AMBIGUOUS" | "CONTRADICTED" | "NOT_MENTIONED"
+  • missingInfo: ONLY populate if cls="POSSIBLE_HIT". Otherwise use empty array [].
+  • confidence: 0.0–1.0. If cls="TRUE_HIT" and confidence < 0.75, system will auto-downgrade.
+`;
+
+    /* ═══════════════════════════════════════════════════════
+       ⭐ 已知身份背景(disambiguation 用)
+       ═══════════════════════════════════════════════════════ */
+    const identityBlock = entityContext && Object.values(entityContext).some(v => v) ? `
 ═══════════════════════════════════════════
 🪪 KNOWN IDENTIFYING INFORMATION (provided by compliance officer):
 ═══════════════════════════════════════════
 ${formatEntityContext(entityContext)}
 
-CRITICAL INSTRUCTION FOR NAME DISAMBIGUATION:
-• The above describes the ACTUAL person/entity being screened.
-• If a search result mentions the SAME NAME but DIFFERENT identifying details (different age, profession, jurisdiction, company) → classify as FALSE_HIT even if content is ML/TF related.
-• Chinese names have extremely high duplication rates ("陳志明", "李偉明" etc. may refer to thousands of different individuals).
-• TRUE_HIT requires BOTH: (1) Name match AND (2) At least ONE identifying detail match.
-• If the article mentions the name + ML/TF content but provides NO identifying details at all → POSSIBLE_HIT (not TRUE_HIT).
-• When in doubt between TRUE_HIT and FALSE_HIT → classify as POSSIBLE_HIT.
+⚠️ CRITICAL USE OF THIS DATA:
+  • This is the ACTUAL person/entity being screened.
+  • If a result shows DIFFERENT identifying details (different age, profession, jurisdiction, company)
+    → classify as FALSE_HIT (even if content is ML/TF related, it's a different person).
+  • If a result shows NO identifying details to confirm OR deny → POSSIBLE_HIT (not TRUE_HIT).
+  • TRUE_HIT requires: (1) name match AND (2) at least ONE identifier corroborates.
 ` : `
-NOTE ON NAME DISAMBIGUATION:
-• No additional identifying information was provided for this entity.
-• If a search result mentions the same name in ML/TF context but provides NO identifying details (no DOB, no company, no jurisdiction, no profession) to confirm identity → classify as POSSIBLE_HIT (not TRUE_HIT).
-• TRUE_HIT requires the article to contain at least ONE corroborating detail beyond just the name.
-• Chinese names have extremely high duplication rates — a name-only match is NEVER sufficient for TRUE_HIT.
-`}
-${pdfCleaningNote}
-${hasPageContent ? `YOU HAVE TWO DATA SOURCES:
+⚠️ NO IDENTIFYING INFORMATION PROVIDED:
+  • Chinese names have extremely high duplication rates.
+  • Without identifying details, a name-only match is NEVER sufficient for TRUE_HIT.
+  • If a result shows the name + ML/TF content but no corroborating details → POSSIBLE_HIT.
+  • TRUE_HIT requires the article itself to contain ≥1 detail (jurisdiction, role, company) 
+    consistent with the screened entity.
+`;
+
+    /* ═══════════════════════════════════════════════════════
+       ⭐ Sanction vs Adverse Media — 共用主體 + 微調差異
+       ═══════════════════════════════════════════════════════ */
+    const taskLine = isSanction
+      ? `TASK: Analyze each Google search result and classify whether the entity is on any sanctions list or involved in sanctions-related violations.`
+      : `TASK: Analyze each Google search result and classify it using the 3-step decision tree below.`;
+
+    const moduleSpecificScopeNote = isSanction ? `
+⚠️ SANCTION-SCREENING SPECIFIC NOTES:
+  • Primary in-scope categories: OFAC SDN, UN, EU, UK OFSI, HKMA, MAS sanctions lists.
+  • Also in-scope: sanctions evasion, asset freezes, travel bans, arms embargoes, secondary sanctions, proliferation financing.
+  • An entity IMPLEMENTING sanctions compliance is NOT a TRUE_HIT.
+  • "sanctions" appearing in general regulatory context (where entity is not the target) ≠ TRUE_HIT.
+` : `
+⚠️ ADVERSE-MEDIA SPECIFIC NOTES:
+  • Focus on ML/TF predicate offences and AML-relevant regulatory actions.
+  • Sanctions findings ARE in-scope here too (treat as TRUE_HIT under "Sanctions Evasion" category).
+`;
+
+    /* ═══════════════════════════════════════════════════════
+       ⭐ Page Content / Snippet 來源說明
+       ═══════════════════════════════════════════════════════ */
+    const dataSourceNote = hasPageContent ? `
+YOU HAVE TWO DATA SOURCES:
 1. Google search result snippets (from PDF)
 2. Full page content of each result (appended below, marked with "--- PAGE CONTENT: [url] ---")
 
-IMPORTANT: Base your classification PRIMARILY on the full page content when available.
-Only fall back to snippets if the full page content is missing for that result.
-A snippet alone is NOT sufficient evidence for TRUE_HIT — you MUST verify with full content when available.
-` : `NOTE: Only Google search snippets are available. Be CONSERVATIVE — if a snippet is ambiguous, classify as IRRELEVANT_MLTF rather than TRUE_HIT.
-`}
-STAGE 1 — NAME VERIFICATION:
-• Does the search result refer to the EXACT same entity (not a similarly named one)?
-• Check: jurisdiction, industry, legal form, key persons mentioned.
-• If different entity → FALSE_HIT (stop here).
+⚠️ Base your classification PRIMARILY on the full page content when available.
+   A snippet alone is NEVER sufficient evidence for TRUE_HIT — verify with full content.
+` : `
+⚠️ NOTE: Only Google search snippets are available (no full page content was scraped).
+   Be CONSERVATIVE — if a snippet is ambiguous, classify as IRRELEVANT_MLTF or POSSIBLE_HIT 
+   rather than TRUE_HIT.
+`;
 
-STAGE 2 — SANCTIONS RELEVANCE (only if Stage 1 passes):
-• Is the content DIRECTLY related to ANY of the following sanctions concerns?
-  ✅ RELEVANT (→ TRUE_HIT):
-    - Entity listed on OFAC SDN List / Sectoral Sanctions Identifications (SSI) List
-    - Entity listed on UN Security Council Consolidated Sanctions List
-    - Entity listed on EU Consolidated Sanctions List
-    - Entity listed on UK OFSI / HM Treasury Sanctions List
-    - Entity listed on HKMA / MAS / local regulator sanctions lists
-    - Asset freeze orders / travel bans / arms embargoes targeting the entity
-    - Entity investigated for sanctions evasion or circumvention
-    - Entity acting as front company for sanctioned persons/entities
-    - Entity designated under any country-specific sanctions programme
-    - Secondary sanctions exposure (facilitating sanctioned transactions)
-    - Proliferation financing concerns (WMD-related)
+    /* ═══════════════════════════════════════════════════════
+       ⭐ 組裝最終 Prompt
+       ═══════════════════════════════════════════════════════ */
+    return `You are a senior compliance analyst performing ${isSanction ? 'Sanctions List Screening' : 'Adverse Media Screening'} for KYC/AML purposes.
 
-  ❌ NOT RELEVANT (→ IRRELEVANT_MLTF):
-    - Entity implementing sanctions compliance programmes (positive news)
-    - General news about sanctions regimes that does NOT target the entity
-    - Entity mentioned as a compliant party in sanctions context
-    - Commercial disputes / civil lawsuits unrelated to sanctions
-    - General regulatory guidance about sanctions screening
-    - Article mentions sanctions but entity is not a target or subject
+${taskLine}
 
-CLASSIFICATION OUTPUT:
-- TRUE_HIT: Stage 1 ✅ (name + at least ONE identifying detail confirmed) AND Stage 2 ✅ — entity confirmed AND directly sanctioned or investigated
-- POSSIBLE_HIT: Name matches + content IS sanctions-related, but article provides NO identifying details to confirm or deny identity — requires manual review
-- FALSE_HIT: Stage 1 ❌ — identifying details CONTRADICT (different age, profession, jurisdiction, company)
-- IRRELEVANT_MLTF: Stage 1 ✅ but Stage 2 ❌ — correct entity but NOT sanctions-related
-- NO_HIT: Entity not mentioned at all, or no meaningful content
-
-CRITICAL ANTI-FALSE-POSITIVE RULES:
-1. An entity IMPLEMENTING sanctions compliance is NOT a TRUE_HIT.
-2. "sanctions" keyword appearing in general regulatory context ≠ TRUE_HIT.
-3. Only classify as TRUE_HIT if the entity is the TARGET of sanctions or under investigation FOR sanctions violations.
-4. If uncertain between TRUE_HIT and IRRELEVANT_MLTF, classify as IRRELEVANT_MLTF and set confidence < 0.7.
-
-RESPONSE FORMAT — JSON array only, no other text:
-[{
-  "rank": 1,
-  "title": "Exact article title",
-  "source": "publication name",
-  "date": "YYYY-MM-DD",
-  "snippet": "Verbatim 2-3 sentence excerpt",
-  "matchedKeywords": ["only keywords in sanctions context"],
-  "cls": "TRUE_HIT",
-  "confidence": 0.95,
-  "reason": "Write a fluent, natural paragraph combining name verification and sanctions relevance reasoning. Do NOT use 'STAGE 1' or 'STAGE 2' labels.",
-  "riskCat": "OFAC SDN / EU Sanctions / UN Sanctions / Sanctions Evasion / Asset Freeze / Proliferation / N/A"
-  "missingInfo": ["DOB", "company affiliation", "jurisdiction"
-}]
+═══════════════════════════════════════════
+ENTITY UNDER SCREENING: "${searchEntityName}"
+═══════════════════════════════════════════
+${identityBlock}
+${pdfCleaningNote}
+${dataSourceNote}
+${moduleSpecificScopeNote}
+${decisionTree}
+${outputFormat}
 
 Analyze ALL search results from this PDF. ${reminderText}
 
@@ -1491,7 +1577,7 @@ Content:
 ${enrichedContent.slice(0, 80000)}
 
 ${reminderText}`;
-    }
+  };
 
     /* ── Adverse Media Prompt ── */
     return `You are a senior compliance analyst performing Adverse Media Screening for KYC/AML purposes.
@@ -1585,8 +1671,9 @@ RESPONSE FORMAT — JSON array only, no other text:
   "confidence": 0.92,
   "reason": "Write a fluent, natural paragraph combining name verification and ML/TF relevance reasoning. Do NOT use 'STAGE 1' or 'STAGE 2' labels.",
   "riskCat": "Money Laundering / Sanctions Evasion / Bribery / Tax Evasion (Criminal) / Terrorist Financing / Fraud (Criminal) / Regulatory Action / N/A"
-  "missingInfo": ["DOB", "company affiliation", "jurisdiction"
-}]
+  "missingInfo": ["DOB", "company affiliation", "jurisdiction"]
+ } 
+]
 
 Analyze ALL search results from this PDF. ${reminderText}
 
