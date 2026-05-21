@@ -543,7 +543,7 @@ const i18n = {
     stepAISanction: 'AI Analysis (Sanctions List)',
     showEdit: 'Show/Edit',
     notSet: '(Not Set)',
-    usingGemini: 'Using GPT 5.5 (via Poe API)',
+    usingGemini: 'Using gemini-3.5-flash (via Poe API)',
     getPoeKey: 'Get Poe API Key →',
     startAI: 'Start AI Analysis',
     startAISanction: 'Start AI Sanctions Screening',
@@ -678,7 +678,7 @@ const i18n = {
     stepAISanction: 'AI 分析（制裁名單命中）',
     showEdit: '顯示/修改',
     notSet: '(未設定)',
-    usingGemini: '使用 GPT 5.5（via Poe API）',
+    usingGemini: '使用 gemini-3.5-flash（via Poe API）',
     getPoeKey: '取得 Poe API Key →',
     startAI: '開始 AI 分析',
     startAISanction: '開始 AI 制裁篩查',
@@ -2104,7 +2104,7 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
         body: JSON.stringify({
-          model: 'gpt-5.5',
+          model: 'gemini-3.5-flash',
           messages: [
             { role: 'system', content: buildSystemPrompt() },
             { role: 'user', content: fullPrompt }
@@ -3114,7 +3114,7 @@ const ResultCard = ({ r }) => {
                       📰 自動抓取網頁
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5">使用 GPT 5.5 進行語義分析與分類</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">使用 gemini-3.5-flash 進行語義分析與分類</p>
                 </div>
               </div>
 
@@ -3156,7 +3156,7 @@ const ResultCard = ({ r }) => {
                 )}
                 <p className="text-[10px] text-slate-500 mt-2 flex items-center gap-1 flex-wrap">
                   <span>使用</span>
-                  <span className="inline-block px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-bold text-[9px]">GPT 5.5</span>
+                  <span className="inline-block px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-bold text-[9px]">gemini-3.5-flash</span>
                   <span>via Poe API</span>
                   <a href="https://poe.com/api_key" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-700 hover:underline ml-auto font-semibold">
                     取得 API Key →
