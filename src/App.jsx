@@ -1726,14 +1726,22 @@ ${formatEntityContext(entityContext)}
 
 ⚠️ CRITICAL USE OF THIS DATA — APPLY STEP 1 RIGOROUSLY:
 
-  STEP 1A first: Compare the name in the result CHARACTER-BY-CHARACTER
-                 against "${searchEntityName}".
-    • If similar but NOT exact (e.g. "陳大文" search → "陳文" result)
-      → identityMatch = "NAME_SIMILAR" → FALSE_HIT (stop, do not check identifiers)
-    • If completely different
+    STEP 1A first: Compare the name in the result against "${searchEntityName}".
+
+    ⚠️ FOR ROMANIZED NAMES: Compare as UNORDERED TOKEN SET.
+       "Chan Tai Man" and "Tai Man Chan" are the SAME PERSON
+       (Asian surname-first ↔ Western surname-last convention).
+       "Wong Ka Wai" ↔ "Ka Wai Wong" → same person → NAME_EXACT.
+    ⚠️ FOR CHINESE CHARACTERS (漢字): Compare character-by-character;
+       order is fixed (surname always first). No reordering applies.
+
+    • Tokens / characters all match (any order for romanization)
+      → identityMatch = "NAME_EXACT" → proceed to STEP 1B
+    • Tokens / characters partially differ (e.g. "陳大文" → "陳文",
+      "Mary Wong" → "Mary Wang", "Chan Tai Man" → "Chan Tai Ming")
+      → identityMatch = "NAME_SIMILAR" → FALSE_HIT (stop)
+    • Completely different (no shared tokens / characters)
       → identityMatch = "DIFFERENT_NAME" → NO_HIT
-    • If exact / recognised variant
-      → proceed to STEP 1B
 
   STEP 1B: Only if name is exact, then compare identifiers:
     • Identifiers contradict (different age, profession, jurisdiction, company)
@@ -1753,20 +1761,23 @@ ${formatEntityContext(entityContext)}
   role, company, ID number, address). This means you CANNOT verify whether a result
   is the actual customer or a DIFFERENT person with the same name.
 
-  BUT YOU MUST STILL APPLY STEP 1A RIGOROUSLY:
+    BUT YOU MUST STILL APPLY STEP 1A RIGOROUSLY:
 
-  Compare the name in the result CHARACTER-BY-CHARACTER against "${searchEntityName}".
+  Compare the name in the result against "${searchEntityName}".
 
-    • If name is similar but NOT exact (e.g. "陳大文" vs "陳文", "陳大明")
-      → identityMatch = "NAME_SIMILAR" → FALSE_HIT
-      (This rule applies REGARDLESS of whether KNOWN INFO is provided.
-       A different name is a different person, full stop.)
+    ⚠️ FOR ROMANIZED NAMES: Compare as UNORDERED TOKEN SET.
+       "Chan Tai Man" and "Tai Man Chan" are the SAME PERSON
+       (Asian surname-first ↔ Western surname-last convention).
+    ⚠️ FOR CHINESE CHARACTERS (漢字): Compare character-by-character;
+       order is fixed.
 
-    • If completely different
-      → identityMatch = "DIFFERENT_NAME" → NO_HIT
-
-    • If exact / recognised variant
+    • Tokens / characters all match (any order for romanization)
       → identityMatch = "NO_INFO" (cannot verify further) → proceed to STEP 2
+    • Tokens / characters partially differ (e.g. "陳大文" vs "陳文",
+      "Mary Wong" vs "Mary Wang", "Chan Tai Man" vs "Chan Tai Ming")
+      → identityMatch = "NAME_SIMILAR" → FALSE_HIT
+    • Completely different
+      → identityMatch = "DIFFERENT_NAME" → NO_HIT
 
   Chinese personal names ESPECIALLY have extremely high duplication rates
   (e.g. "陳志明", "李偉明", "王小明" — thousands of holders each).
@@ -1928,6 +1939,23 @@ Decision summary (apply LITERALLY):
 ⚠️ HARD RULE 3: NAME_SIMILAR ALWAYS overrides content — even if the article
    discusses serious ML/TF activity, a similar-but-different name means it is
    NOT the screened customer. Classify as FALSE_HIT.
+
+⚠️ HARD RULE 4: For ROMANIZED Asian names (Chinese pinyin / Cantonese / Korean /
+   Vietnamese), compare names as UNORDERED TOKEN SETS. The surname can appear
+   FIRST (Asian convention) OR LAST (Western convention) — both are valid
+   representations of the SAME individual.
+     "Chan Tai Man" ↔ "Tai Man Chan"  → NAME_EXACT (same person)
+     "Wong Ka Wai"  ↔ "Ka Wai Wong"   → NAME_EXACT (same person)
+     "Kim Jong Un"  ↔ "Jong Un Kim"   → NAME_EXACT (same person)
+     "Li Ming"      ↔ "Ming Li"       → NAME_EXACT (same person)
+   Only mark as NAME_SIMILAR if at least one TOKEN actually differs in spelling.
+
+⚠️ HARD RULE 5: For CHINESE CHARACTERS (漢字), word order is FIXED — surname
+   always comes first. Do NOT apply token-reorder logic to Chinese characters.
+     "陳大文" ↔ "陳大文" → NAME_EXACT
+     "陳大文" ↔ "大文陳" → NAME_SIMILAR (Chinese names never reorder this way)
+     "陳大文" ↔ "陳文"   → NAME_SIMILAR (token missing)
+
 
 ANTI-FALSE-POSITIVE PRINCIPLES
 ==============================
@@ -2125,6 +2153,34 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
       // ═══════════════════════════════════════════════════════
       const hasKnownInfo = entityContext && Object.values(entityContext).some(v => v && String(v).trim() !== '');
 
+            // ═══════════════════════════════════════════════════════
+      // 🆕 NAME COMPARISON HELPERS (handle Asian ↔ Western word order)
+      // ═══════════════════════════════════════════════════════
+      const normalizeNameTokens = (name) => {
+        if (!name) return [];
+        return String(name)
+          .toLowerCase()
+          .replace(/[.,;:'"\-()]/g, ' ')
+          .split(/\s+/)
+          .filter(t => t.length > 1); // drop single-letter initials
+      };
+
+      const hasOnlyLatinChars = (name) => {
+        if (!name) return false;
+        return /^[\x00-\x7F\s]+$/.test(String(name)); // ASCII only = romanized
+      };
+
+      const isSamePersonDifferentOrder = (name1, name2) => {
+        if (!name1 || !name2) return false;
+        if (!hasOnlyLatinChars(name1) || !hasOnlyLatinChars(name2)) return false;
+        const t1 = normalizeNameTokens(name1);
+        const t2 = normalizeNameTokens(name2);
+        if (t1.length === 0 || t2.length === 0) return false;
+        if (t1.length !== t2.length) return false;
+        if (t1.join(' ') === t2.join(' ')) return false; // same order, handled elsewhere
+        return [...t1].sort().join(' ') === [...t2].sort().join(' ');
+      };
+
       parsed = parsed.map(r => {
         const hasMLTF = r.matchedKeywords && r.matchedKeywords.length > 0;
 
@@ -2137,6 +2193,40 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
         if (r.cls === 'TRUE_HIT' && r.matchedKeywords.length === 0) {
           return { ...r, cls: 'IRRELEVANT_MLTF', reason: `[Auto-downgraded: no matched keywords] ${r.reason}`, riskCat: 'N/A (No Keywords)' };
         }
+
+
+                // 🛡️ Rule 2.5 🆕: Detect "Chan Tai Man" vs "Tai Man Chan" case
+        //    AI may have flagged as NAME_SIMILAR/DIFFERENT_NAME/FALSE_HIT/NO_HIT,
+        //    but tokens match unordered → it's actually the SAME PERSON.
+        if (
+          r.nameInResult &&
+          isSamePersonDifferentOrder(searchEntity, r.nameInResult) &&
+          (r.identityMatch === 'NAME_SIMILAR' ||
+           r.identityMatch === 'DIFFERENT_NAME' ||
+           r.cls === 'FALSE_HIT' ||
+           r.cls === 'NO_HIT')
+        ) {
+          const correctedIdentity = hasKnownInfo ? 'PARTIAL_MATCH' : 'NO_INFO';
+          let correctedCls;
+          if (hasMLTF) {
+            correctedCls = hasKnownInfo ? 'POSSIBLE_HIT' : 'PENDING_INFO';
+          } else {
+            correctedCls = 'IRRELEVANT_MLTF';
+          }
+          const defaultMissing = ['DOB / age', 'nationality', 'role / position', 'company affiliation', 'jurisdiction'];
+          return {
+            ...r,
+            identityMatch: correctedIdentity,
+            cls: correctedCls,
+            confidence: correctedCls === 'POSSIBLE_HIT' ? 0.60 : (correctedCls === 'PENDING_INFO' ? 0.55 : 0.45),
+            missingInfo: (correctedCls === 'PENDING_INFO' || correctedCls === 'POSSIBLE_HIT')
+              ? (r.missingInfo && r.missingInfo.length > 0 ? r.missingInfo : defaultMissing)
+              : [],
+            riskCat: hasMLTF ? r.riskCat : 'N/A',
+            reason: `[Auto-corrected: "${r.nameInResult}" and "${searchEntity}" are the same person — Asian surname-first vs Western surname-last convention.] ${r.reason}`
+          };
+        }
+
 
         // 🛡️ Rule 3 🆕: identityMatch=NAME_SIMILAR → ALWAYS FALSE_HIT
         //    (regardless of cls AI assigned — name is the strongest signal)
