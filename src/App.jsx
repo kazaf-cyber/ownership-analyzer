@@ -1493,7 +1493,7 @@ Start with [ end with ]. Nothing else.`;
     /* ═══════════════════════════════════════════════════════
        ⭐ 共用:3 步驟決策樹 + 5 類分類定義
        ═══════════════════════════════════════════════════════ */
-    const decisionTree = `
+       const decisionTree = `
 ═══════════════════════════════════════════════════════════
 🧭 3-STEP DECISION TREE — APPLY TO EVERY RESULT
 ═══════════════════════════════════════════════════════════
@@ -1501,15 +1501,38 @@ Start with [ end with ]. Nothing else.`;
 ──────────────────────────────────────────────
 STEP 1 — IDENTITY (Is this the TARGET subject?)
 ──────────────────────────────────────────────
-Compare result against entity name + KNOWN IDENTIFYING INFORMATION provided.
 
-Decision branches:
-  🟢 FULL_MATCH     = name + ≥ 2 identifiers match               → go to STEP 2
+STEP 1A — NAME MATCH (compare names CHARACTER-BY-CHARACTER first)
+
+  🟢 NAME_EXACT     = name matches exactly (or recognised full-vs-abbreviation
+                      variant of the SAME person, e.g. "John A. Smith" vs
+                      "John Smith"; "陳大文" vs "陳大文 Chan Tai Man")
+                      → go to STEP 1B
+  🟠 NAME_SIMILAR   = name is SIMILAR but NOT the same person:
+                      • shared family name + different given name
+                          e.g. "陳大文" vs "陳文"      (missing character)
+                          e.g. "陳大文" vs "陳大明"    (different character)
+                          e.g. "陳大文" vs "陳大文輝"  (extra character)
+                      • different romanisation of likely-different name
+                          e.g. "Mary Wong" vs "Mary Wang"
+                          e.g. "Li Wei"    vs "Lee Wei"   (only if doc clearly
+                                                            refers to different
+                                                            individual)
+                      • English name partial-match without strong context
+                          e.g. "John Smith" search → "Johnny Smithson" result
+                      → FALSE_HIT (stop here, do NOT proceed to STEP 2)
+  ⚫ DIFFERENT_NAME = completely unrelated name (no shared characters / words)
+                      → NO_HIT (stop)
+
+STEP 1B — IDENTITY (only if NAME_EXACT)
+
+  Compare result against KNOWN IDENTIFYING INFORMATION provided.
+
+  🟢 FULL_MATCH     = name + ≥ 2 identifiers match                → go to STEP 2
   🟡 PARTIAL_MATCH  = name + 1 identifier matches, others unknown → go to STEP 2
   🔵 NO_INFO        = name matches, but ZERO identifying info     → go to STEP 2
                        was provided by compliance officer
-  🔴 CONTRADICTED   = identifiers clearly differ                  → FALSE_HIT (stop)
-  ⚫ DIFFERENT_NAME = clearly different entity/person             → NO_HIT (stop)
+  🔴 CONTRADICTED   = name matches + identifiers clearly differ   → FALSE_HIT (stop)
 
 ──────────────────────────────────────────────
 STEP 2 — ADVERSE CONTENT (Any negative information?)
@@ -1567,35 +1590,51 @@ STEP 3 — ML/TF SCOPE (Is the adverse content within ML/TF predicate offenses?)
 │  STEP 1 Identity     │  STEP 2/3 = ML/TF FOUND │  STEP 2/3 = NO ML/TF    │
 ├──────────────────────┼─────────────────────────┼─────────────────────────┤
 │ DIFFERENT_NAME       │  NO_HIT                 │  NO_HIT                 │
+│ NAME_SIMILAR 🆕      │  FALSE_HIT              │  FALSE_HIT              │
 │ CONTRADICTED         │  FALSE_HIT              │  FALSE_HIT              │
 │ NO_INFO              │  🆕 PENDING_INFO        │  IRRELEVANT_MLTF        │
 │ PARTIAL_MATCH        │  POSSIBLE_HIT           │  IRRELEVANT_MLTF        │
 │ FULL_MATCH           │  TRUE_HIT               │  IRRELEVANT_MLTF        │
 └──────────────────────┴─────────────────────────┴─────────────────────────┘
 
-🚨 CRITICAL — DO NOT CONFUSE THESE THREE STATES:
-  • PENDING_INFO  = name match + ML/TF content + ZERO identifiers provided
+🚨 CRITICAL — DO NOT CONFUSE THESE STATES:
+  • NAME_SIMILAR  = name is CLOSE BUT NOT THE SAME PERSON
+                    → Always FALSE_HIT (regardless of content).
+                      Examples:
+                        "陳大文" (search) vs "陳文" (result)    → FALSE_HIT
+                        "陳大文" (search) vs "陳大明" (result)  → FALSE_HIT
+                        "Mary Wong"       vs "Mary Wang"        → FALSE_HIT
+                        "Li Wei"          vs "Lee Wei"          → FALSE_HIT
+                                                                  (unless clearly
+                                                                   same person)
+  • PENDING_INFO  = name match (NAME_EXACT) + ML/TF content + ZERO identifiers
                     → "Cannot determine yet, CDD must supply identifiers"
-  • POSSIBLE_HIT  = name match + ML/TF content + 1-2 identifiers partially match
+  • POSSIBLE_HIT  = name match (NAME_EXACT) + ML/TF content + 1-2 identifiers partial
                     → "Probable hit, needs minor corroboration"
-  • TRUE_HIT      = name match + ML/TF content + ≥ 2 identifiers fully match
+  • TRUE_HIT      = name match (NAME_EXACT) + ML/TF content + ≥ 2 identifiers full
                     → "Confirmed hit"
 
 ⚠️ ANTI-FALSE-POSITIVE RULES:
   1. A keyword match alone is NEVER sufficient for TRUE_HIT.
-  2. "sued for breach of contract" = IRRELEVANT_MLTF, even if "fraud" appears nearby.
-  3. "under investigation" = TRUE_HIT only if by law enforcement/regulators for ML/TF.
-  4. Entity IMPLEMENTING sanctions/AML compliance ≠ TRUE_HIT.
-  5. Chinese names have extremely high duplication — name-only match is NEVER enough for TRUE_HIT.
-  6. When NO KNOWN INFO is provided and ML/TF content exists → MUST be PENDING_INFO (not TRUE_HIT).
-  7. When in doubt between TRUE_HIT and IRRELEVANT_MLTF → IRRELEVANT_MLTF (confidence < 0.7).
-  8. When in doubt between POSSIBLE_HIT and FALSE_HIT → POSSIBLE_HIT.
+  2. Name must match EXACTLY (character-by-character for Chinese, word-by-word
+     for English). Any character / word difference that suggests a different
+     person → NAME_SIMILAR → FALSE_HIT.
+  3. "sued for breach of contract" = IRRELEVANT_MLTF, even if "fraud" appears nearby.
+  4. "under investigation" = TRUE_HIT only if by law enforcement/regulators for ML/TF.
+  5. Entity IMPLEMENTING sanctions/AML compliance ≠ TRUE_HIT.
+  6. Chinese names have extremely high duplication — name-only match is NEVER enough
+     for TRUE_HIT. Always require corroborating identifiers.
+  7. When NO KNOWN INFO is provided and ML/TF content exists (with NAME_EXACT) →
+     MUST be PENDING_INFO (not TRUE_HIT).
+  8. When in doubt between TRUE_HIT and IRRELEVANT_MLTF → IRRELEVANT_MLTF.
+  9. When in doubt between POSSIBLE_HIT and FALSE_HIT → POSSIBLE_HIT.
+ 10. When in doubt between NAME_EXACT and NAME_SIMILAR → NAME_SIMILAR (safer).
 `;
 
     /* ═══════════════════════════════════════════════════════
        ⭐ JSON 輸出格式(統一,修正逗號 bug)
        ═══════════════════════════════════════════════════════ */
-    const outputFormat = `
+        const outputFormat = `
 ═══════════════════════════════════════════════════════════
 📤 RESPONSE FORMAT — JSON ARRAY ONLY, NO OTHER TEXT
 ═══════════════════════════════════════════════════════════
@@ -1609,8 +1648,9 @@ STEP 3 — ML/TF SCOPE (Is the adverse content within ML/TF predicate offenses?)
     "matchedKeywords": ["only keywords used in ML/TF context"],
     "cls": "TRUE_HIT",
     "identityMatch": "FULL_MATCH",
+    "nameInResult": "exact name string as it appears in the result",
     "confidence": 0.92,
-    "reason": "Fluent natural paragraph (2-4 sentences) explaining: (a) identity assessment, (b) adverse content assessment, (c) ML/TF scope assessment. Do NOT use 'STEP 1/2/3' labels.",
+    "reason": "Fluent natural paragraph (2-4 sentences) explaining: (a) name comparison, (b) identity assessment, (c) adverse content assessment, (d) ML/TF scope assessment. Do NOT use 'STEP 1/2/3' labels.",
     "riskCat": "${isSanction ? 'OFAC SDN / EU Sanctions / UN Sanctions / Sanctions Evasion / Asset Freeze / Proliferation / N/A' : 'Money Laundering / Sanctions Evasion / Bribery / Tax Evasion (Criminal) / Terrorist Financing / Fraud (Criminal) / Regulatory Action / N/A'}",
     "missingInfo": ["DOB", "nationality", "role / position", "company"]
   }
@@ -1620,11 +1660,16 @@ FIELD GUIDELINES:
   • cls: one of "TRUE_HIT" | "POSSIBLE_HIT" | "PENDING_INFO" | "FALSE_HIT" | "IRRELEVANT_MLTF" | "NO_HIT"
 
   • identityMatch: REQUIRED. One of:
-      - "FULL_MATCH"     = ≥ 2 KNOWN INFO identifiers independently match
-      - "PARTIAL_MATCH"  = 1 identifier matches, others unknown
-      - "NO_INFO"        = NO KNOWN INFO was provided (cannot verify either way)
-      - "CONTRADICTED"   = KNOWN INFO clearly differs (different person)
+      - "FULL_MATCH"     = NAME_EXACT + ≥ 2 KNOWN INFO identifiers independently match
+      - "PARTIAL_MATCH"  = NAME_EXACT + 1 identifier matches, others unknown
+      - "NO_INFO"        = NAME_EXACT + NO KNOWN INFO was provided
+      - "CONTRADICTED"   = NAME_EXACT + KNOWN INFO clearly differs
+      - "NAME_SIMILAR"   = 🆕 name is similar but NOT exact (likely different person)
       - "DIFFERENT_NAME" = name does not match at all
+
+  • nameInResult: REQUIRED. The exact name string as it appears in the search result
+                  (snippet/title). This proves you compared character-by-character.
+                  Example: search="陳大文", nameInResult="陳文" → identityMatch=NAME_SIMILAR
 
   • missingInfo: REQUIRED when cls = "PENDING_INFO" or "POSSIBLE_HIT".
       Suggest specific identifiers that CDD should supply, e.g.:
@@ -1634,7 +1679,7 @@ FIELD GUIDELINES:
   • confidence calibration:
       - TRUE_HIT:        0.80 - 1.00 (must be ≥ 0.75 or auto-downgraded)
       - POSSIBLE_HIT:    0.50 - 0.79
-      - PENDING_INFO:    0.40 - 0.65 (uncertainty by design — cannot verify identity)
+      - PENDING_INFO:    0.40 - 0.65
       - FALSE_HIT:       0.70 - 0.95 (confidence it is NOT the customer)
       - IRRELEVANT_MLTF: 0.30 - 0.60
       - NO_HIT:          0.00 - 0.30
@@ -1643,20 +1688,30 @@ FIELD GUIDELINES:
     /* ═══════════════════════════════════════════════════════
        ⭐ 已知身份背景(disambiguation 用)
        ═══════════════════════════════════════════════════════ */
-   const identityBlock = entityContext && Object.values(entityContext).some(v => v) ? `
+       const identityBlock = entityContext && Object.values(entityContext).some(v => v) ? `
 ═══════════════════════════════════════════
 🪪 KNOWN IDENTIFYING INFORMATION (provided by compliance officer):
 ═══════════════════════════════════════════
 ${formatEntityContext(entityContext)}
 
-⚠️ CRITICAL USE OF THIS DATA:
-  • This is the ACTUAL person/entity being screened.
-  • If a result shows DIFFERENT identifying details (different age, profession, jurisdiction, company)
-    → identityMatch = "CONTRADICTED" → classify as FALSE_HIT.
-  • If a result shows 1 matching identifier and others unknown
-    → identityMatch = "PARTIAL_MATCH" → POSSIBLE_HIT (if ML/TF) or IRRELEVANT_MLTF (if not).
-  • If a result shows ≥ 2 matching identifiers
-    → identityMatch = "FULL_MATCH" → TRUE_HIT (if ML/TF) or IRRELEVANT_MLTF (if not).
+⚠️ CRITICAL USE OF THIS DATA — APPLY STEP 1 RIGOROUSLY:
+
+  STEP 1A first: Compare the name in the result CHARACTER-BY-CHARACTER
+                 against "${searchEntityName}".
+    • If similar but NOT exact (e.g. "陳大文" search → "陳文" result)
+      → identityMatch = "NAME_SIMILAR" → FALSE_HIT (stop, do not check identifiers)
+    • If completely different
+      → identityMatch = "DIFFERENT_NAME" → NO_HIT
+    • If exact / recognised variant
+      → proceed to STEP 1B
+
+  STEP 1B: Only if name is exact, then compare identifiers:
+    • Identifiers contradict (different age, profession, jurisdiction, company)
+      → identityMatch = "CONTRADICTED" → FALSE_HIT
+    • 1 identifier matches, others unknown
+      → identityMatch = "PARTIAL_MATCH" → POSSIBLE_HIT (if ML/TF) or IRRELEVANT_MLTF
+    • ≥ 2 identifiers match
+      → identityMatch = "FULL_MATCH" → TRUE_HIT (if ML/TF) or IRRELEVANT_MLTF
 ` : `
 ═══════════════════════════════════════════
 ⚠️ NO KNOWN IDENTIFYING INFORMATION PROVIDED
@@ -1668,10 +1723,25 @@ ${formatEntityContext(entityContext)}
   role, company, ID number, address). This means you CANNOT verify whether a result
   is the actual customer or a DIFFERENT person with the same name.
 
+  BUT YOU MUST STILL APPLY STEP 1A RIGOROUSLY:
+
+  Compare the name in the result CHARACTER-BY-CHARACTER against "${searchEntityName}".
+
+    • If name is similar but NOT exact (e.g. "陳大文" vs "陳文", "陳大明")
+      → identityMatch = "NAME_SIMILAR" → FALSE_HIT
+      (This rule applies REGARDLESS of whether KNOWN INFO is provided.
+       A different name is a different person, full stop.)
+
+    • If completely different
+      → identityMatch = "DIFFERENT_NAME" → NO_HIT
+
+    • If exact / recognised variant
+      → identityMatch = "NO_INFO" (cannot verify further) → proceed to STEP 2
+
   Chinese personal names ESPECIALLY have extremely high duplication rates
   (e.g. "陳志明", "李偉明", "王小明" — thousands of holders each).
 
-  MANDATORY CLASSIFICATION RULES IN THIS SCENARIO:
+  MANDATORY CLASSIFICATION RULES IN THIS SCENARIO (only for NAME_EXACT):
 
   ┌────────────────────────────────┬──────────────────────────────┐
   │  Result has ML/TF content      │  Result has NO ML/TF content │
@@ -1687,10 +1757,9 @@ ${formatEntityContext(entityContext)}
   🚫 ABSOLUTELY FORBIDDEN in this scenario:
     • Do NOT classify as TRUE_HIT (impossible without identifier verification)
     • Do NOT classify as POSSIBLE_HIT (reserved for PARTIAL_MATCH only)
-    • Do NOT classify as FALSE_HIT (cannot disprove identity without info)
 
   ✅ The ONLY valid classifications with no KNOWN INFO are:
-     PENDING_INFO, IRRELEVANT_MLTF, NO_HIT
+     PENDING_INFO, IRRELEVANT_MLTF, NO_HIT, FALSE_HIT (only via NAME_SIMILAR)
 `;
 
     /* ═══════════════════════════════════════════════════════
@@ -1806,18 +1875,29 @@ Apply this discipline to EVERY result, in this exact order:
   STEP 3 -> ML/TF SCOPE        (Is it within ${scopeWord} scope?)
 
 Decision summary (apply LITERALLY):
-  - Different entity / clearly not the subject                       -> NO_HIT
-  - KNOWN INFO contradicts (different person)                        -> FALSE_HIT
-  - No KNOWN INFO + name match + ML/TF content                       -> PENDING_INFO + missingInfo
-  - No KNOWN INFO + name match + NO ML/TF content                    -> IRRELEVANT_MLTF
-  - PARTIAL KNOWN INFO match + ML/TF content                         -> POSSIBLE_HIT + missingInfo
-  - PARTIAL KNOWN INFO match + NO ML/TF content                      -> IRRELEVANT_MLTF
-  - FULL KNOWN INFO match + ML/TF content within scope               -> TRUE_HIT
-  - FULL KNOWN INFO match + NO ML/TF content (or out of scope)       -> IRRELEVANT_MLTF
+  - Completely different name (no shared chars/words)                -> NO_HIT
+  - Name SIMILAR but NOT exact (e.g. 陳大文 vs 陳文, 陳大文 vs 陳大明,
+    Mary Wong vs Mary Wang) — likely different person                -> FALSE_HIT
+  - Name EXACT + KNOWN INFO contradicts (different person)           -> FALSE_HIT
+  - Name EXACT + No KNOWN INFO + ML/TF content                       -> PENDING_INFO + missingInfo
+  - Name EXACT + No KNOWN INFO + NO ML/TF content                    -> IRRELEVANT_MLTF
+  - Name EXACT + PARTIAL KNOWN INFO match + ML/TF content            -> POSSIBLE_HIT + missingInfo
+  - Name EXACT + PARTIAL KNOWN INFO match + NO ML/TF content         -> IRRELEVANT_MLTF
+  - Name EXACT + FULL KNOWN INFO match + ML/TF content within scope  -> TRUE_HIT
+  - Name EXACT + FULL KNOWN INFO match + NO ML/TF (or out of scope)  -> IRRELEVANT_MLTF
   - Entity not mentioned / no meaningful content                     -> NO_HIT
 
-⚠️ HARD RULE: TRUE_HIT and POSSIBLE_HIT require at least 1 KNOWN INFO identifier to corroborate.
-  If no KNOWN INFO was provided, the maximum classification is PENDING_INFO.
+⚠️ HARD RULE 1: Name comparison is CHARACTER-BY-CHARACTER for Chinese names and
+   WORD-BY-WORD for English names. Any difference suggesting a different individual
+   → NAME_SIMILAR → FALSE_HIT.
+
+⚠️ HARD RULE 2: TRUE_HIT and POSSIBLE_HIT require NAME_EXACT + at least 1 KNOWN INFO
+   identifier to corroborate. If no KNOWN INFO was provided, the maximum
+   classification for a NAME_EXACT + ML/TF result is PENDING_INFO.
+
+⚠️ HARD RULE 3: NAME_SIMILAR ALWAYS overrides content — even if the article
+   discusses serious ML/TF activity, a similar-but-different name means it is
+   NOT the screened customer. Classify as FALSE_HIT.
 
 ANTI-FALSE-POSITIVE PRINCIPLES
 ==============================
@@ -1993,11 +2073,12 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
         parsed = [{ rank: 1, title: lang === 'zh' ? '無分析結果' : 'No results', source: '', date: '', snippet: lang === 'zh' ? 'AI未返回有效結果。' : 'AI returned no valid results.', matchedKeywords: [], cls: 'NO_HIT', confidence: 1.0, reason: lang === 'zh' ? '返回空結果。' : 'Returned empty results.', riskCat: 'N/A' }];
       }
       const VALID_CLS = ['TRUE_HIT', 'POSSIBLE_HIT', 'PENDING_INFO', 'FALSE_HIT', 'IRRELEVANT_MLTF', 'NO_HIT'];
-      parsed = parsed.map((r, i) => ({
+            parsed = parsed.map((r, i) => ({
         ...r,
         rank: i + 1,
         cls: VALID_CLS.includes(r.cls) ? r.cls : 'NO_HIT',
-        identityMatch: ['FULL_MATCH', 'PARTIAL_MATCH', 'NO_INFO', 'CONTRADICTED', 'DIFFERENT_NAME'].includes(r.identityMatch) ? r.identityMatch : 'NO_INFO',
+        identityMatch: ['FULL_MATCH', 'PARTIAL_MATCH', 'NO_INFO', 'CONTRADICTED', 'NAME_SIMILAR', 'DIFFERENT_NAME'].includes(r.identityMatch) ? r.identityMatch : 'NO_INFO',
+        nameInResult: r.nameInResult || '',
         confidence: typeof r.confidence === 'number' ? Math.round(Math.min(1, Math.max(0, r.confidence)) * 100) / 100 : 0.8,
         matchedKeywords: Array.isArray(r.matchedKeywords) ? r.matchedKeywords.slice(0, 5) : [],
         missingInfo: Array.isArray(r.missingInfo) ? r.missingInfo.slice(0, 8) : [],
@@ -2027,7 +2108,19 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
           return { ...r, cls: 'IRRELEVANT_MLTF', reason: `[Auto-downgraded: no matched keywords] ${r.reason}`, riskCat: 'N/A (No Keywords)' };
         }
 
-        // 🛡️ Rule 3: No KNOWN INFO + name match + ML/TF content
+        // 🛡️ Rule 3 🆕: identityMatch=NAME_SIMILAR → ALWAYS FALSE_HIT
+        //    (regardless of cls AI assigned — name is the strongest signal)
+        if (r.identityMatch === 'NAME_SIMILAR' && r.cls !== 'FALSE_HIT' && r.cls !== 'NO_HIT') {
+          return {
+            ...r,
+            cls: 'FALSE_HIT',
+            confidence: Math.max(r.confidence || 0.7, 0.80),
+            riskCat: 'N/A (Different Person)',
+            reason: `[Auto-corrected: name "${r.nameInResult || 'in result'}" is similar but NOT exact to "${searchEntity}" — different individual.] ${r.reason}`
+          };
+        }
+
+        // 🛡️ Rule 4: No KNOWN INFO + NAME_EXACT + ML/TF content
         //           → MUST be PENDING_INFO (block TRUE_HIT/POSSIBLE_HIT upgrades)
         if (
           !hasKnownInfo &&
@@ -2046,7 +2139,7 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
           };
         }
 
-        // 🛡️ Rule 4: identityMatch=CONTRADICTED → force FALSE_HIT
+        // 🛡️ Rule 5: identityMatch=CONTRADICTED → force FALSE_HIT
         if (r.identityMatch === 'CONTRADICTED' && r.cls !== 'FALSE_HIT' && r.cls !== 'NO_HIT') {
           return {
             ...r,
@@ -2056,7 +2149,7 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
           };
         }
 
-        // 🛡️ Rule 5: identityMatch=FULL/PARTIAL + NO ML/TF + cls=NO_HIT
+        // 🛡️ Rule 6: identityMatch=FULL/PARTIAL + NO ML/TF + cls=NO_HIT
         //           → upgrade to IRRELEVANT_MLTF (audit trail)
         if (
           (r.identityMatch === 'FULL_MATCH' || r.identityMatch === 'PARTIAL_MATCH') &&
