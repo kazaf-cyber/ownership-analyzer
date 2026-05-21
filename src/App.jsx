@@ -1504,24 +1504,54 @@ STEP 1 — IDENTITY (Is this the TARGET subject?)
 
 STEP 1A — NAME MATCH (compare names CHARACTER-BY-CHARACTER first)
 
-  🟢 NAME_EXACT     = name matches exactly (or recognised full-vs-abbreviation
-                      variant of the SAME person, e.g. "John A. Smith" vs
-                      "John Smith"; "陳大文" vs "陳大文 Chan Tai Man")
+⚠️ FIRST — NORMALIZE WORD ORDER FOR ROMANIZED ASIAN NAMES:
+
+Romanized Chinese / Korean / Vietnamese names commonly appear in two orders:
+  • Asian order:    SURNAME + GIVEN NAME    e.g. "Chan Tai Man", "Wong Ka Wai"
+  • Western order:  GIVEN NAME + SURNAME    e.g. "Tai Man Chan", "Ka Wai Wong"
+
+These are the SAME PERSON. When comparing romanized names:
+  1. Tokenize each name (split by spaces, lowercase, ignore punctuation)
+  2. Compare as an UNORDERED SET
+  3. If ALL tokens match (regardless of order) → treat as NAME_EXACT
+
+✅ NAME_EXACT examples (same person, different word order):
+     "Chan Tai Man"   ↔  "Tai Man Chan"     → NAME_EXACT
+     "Wong Ka Wai"    ↔  "Ka Wai Wong"      → NAME_EXACT
+     "Li Ming"        ↔  "Ming Li"          → NAME_EXACT
+     "Kim Jong Un"    ↔  "Jong Un Kim"      → NAME_EXACT
+     "Nguyen Van A"   ↔  "Van A Nguyen"     → NAME_EXACT
+
+❌ NAME_SIMILAR (tokens differ — NOT same person):
+     "Chan Tai Man"   ↔  "Chan Tai"         → NAME_SIMILAR (token missing)
+     "Chan Tai Man"   ↔  "Chan Tai Ming"    → NAME_SIMILAR (token differs)
+     "Chan Tai Man"   ↔  "Chan Tai Man Jr"  → NAME_SIMILAR (extra token,
+                                              unless clearly same person)
+     "Mary Wong"      ↔  "Mary Wang"        → NAME_SIMILAR (Wong ≠ Wang)
+     "Li Wei"         ↔  "Lee Wei"          → NAME_SIMILAR (Li ≠ Lee, unless
+                                              context confirms same person)
+
+⚠️ For CHINESE characters (漢字), word order is FIXED (surname always first).
+    No reordering applies — compare character-by-character as before:
+       "陳大文" ↔ "陳大文" → NAME_EXACT
+       "陳大文" ↔ "大文陳" → NAME_SIMILAR (Chinese names don't reorder)
+
+  🟢 NAME_EXACT     = name matches exactly, OR matches after word-order
+                      normalization (Asian ↔ Western), OR is a recognised
+                      variant of the SAME person:
+                        "John A. Smith" ↔ "John Smith"
+                        "陳大文" ↔ "陳大文 Chan Tai Man"
+                        "Chan Tai Man" ↔ "Tai Man Chan"
                       → go to STEP 1B
-  🟠 NAME_SIMILAR   = name is SIMILAR but NOT the same person:
-                      • shared family name + different given name
-                          e.g. "陳大文" vs "陳文"      (missing character)
-                          e.g. "陳大文" vs "陳大明"    (different character)
-                          e.g. "陳大文" vs "陳大文輝"  (extra character)
-                      • different romanisation of likely-different name
-                          e.g. "Mary Wong" vs "Mary Wang"
-                          e.g. "Li Wei"    vs "Lee Wei"   (only if doc clearly
-                                                            refers to different
-                                                            individual)
-                      • English name partial-match without strong context
-                          e.g. "John Smith" search → "Johnny Smithson" result
+  🟠 NAME_SIMILAR   = name is SIMILAR but tokens differ (likely different person):
+                      • Chinese: shared family name + different given character(s)
+                          "陳大文" vs "陳文"     (missing character)
+                          "陳大文" vs "陳大明"   (different character)
+                      • Romanized: different token spelling
+                          "Mary Wong" vs "Mary Wang"
+                          "Chan Tai Man" vs "Chan Tai Ming"
                       → FALSE_HIT (stop here, do NOT proceed to STEP 2)
-  ⚫ DIFFERENT_NAME = completely unrelated name (no shared characters / words)
+  ⚫ DIFFERENT_NAME = completely unrelated name (no shared tokens / characters)
                       → NO_HIT (stop)
 
 STEP 1B — IDENTITY (only if NAME_EXACT)
