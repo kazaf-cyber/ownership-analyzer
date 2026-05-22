@@ -1310,33 +1310,55 @@ const fetchPageContent = async (url) => {
   } catch { return null; }
 };
 
-  cconst extractUrlsFromPdf = (pdfText) => {
-    const urlRegex = /https?:\/\/[^\s)>\]"']+/g;
-    const urls = pdfText.match(urlRegex) || [];
-    
-    return urls
-      .map(u => u.replace(/[.,;:!?)\]>'"›]+$/, '')) // strip trailing punct
-      .filter(u => {
-        // ❌ Skip Google infrastructure
-        if (u.includes('google.com') || u.includes('googleapis.com') || u.includes('gstatic.com')) return false;
-        
-        // ❌ Skip URLs with NO meaningful path (just domain/homepage)
-        // e.g. "https://www.reuters.com" — useless to scrape
-        try {
-          const parsed = new URL(u);
-          const path = parsed.pathname.replace(/^\/+|\/+$/g, '');
-          // Reject if path is empty or only 1-2 chars
-          if (path.length < 3) {
-            console.log(`⏭️ Skipping bare-domain URL (no article path): ${u}`);
-            return false;
-          }
-        } catch {
-          return false;
-        }
-        
-        return true;
-      })
-      .slice(0, 10);
+  const extractUrlsFromPdf = (pdfText) => {
+  const urlRegex = /https?:\/\/[^\s)>\]"'›\n]+/g;
+  const rawUrls = pdfText.match(urlRegex) || [];
+
+  const skipped = [];
+  const kept = [];
+
+  for (const raw of rawUrls) {
+    // 1. 清掉尾巴標點
+    let u = raw.replace(/[.,;:!?)\]>'"›]+$/, '');
+
+    // 2. 跳過 Google 基礎設施
+    if (
+      u.includes('google.com') ||
+      u.includes('googleapis.com') ||
+      u.includes('gstatic.com') ||
+      u.includes('schema.org') ||
+      u.includes('accounts.google')
+    ) {
+      skipped.push({ url: u, reason: 'google-infra' });
+      continue;
+    }
+
+    // 3. 跳過「光禿域名」(沒有 path,scrape 回來只會是首頁廢料)
+    try {
+      const parsed = new URL(u);
+      const path = parsed.pathname.replace(/^\/+|\/+$/g, '');
+      // path 少於 3 個字元 = 基本上是首頁(例如 "/", "/zh", "/news")
+      if (path.length < 4) {
+        skipped.push({ url: u, reason: 'no-article-path' });
+        continue;
+      }
+    } catch {
+      skipped.push({ url: u, reason: 'invalid-url' });
+      continue;
+    }
+
+    // 4. 去重
+    if (!kept.includes(u)) kept.push(u);
+  }
+
+  // 5. Log 供 debug
+  if (skipped.length > 0) {
+    console.log(`⏭️ Skipped ${skipped.length} unscrapable URL(s):`);
+    skipped.forEach(s => console.log(`   [${s.reason}] ${s.url}`));
+  }
+  console.log(`✅ Kept ${kept.length} scrapable URL(s) with article paths`);
+
+  return kept.slice(0, 10);
 };
 
 /**
