@@ -2266,9 +2266,75 @@ let enrichedContent = pdfText;
 let scrapedCount = 0;
 {
   setProgress(30); setStage('正在抓取搜尋結果網頁內容...');
-  const urls = extractUrlsFromPdf(pdfText);
-  if (urls.length > 0) {
-    const pageResults = await Promise.allSettled(urls.map(url => fetchPageContent(url)));
+  // 🔧 F.6: Smart URL resolution pipeline
+//   1. Try direct URLs from PDF (the ones with paths)
+//   2. For breadcrumb-only anchors, resolve via Worker → DDG
+//   3. Scrape each resolved URL
+
+setProgress(30); setStage('正在解析搜尋結果 URL...');
+
+// Build candidate list: prefer anchors that look like resolvable results
+const anchors = reconstructUrlsFromAnchors(resultUrls);
+console.log(`🔧 ${anchors.length} anchors to resolve:`, anchors);
+
+// Step A: Resolve all anchors to real URLs
+const resolved = await Promise.all(anchors.map(async (anchor, idx) => {
+  if (anchor.kind === 'full_url') {
+    return { idx, url: anchor.url, label: 'direct' };
+  }
+  
+  if (anchor.kind === 'breadcrumb') {
+    // Try to find title from nearby PDF text
+    // (簡化版:直接用 domain 搜索,真實版可以提取 anchor 附近的 title)
+    const titleHint = anchor.pathHint.join(' ').slice(0, 60);
+    
+    try {
+      const resp = await callWorker('/api/resolve', {
+        domain: anchor.domain,
+        pathHint: anchor.pathHint,
+        title: titleHint,
+      });
+      if (resp.url) {
+        console.log(`  ✅ Resolved: ${anchor.original} → ${resp.url}`);
+        return { idx, url: resp.url, label: 'resolved' };
+      }
+    } catch (e) {
+      console.warn(`  ⚠️ Resolve failed for ${anchor.original}:`, e.message);
+    }
+  }
+  
+  return null; // social anchors and failures
+}));
+
+const validUrls = resolved.filter(r => r && r.url);
+console.log(`🌐 ${validUrls.length}/${anchors.length} URLs resolved successfully`);
+
+// Step B: Scrape resolved URLs
+setProgress(40); setStage('正在抓取網頁全文...');
+let scrapedCount = 0;
+let enrichedContent = pdfText;
+
+if (validUrls.length > 0) {
+  const pageResults = await Promise.allSettled(
+    validUrls.map(r => fetchPageContent(r.url))
+  );
+  
+  const enrichments = validUrls.map((r, i) => {
+    const result = pageResults[i];
+    const text = result.status === 'fulfilled' ? result.value : null;
+    if (text && text.length > 200) {
+      scrapedCount++;
+      return `\n--- PAGE CONTENT (${r.label}): ${r.url} ---\n${text}\n--- END ---`;
+    }
+    return '';
+  }).filter(Boolean).join('\n');
+  
+  if (enrichments) {
+    enrichedContent = pdfText + '\n\n=== FULL PAGE CONTENTS ===\n' + enrichments;
+  }
+}
+
+console.log(`📰 Scraped ${scrapedCount}/${validUrls.length} pages successfully`);
     const enrichments = urls.map((url, i) => {
       const result = pageResults[i];
       const text = result.status === 'fulfilled' ? result.value : null;
