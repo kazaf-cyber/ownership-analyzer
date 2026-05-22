@@ -1310,16 +1310,86 @@ const fetchPageContent = async (url) => {
   } catch { return null; }
 };
 
-  const extractUrlsFromPdf = (pdfText) => {
+  cconst extractUrlsFromPdf = (pdfText) => {
     const urlRegex = /https?:\/\/[^\s)>\]"']+/g;
     const urls = pdfText.match(urlRegex) || [];
-    return urls.filter(u =>
-      !u.includes('google.com') &&
-      !u.includes('googleapis.com') &&
-      !u.includes('gstatic.com')
-    ).slice(0, 10);
-  };
+    
+    return urls
+      .map(u => u.replace(/[.,;:!?)\]>'"›]+$/, '')) // strip trailing punct
+      .filter(u => {
+        // ❌ Skip Google infrastructure
+        if (u.includes('google.com') || u.includes('googleapis.com') || u.includes('gstatic.com')) return false;
+        
+        // ❌ Skip URLs with NO meaningful path (just domain/homepage)
+        // e.g. "https://www.reuters.com" — useless to scrape
+        try {
+          const parsed = new URL(u);
+          const path = parsed.pathname.replace(/^\/+|\/+$/g, '');
+          // Reject if path is empty or only 1-2 chars
+          if (path.length < 3) {
+            console.log(`⏭️ Skipping bare-domain URL (no article path): ${u}`);
+            return false;
+          }
+        } catch {
+          return false;
+        }
+        
+        return true;
+      })
+      .slice(0, 10);
+};
 
+/**
+ * F.6: Try to reconstruct article URLs from Google breadcrumb format.
+ * Google PDF shows: "reuters.com › energy › pe..."
+ * We can ask the Worker to resolve this to the real article URL via search.
+ */
+const reconstructUrlsFromAnchors = (resultUrls) => {
+  const reconstructed = [];
+  
+  for (const anchor of resultUrls) {
+    // Case 1: It's already a real URL with path
+    if (anchor.startsWith('http')) {
+      try {
+        const parsed = new URL(anchor);
+        const path = parsed.pathname.replace(/^\/+|\/+$/g, '');
+        if (path.length >= 3) {
+          reconstructed.push({ kind: 'full_url', url: anchor });
+          continue;
+        }
+      } catch {}
+    }
+    
+    // Case 2: Breadcrumb format "domain.com › segment1 › segment2..."
+    if (anchor.includes('›')) {
+      const parts = anchor.split(/\s*›\s*/).map(p => p.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        const domain = parts[0].replace(/^https?:\/\//, '').replace(/^www\./, '');
+        // Path hint = remaining segments (may have "..." truncation)
+        const pathHint = parts.slice(1)
+          .map(p => p.replace(/\.{2,}/g, '').trim())
+          .filter(p => p.length > 0);
+        
+        reconstructed.push({
+          kind: 'breadcrumb',
+          domain,
+          pathHint,
+          original: anchor,
+        });
+        continue;
+      }
+    }
+    
+    // Case 3: Social platform marker (Facebook · Page Name)
+    if (anchor.includes('·')) {
+      reconstructed.push({ kind: 'social', original: anchor });
+    }
+  }
+  
+  return reconstructed;
+};
+
+  
 const testWorkerConnection = async () => {
   setWorkerStatus('');
   try {
