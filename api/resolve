@@ -1,0 +1,107 @@
+/**
+ * F.7: Resolve breadcrumb-style Google result back to a real article URL
+ * via DuckDuckGo Lite search.
+ *
+ * Input:  { domain: "reuters.com", pathHint: ["energy","pe"], title: "PetroChina..." }
+ * Output: { url: "https://www.reuters.com/energy/petrochina-..." } or { url: null }
+ */
+async function handleResolve(request, corsHeaders) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return new Response(JSON.stringify({ error: 'invalid json' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+    });
+  }
+
+  const { domain, pathHint = [], title = '' } = body;
+
+  if (!domain || typeof domain !== 'string') {
+    return new Response(JSON.stringify({ error: 'domain required' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+    });
+  }
+
+  // Build query: prefer title (specific), fall back to pathHint (generic)
+  let queryText = '';
+  if (title && title.length > 8) {
+    queryText = title.slice(0, 100);
+  } else if (Array.isArray(pathHint) && pathHint.length > 0) {
+    queryText = pathHint.join(' ').slice(0, 80);
+  }
+  const query = queryText ? `site:${domain} ${queryText}` : `site:${domain}`;
+
+  try {
+    // DuckDuckGo Lite (HTML-only, no JS, very stable for scraping)
+    const ddgUrl = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
+    const resp = await fetch(ddgUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      cf: { cacheTtl: 300, cacheEverything: true },
+    });
+
+    if (!resp.ok) {
+      return new Response(JSON.stringify({
+        url: null,
+        error: `DDG returned ${resp.status}`,
+        query,
+      }), { headers: { 'Content-Type': 'application/json', ...corsHeaders } });
+    }
+
+    const html = await resp.text();
+    const cleanDomain = domain.toLowerCase().replace(/^www\./, '');
+
+    // Extract candidate URLs from DDG Lite response
+    const candidates = [];
+    const linkRegex = /<a[^>]+href=["']?(https?:\/\/[^"'\s>]+)["']?/gi;
+    let m;
+    while ((m = linkRegex.exec(html)) !== null) {
+      const rawUrl = m[1].replace(/[.,;:!?)\]>'"]+$/, '');
+
+      // Skip DDG internal redirects/links
+      if (rawUrl.includes('duckduckgo.com') || rawUrl.includes('duck.com')) continue;
+
+      // Domain must match (strict: hostname or proper subdomain)
+      let urlHost;
+      let urlPath;
+      try {
+        const u = new URL(rawUrl);
+        urlHost = u.hostname.toLowerCase().replace(/^www\./, '');
+        urlPath = u.pathname.replace(/^\/+|\/+$/g, '');
+      } catch {
+        continue;
+      }
+
+      if (urlHost !== cleanDomain && !urlHost.endsWith('.' + cleanDomain)) continue;
+
+      // Must have a meaningful path (not just homepage)
+      if (urlPath.length < 4) continue;
+
+      candidates.push(rawUrl);
+      if (candidates.length >= 5) break;
+    }
+
+    return new Response(JSON.stringify({
+      url: candidates[0] || null,
+      query,
+      candidatesFound: candidates.length,
+      allCandidates: candidates,
+    }), { headers: { 'Content-Type': 'application/json', ...corsHeaders } });
+
+  } catch (e) {
+    return new Response(JSON.stringify({
+      url: null,
+      error: e.message,
+      query,
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+    });
+  }
+}
