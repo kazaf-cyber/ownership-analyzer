@@ -1477,13 +1477,43 @@ NEVER skip a URL just because its content is hard to parse.
 ═══════════════════════════════════════════════════════════
 ` : '';
 
-    const reminderText = `REMINDER: Identify and output ALL distinct search results from the PDF content.
+   const reminderText = resultUrls.length > 0 ? `🚨🚨🚨 MANDATORY OUTPUT CONTRACT — READ TWICE 🚨🚨🚨
 
-⚠️ EXPECTED COUNT: Approximately ${resultCount} items in TOTAL across ALL PDF pages.
-⚠️ A single Google search of 10 results is COMMONLY split across 2 PDF pages — count ALL of them.
+You MUST produce EXACTLY ${resultUrls.length} JSON items in your output array.
+This count was PRE-COMPUTED by deterministically scanning the PDF for distinct
+result anchors (URLs + breadcrumb lines). It is NOT an estimate.
+
+  ✗ Outputting FEWER than ${resultUrls.length} items → WRONG OUTPUT.
+  ✗ Outputting MORE than ${resultUrls.length} items → WRONG OUTPUT.
+  ✓ Output array length MUST equal ${resultUrls.length}. Period.
+
+🔢 FINAL COUNT VERIFICATION (do this before submitting):
+  STEP A: Look at the URL anchor list [01]–[${String(resultUrls.length).padStart(2,'0')}] given above.
+  STEP B: Count your JSON items. The count MUST equal ${resultUrls.length}.
+  STEP C: If your count is less than ${resultUrls.length}, you MISSED a result.
+          Re-scan the PDF — especially across "--- PAGE BREAK ---" boundaries.
+  STEP D: If your count is more than ${resultUrls.length}, you DUPLICATED a result.
+          Merge entries that point to the same URL anchor.
+
+⚠️ COMMON CAUSES OF UNDER-COUNTING (avoid these):
+  • Skipping a result because its snippet was hard to find → Output it anyway.
+    Use snippet = "(Snippet not clearly extractable)" and the title from near the URL.
+  • Skipping a result that had no snippet on its page → Output it anyway.
+  • Merging two unrelated results into one because their text was adjacent → Split.
+  • Treating a split result (across page break) as missing data → Merge into ONE item.
+
+⚠️ COMMON CAUSES OF OVER-COUNTING (avoid these):
+  • Treating the same URL appearing twice as two results → It's ONE result.
+  • Treating "AI Overview" or pagination text as a result → Skip those.
+
+Each search result = exactly one JSON item.
+Output starts with [ and ends with ]. Nothing else, no markdown fences.` : `REMINDER: Identify and output ALL distinct search results from the PDF content.
+
+⚠️ EXPECTED COUNT: ~${resultCount} items across all PDF pages.
+⚠️ A Google search of 10 results is COMMONLY split across 2 PDF pages — count ALL of them.
 
 CHECKLIST BEFORE OUTPUTTING:
-□ Did I count results from page 1 AND page 2 (and beyond if present)?
+□ Did I count results from page 1 AND page 2 (and beyond)?
 □ Is my JSON array length close to ${resultCount}?
 □ Did I merge any result that was split across "--- PAGE BREAK ---"?
 
@@ -2052,26 +2082,82 @@ You are a precision instrument, not a coverage maximizer. Conservative, defensib
       /* ★ 修正 2:清理 Google PDF 噪音(AI 概覽、UI 元素、引號搜尋等) */
 pdfText = cleanGooglePdfText(pdfText);
 
-/* ★ 修正 2.5:Pre-extract URL anchors as ground truth */
-const urlAnchorPattern = /https?:\/\/[^\s)>\]"'›]+/g;
-const allUrlsRaw = pdfText.match(urlAnchorPattern) || [];
-const resultUrls = [...new Set(
-  allUrlsRaw
-    .map(u => u.replace(/[.,;:!?)\]>'"]+$/, ''))
-    .filter(u =>
-      !u.includes('google.com/search') &&
-      !u.includes('googleapis.com') &&
-      !u.includes('gstatic.com') &&
-      !u.includes('accounts.google') &&
-      !u.includes('schema.org') &&
-      !u.includes('translate.google') &&
-      !u.includes('support.google') &&
-      !u.includes('policies.google') &&
-      u.length > 15
-    )
-)];
+/* ★ 修正 2.5:Pre-extract result anchors (URLs + breadcrumbs) as ground truth */
+const extractResultAnchors = (text) => {
+  const skipPatterns = [
+    'google.com/search', 'googleapis.com', 'gstatic.com',
+    'accounts.google', 'schema.org', 'translate.google',
+    'support.google', 'policies.google', 'maps.google',
+  ];
+  const shouldSkip = (s) => {
+    const lower = s.toLowerCase();
+    return skipPatterns.some(p => lower.includes(p));
+  };
 
-console.log(`🔗 Pre-extracted ${resultUrls.length} URL anchors:`, resultUrls);
+  // Dedup signature: domain + first significant path/breadcrumb segment
+  const sigOf = (s) => {
+    const cleaned = s.toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .replace(/^www\./, '')
+      .replace(/\.{2,}/g, '');
+    const m = cleaned.match(/^([a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+)/);
+    if (!m) return cleaned.slice(0, 40);
+    const domain = m[1];
+    const rest = cleaned.slice(domain.length).replace(/[›\/]+/g, ' ').trim();
+    const seg = rest.split(/\s+/).filter(t => t.length >= 3 && !t.includes('http'))[0] || '';
+    return seg ? `${domain}/${seg}` : domain;
+  };
+
+  const sigMap = new Map(); // signature → first occurrence text
+
+  // 🥇 PASS 1 (priority): Breadcrumb anchors — most reliable per-result marker
+  //    Google PDF 中每個 result 必有一行包含 › 字符
+  text.split('\n').forEach(line => {
+    const trimmed = line.trim();
+    if (trimmed.length < 8 || trimmed.length > 220) return;
+    if (!trimmed.includes('›')) return;
+    if (shouldSkip(trimmed)) return;
+    // Must look like a domain (e.g. "example.com")
+    if (!/[a-z0-9][a-z0-9-]*\.[a-z]{2,}/i.test(trimmed)) return;
+    const sig = sigOf(trimmed);
+    if (!sigMap.has(sig)) sigMap.set(sig, trimmed);
+  });
+
+  // Track domains already covered by breadcrumbs (for Pass 2 dedup)
+  const breadcrumbDomains = new Set();
+  [...sigMap.keys()].forEach(s => {
+    const d = s.split('/')[0];
+    breadcrumbDomains.add(d);
+  });
+
+  // 🥈 PASS 2: Full URLs (only add if NOT already covered by a breadcrumb)
+  const fullUrlPattern = /https?:\/\/[^\s)>\]"'›\n]+/g;
+  (text.match(fullUrlPattern) || []).forEach(raw => {
+    const cleaned = raw.replace(/[.,;:!?)\]>'"]+$/, '');
+    if (cleaned.length <= 15 || shouldSkip(cleaned)) return;
+
+    // Extract domain from full URL
+    const m = cleaned.toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .replace(/^www\./, '')
+      .match(/^([a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+)/);
+    const domain = m ? m[1] : '';
+
+    // If full URL has NO meaningful path AND domain is covered by breadcrumb → skip
+    // (e.g. "https://scmp.com" alone is just the head of "scmp.com › news › ...")
+    const hasPath = /https?:\/\/[^\s\/]+\/[^\s]/.test(cleaned);
+    if (breadcrumbDomains.has(domain) && !hasPath) return;
+
+    const sig = sigOf(cleaned);
+    if (!sigMap.has(sig)) sigMap.set(sig, cleaned);
+  });
+
+  return [...sigMap.values()];
+};
+
+const resultUrls = extractResultAnchors(pdfText);
+console.log(`🔗 Pre-extracted ${resultUrls.length} result anchors (URLs + breadcrumbs):`);
+resultUrls.forEach((a, i) => console.log(`  [${String(i+1).padStart(2,'0')}] ${a}`));;
 
 let enrichedContent = pdfText;
 let scrapedCount = 0;
@@ -2287,6 +2373,37 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
         return r;
       });
 
+      // ═══════════════════════════════════════════════════════
+      // 🆕 F.3: COUNT VALIDATION — 警告 AI 是否漏掉結果
+      // ═══════════════════════════════════════════════════════
+      if (resultUrls.length > 0 && parsed.length < resultUrls.length) {
+        const missing = resultUrls.length - parsed.length;
+        const missPct = Math.round((missing / resultUrls.length) * 100);
+        console.warn(
+          `⚠️ COUNT MISMATCH: AI returned ${parsed.length} items but PDF had ${resultUrls.length} anchors. ` +
+          `${missing} result(s) missed (${missPct}%).`
+        );
+        console.warn(`📋 Pre-extracted anchors (${resultUrls.length}):`);
+        resultUrls.forEach((a, i) => console.warn(`  [${String(i+1).padStart(2,'0')}] ${a}`));
+        console.warn(`🤖 AI returned items (${parsed.length}):`);
+        parsed.forEach(r => console.warn(`  [${String(r.rank).padStart(2,'0')}] ${(r.source || '?')} — ${(r.title || '').slice(0, 60)}`));
+
+        // 在第一條結果的 reason 字段加上警告,讓 user 在 UI 看得到
+        if (parsed.length > 0) {
+          parsed[0] = {
+            ...parsed[0],
+            reason: `⚠️ [系統警告] AI 只回傳 ${parsed.length} 條結果,但 PDF 偵測到 ${resultUrls.length} 條 anchor(${missing} 條可能被漏掉)。請檢查瀏覽器 console 查看完整 anchor 列表。\n\n${parsed[0].reason || ''}`
+          };
+        }
+      } else if (resultUrls.length > 0 && parsed.length > resultUrls.length) {
+        console.warn(
+          `⚠️ COUNT OVERFLOW: AI returned ${parsed.length} items but PDF only had ${resultUrls.length} anchors. ` +
+          `AI may have duplicated or invented results.`
+        );
+      } else if (resultUrls.length > 0) {
+        console.log(`✅ Count match: ${parsed.length} items = ${resultUrls.length} anchors`);
+      }
+      
       setProgress(100);
       timerIdsRef.current.push(setTimeout(() => { setIsAnalyzing(false); setAnalysisComplete(true); setResults(parsed); }, 300));
     } catch (err) { setIsAnalyzing(false); setProgress(0); setStage(''); setErrorMsg(`分析失敗：${err.message}`); }
