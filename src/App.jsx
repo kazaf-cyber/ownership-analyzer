@@ -2152,6 +2152,39 @@ const extractResultAnchors = (text) => {
     if (!sigMap.has(sig)) sigMap.set(sig, cleaned);
   });
 
+  // 🥉 PASS 3: Anchor-less results (social media / forum / community posts)
+  //    Some Google results have NO URL and NO breadcrumb — only a platform marker.
+  //    Examples:
+  //      • "Facebook · WE ARE CHINA"  (the missing 10th result!)
+  //      • "YouTube · ChannelName"
+  //      • "TikTok · @username"
+  //      • "Reddit · r/Subreddit"
+  const socialPlatforms = [
+    'Facebook', 'Twitter', 'YouTube', 'TikTok', 'Instagram',
+    'LinkedIn', 'Reddit', 'Threads', 'Quora', 'Medium',
+    'Pinterest', 'Weibo', '微博', '小紅書', '抖音', 'Telegram',
+  ];
+  const socialRegex = new RegExp(
+    `\\b(${socialPlatforms.join('|')})\\s*·\\s*([^\\n·]{2,80})`,
+    'gi'
+  );
+  text.split('\n').forEach(line => {
+    const trimmed = line.trim();
+    if (trimmed.length < 8 || trimmed.length > 250) return;
+    // Skip lines already covered by Pass 1/2 (URL or breadcrumb present)
+    if (/https?:\/\//.test(trimmed) || trimmed.includes('›')) return;
+    if (shouldSkip(trimmed)) return;
+
+    const matches = trimmed.match(socialRegex);
+    if (!matches) return;
+
+    for (const m of matches) {
+      const normalized = m.replace(/\s+/g, ' ').trim();
+      const sig = 'social:' + normalized.toLowerCase().slice(0, 80);
+      if (!sigMap.has(sig)) sigMap.set(sig, normalized);
+    }
+  });
+
   return [...sigMap.values()];
 };
 
