@@ -2284,87 +2284,100 @@ const resultUrls = extractResultAnchors(pdfText);
 console.log(`🔗 Pre-extracted ${resultUrls.length} result anchors (URLs + breadcrumbs):`);
 resultUrls.forEach((a, i) => console.log(`  [${String(i+1).padStart(2,'0')}] ${a}`));;
 
+// ═══════════════════════════════════════════════════════════
+// 🔧 F.6: Page-content scraping pipeline
+// ═══════════════════════════════════════════════════════════
 let enrichedContent = pdfText;
 let scrapedCount = 0;
+const scrapeStats = {
+  attempted: 0,
+  succeeded: 0,
+  failed: 0,
+  tooShort: 0,
+  breadcrumbOnly: 0,
+  social: 0,
+};
+
 {
-  setProgress(30); setStage('正在抓取搜尋結果網頁內容...');
-  // 🔧 F.6: Smart URL resolution pipeline
-//   1. Try direct URLs from PDF (the ones with paths)
-//   2. For breadcrumb-only anchors, resolve via Worker → DDG
-//   3. Scrape each resolved URL
+  setProgress(30); setStage('正在解析搜尋結果 URL...');
 
-setProgress(30); setStage('正在解析搜尋結果 URL...');
+  // 🔧 用 reconstructUrlsFromAnchors 分類 anchors(只統計、不打 /api/resolve)
+  const anchors = reconstructUrlsFromAnchors(resultUrls);
+  scrapeStats.breadcrumbOnly = anchors.filter(a => a.kind === 'breadcrumb').length;
+  scrapeStats.social = anchors.filter(a => a.kind === 'social').length;
 
-// Build candidate list: prefer anchors that look like resolvable results
-const anchors = reconstructUrlsFromAnchors(resultUrls);
-console.log(`🔧 ${anchors.length} anchors to resolve:`, anchors);
+  console.log(`🔧 Anchor classification:`);
+  console.log(`   full_url    (scrapable)   : ${anchors.filter(a => a.kind === 'full_url').length}`);
+  console.log(`   breadcrumb  (snippet only): ${scrapeStats.breadcrumbOnly}`);
+  console.log(`   social      (snippet only): ${scrapeStats.social}`);
 
-// Step A: Resolve all anchors to real URLs
-const resolved = await Promise.all(anchors.map(async (anchor, idx) => {
-  if (anchor.kind === 'full_url') {
-    return { idx, url: anchor.url, label: 'direct' };
-  }
-  
-  if (anchor.kind === 'breadcrumb') {
-    // Try to find title from nearby PDF text
-    // (簡化版:直接用 domain 搜索,真實版可以提取 anchor 附近的 title)
-    const titleHint = anchor.pathHint.join(' ').slice(0, 60);
-    
-    try {
-      const resp = await callWorker('/api/resolve', {
-        domain: anchor.domain,
-        pathHint: anchor.pathHint,
-        title: titleHint,
-      });
-      if (resp.url) {
-        console.log(`  ✅ Resolved: ${anchor.original} → ${resp.url}`);
-        return { idx, url: resp.url, label: 'resolved' };
-      }
-    } catch (e) {
-      console.warn(`  ⚠️ Resolve failed for ${anchor.original}:`, e.message);
-    }
-  }
-  
-  return null; // social anchors and failures
-}));
+  // 從 PDF 提取真正可 scrape 的完整 URL(extractUrlsFromPdf 已過濾光禿域名)
+  const urls = extractUrlsFromPdf(pdfText);
+  scrapeStats.attempted = urls.length;
 
-const validUrls = resolved.filter(r => r && r.url);
-console.log(`🌐 ${validUrls.length}/${anchors.length} URLs resolved successfully`);
+  if (urls.length > 0) {
+    setProgress(40); setStage('正在抓取網頁全文...');
+    console.log(`🌐 Scraping ${urls.length} URL(s)...`);
 
-// Step B: Scrape resolved URLs
-setProgress(40); setStage('正在抓取網頁全文...');
-let scrapedCount = 0;
-let enrichedContent = pdfText;
+    const pageResults = await Promise.allSettled(urls.map(u => fetchPageContent(u)));
 
-if (validUrls.length > 0) {
-  const pageResults = await Promise.allSettled(
-    validUrls.map(r => fetchPageContent(r.url))
-  );
-  
-  const enrichments = validUrls.map((r, i) => {
-    const result = pageResults[i];
-    const text = result.status === 'fulfilled' ? result.value : null;
-    if (text && text.length > 200) {
-      scrapedCount++;
-      return `\n--- PAGE CONTENT (${r.label}): ${r.url} ---\n${text}\n--- END ---`;
-    }
-    return '';
-  }).filter(Boolean).join('\n');
-  
-  if (enrichments) {
-    enrichedContent = pdfText + '\n\n=== FULL PAGE CONTENTS ===\n' + enrichments;
-  }
-}
-
-console.log(`📰 Scraped ${scrapedCount}/${validUrls.length} pages successfully`);
-    const enrichments = urls.map((url, i) => {
+    const enrichments = urls.map((u, i) => {
       const result = pageResults[i];
       const text = result.status === 'fulfilled' ? result.value : null;
-      if (text) scrapedCount++;
-      return text ? `\n--- PAGE CONTENT: ${url} ---\n${text}\n--- END ---` : '';
+
+      if (!text) {
+        scrapeStats.failed++;
+        console.log(`   ❌ FAILED: ${u}`);
+        return '';
+      }
+      if (text.length < 200) {
+        scrapeStats.tooShort++;
+        console.log(`   ⚠️ TOO SHORT (${text.length} chars): ${u}`);
+        return '';
+      }
+      scrapeStats.succeeded++;
+      scrapedCount++;
+      console.log(`   ✅ OK (${text.length} chars): ${u}`);
+      return `\n--- PAGE CONTENT: ${u} ---\n${text}\n--- END ---`;
     }).filter(Boolean).join('\n');
-    if (enrichments) enrichedContent = pdfText + '\n\n=== FULL PAGE CONTENTS ===\n' + enrichments;
+
+    if (enrichments) {
+      enrichedContent = pdfText + '\n\n=== FULL PAGE CONTENTS ===\n' + enrichments;
+    }
+  } else {
+    console.log(`⏭️ No scrapable URLs — all results are snippet-only`);
   }
+
+  // ★ 把抓取統計寫入 prompt,讓 AI 知道邊啲 results 只有 snippet
+  const scrapeSummary = `
+═══════════════════════════════════════════════════════════
+📊 PAGE-CONTENT SCRAPING REPORT (for this analysis run)
+═══════════════════════════════════════════════════════════
+  URLs attempted (full URL with path) : ${scrapeStats.attempted}
+  Successfully scraped (>=200 chars)  : ${scrapeStats.succeeded}
+  Failed (network/timeout/blocked)    : ${scrapeStats.failed}
+  Too short to be useful (<200 chars) : ${scrapeStats.tooShort}
+  Breadcrumb-only (no scrapable URL)  : ${scrapeStats.breadcrumbOnly}
+  Social platform (no scrapable URL)  : ${scrapeStats.social}
+
+⚠️ IMPORTANT FOR CLASSIFICATION:
+  • For results WITH full page content (marked "--- PAGE CONTENT: <url> ---"
+    below in the analysis section), base your classification on the FULL
+    article body, not just the snippet.
+  • For results WITHOUT full page content (breadcrumb-only / social / failed
+    / too-short), you ONLY have the Google snippet. Snippets are short and
+    lossy — they often quote one sentence out of context. BE EXTRA CONSERVATIVE:
+      - Do NOT classify as TRUE_HIT based on snippet alone unless the snippet
+        EXPLICITLY states the screened subject IS the wrongdoer (not a
+        successor, witness, judge, defence lawyer, or unrelated person
+        mentioned in passing).
+      - When a snippet mentions the subject's name + a wrongdoing term
+        together, but the relationship is unclear → POSSIBLE_HIT (not TRUE).
+      - Lower confidence by ~0.15 for snippet-only classifications.
+═══════════════════════════════════════════════════════════
+`;
+  enrichedContent = scrapeSummary + '\n' + enrichedContent;
+  console.log(`📊 Scrape stats:`, scrapeStats);
 }
 
 setProgress(45); setStage('Poe AI 分析中...');
