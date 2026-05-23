@@ -4754,7 +4754,7 @@ export default function KYCSystem() {
                   const fill = r.rating === 'High' ? '#fef2f2' : r.rating === 'Medium' ? '#fffbeb' : '#f0fdf4';
                   const border = sel ? '#3b82f6' : r.rating === 'High' ? '#fca5a5' : r.rating === 'Medium' ? '#fcd34d' : '#86efac';
                   return (<g key={ent.id} opacity={dim ? 0.15 : 1} style={{ cursor: 'pointer' }}
-                    onClick={e => { e.stopPropagation(); if (!dragMode) setDagSelected(ent.id === dagSelected ? null : ent.id); }}
+                    onClick={e => { e.stopPropagation(); setDagSelected(ent.id === dagSelected ? null : ent.id); }}
                     onDoubleClick={() => { setSelectedId(ent.id); setDetailTab('overview'); }}
                     onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY, entityId: ent.id }); }}>
                     {ent.type === 'person' ? <circle cx={pos.x + 65} cy={pos.y + 20} r={22} fill={fill} stroke={border} strokeWidth={sel ? 3 : 2} /> : <rect x={pos.x} y={pos.y} width={130} height={40} rx={6} fill={fill} stroke={border} strokeWidth={sel ? 3 : 2} />}
