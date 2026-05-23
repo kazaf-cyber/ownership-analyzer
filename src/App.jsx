@@ -1056,11 +1056,34 @@ Determine the ROLE of "${targetName}" in this article. Pick exactly ONE roleType
 🚨 If target is mentioned in the SAME paragraph as wrongdoing, that ALONE is NOT enough.
    You must verify the GRAMMATICAL SUBJECT of the wrongdoing sentence is the target.
 
+🚨 CRITICAL — DISTINGUISH THESE TWO CASES:
+
+  CASE A: Article has NO ML/TF matter at all
+    Example: "X appointed CEO, replacing Y who retired"
+    → mltfMatterExistsInArticle = false
+    → reasoning should state: "No ML/TF subject matter in article"
+
+  CASE B: Article HAS ML/TF matter, but target is not the subject
+    Example: "X appointed CEO, replacing Y who was investigated for fraud"
+    → mltfMatterExistsInArticle = true
+    → mltfMatterAppliesToTarget = false
+    → actualSubjectName = "Y"
+    → reasoning MUST state: "ML/TF matter (fraud investigation) applies to Y, 
+       not to target X. X appears only as successor."
+
+  ⚠️ DO NOT claim "no ML/TF nexus" when the article clearly describes
+     wrongdoing of ANY party. Report the matter accurately, then explain
+     that it doesn't apply to the target.
+
 Output strict JSON only:
 {
   "isSubject": boolean,
   "wrongdoingApplies": boolean,
   "roleType": "subject" | "successor" | "predecessor" | "witness" | "victim" | "colleague" | "unrelated" | "ambiguous",
+
+  "mltfMatterExistsInArticle": boolean,  
+  "mltfMatterAppliesToTarget": boolean,      
+  
   "confidence": 0.0-1.0,
   "evidenceQuote": "the single most decisive quote from the passages (≤25 words) proving your role assignment",
   "actualSubjectName": "name of the actual subject if different from target, else empty string",
@@ -3012,25 +3035,30 @@ if (r.cls === 'FALSE_HIT') {
           const conf = typeof s2.confidence === 'number' ? s2.confidence : 0;
 
           if (s2.wrongdoingApplies === false && conf >= 0.70) {
-            // ✅ Stage 2 confirmed: target is NOT the wrongdoer → downgrade
-            const downgrade =
-              s2.roleType === 'successor' || s2.roleType === 'predecessor' || s2.roleType === 'unrelated'
-                ? 'FALSE_HIT'
-                : 'IRRELEVANT_MLTF';
-
-            parsed[idx] = {
-              ...original,
-              cls: downgrade,
-              confidence: Math.max(conf, 0.75),
-              riskCat: `N/A (${s2.roleType})`,
-              _stage2: s2,
-              reason:
-                `🎯 [Stage 2 — role: ${String(s2.roleType).toUpperCase()}] ${s2.reasoning}` +
-                (s2.actualSubjectName ? ` Actual subject: ${s2.actualSubjectName}.` : '') +
-                (s2.evidenceQuote ? ` Evidence: "${s2.evidenceQuote}"` : '') +
-                `\n\n— ORIGINAL (Stage 1) —\n${original.reason}`,
-            };
-            console.log(`📉 Stage 2 [#${s2.rank}]: ${original.cls} → ${downgrade} (role: ${s2.roleType})`);
+  // unrelated = same name, DIFFERENT person → FALSE_HIT
+  // successor/predecessor/witness/victim/colleague = SAME person, NOT the subject → IRRELEVANT_MLTF
+  const downgrade = s2.roleType === 'unrelated' 
+    ? 'FALSE_HIT' 
+    : 'IRRELEVANT_MLTF';
+  
+  parsed[idx] = {
+    ...original,
+    cls: downgrade,
+    confidence: Math.max(conf, 0.75),
+    riskCat: downgrade === 'FALSE_HIT' 
+      ? 'N/A (Different Person)'
+      : `N/A (Target is ${s2.roleType}, not subject)`,
+    _stage2: s2,
+    reason: downgrade === 'IRRELEVANT_MLTF'
+      ? `🎯 [Stage 2 — role: ${String(s2.roleType).toUpperCase()}] ML/TF-related content exists in this article, but it applies to ${s2.actualSubjectName || 'another party'}, NOT to ${searchEntity}. ${searchEntity} appears in the article only as ${s2.roleType}. ${s2.reasoning}` +
+        (s2.evidenceQuote ? ` Evidence: "${s2.evidenceQuote}"` : '') +
+        `\n\n— ORIGINAL (Stage 1) —\n${original.reason}`
+      : `🎯 [Stage 2 — UNRELATED person, same name] ${s2.reasoning}` +
+        (s2.evidenceQuote ? ` Evidence: "${s2.evidenceQuote}"` : '') +
+        `\n\n— ORIGINAL (Stage 1) —\n${original.reason}`,
+  };
+  console.log(`📉 Stage 2 [#${s2.rank}]: ${original.cls} → ${downgrade} (role: ${s2.roleType})`);
+}
 
           } else if (s2.wrongdoingApplies === true && conf >= 0.70) {
             // ✅ Stage 2 confirms target IS the subject → annotate + slightly bump confidence
