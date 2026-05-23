@@ -16,7 +16,7 @@ export default {
         status: 'ok', 
         timestamp: new Date().toISOString(),
         hasBrowser: !!env.BROWSER,
-        routes: ['/api/health', '/api/scrape', '/api/batch-scrape']
+        routes: ['/api/health', '/api/scrape', '/api/batch-scrape', '/api/resolve']
       }));
     }
 
@@ -28,6 +28,11 @@ export default {
     // 批次 URL 抓取
     if (url.pathname === '/api/batch-scrape' && request.method === 'POST') {
       return handleBatchScrape(request, env);
+    }
+
+    // URL Resolve（跟蹤 redirects，返回最終真實 URL）
+    if (url.pathname === '/api/resolve' && request.method === 'POST') {
+      return handleResolve(request, env);
     }
 
     return corsResponse(JSON.stringify({ error: 'Not found' }), 404);
@@ -208,6 +213,86 @@ async function handleBatchScrape(request, env) {
     await browser.close();
 
     return corsResponse(JSON.stringify({ 
+      results,
+      total: targetUrls.length,
+      successful: results.filter(r => r.success).length
+    }));
+
+  } catch (error) {
+    return corsResponse(JSON.stringify({
+      success: false,
+      error: error.message
+    }), 500);
+  }
+}
+
+/**
+ * URL Resolve - 跟蹤 redirects，返回最終真實 URL
+ * 接受 { url } 或 { urls: [...] }
+ * 用 fetch (輕量，唔需要 browser)
+ */
+async function handleResolve(request, env) {
+  try {
+    const body = await request.json();
+    const isSingleMode = !!body.url && !body.urls;
+    const inputUrls = body.urls || (body.url ? [body.url] : []);
+
+    if (!inputUrls || inputUrls.length === 0) {
+      return corsResponse(JSON.stringify({ error: 'Missing url or urls' }), 400);
+    }
+
+    // 限制最多 20 條，避免濫用
+    const targetUrls = inputUrls.slice(0, 20);
+
+    const results = await Promise.all(
+      targetUrls.map(async (targetUrl) => {
+        try {
+          // 用 AbortController 控制 timeout (10 秒)
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+          const response = await fetch(targetUrl, {
+            method: 'GET',
+            redirect: 'follow',
+            signal: controller.signal,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7'
+            }
+          });
+
+          clearTimeout(timeoutId);
+
+          return {
+            originalUrl: targetUrl,
+            finalUrl: response.url || targetUrl,
+            status: response.status,
+            redirected: response.redirected,
+            contentType: response.headers.get('content-type') || '',
+            success: response.ok
+          };
+        } catch (err) {
+          return {
+            originalUrl: targetUrl,
+            finalUrl: targetUrl,
+            status: 0,
+            redirected: false,
+            contentType: '',
+            success: false,
+            error: err.message
+          };
+        }
+      })
+    );
+
+    // 單一 URL 模式：直接返回 object
+    if (isSingleMode) {
+      return corsResponse(JSON.stringify(results[0]));
+    }
+
+    // 批次模式：返回 array + 統計
+    return corsResponse(JSON.stringify({
       results,
       total: targetUrls.length,
       successful: results.filter(r => r.success).length
