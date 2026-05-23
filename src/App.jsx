@@ -2923,8 +2923,11 @@ if (r.cls === 'FALSE_HIT') {
       riskCat: 'N/A (Out-of-Scope Matter)',
       reason: `[Auto-upgraded FALSE_HIT → IRRELEVANT_MLTF: the underlying matter is outside ML/TF screening scope (commercial/regulatory, not a predicate offense). Role analysis is moot when the matter itself doesn't concern us.] ${r.reason}`,
     };
-  }
-}
+    }
+   }
+     return r;
+    });
+        
         // ════════════════════════════════════════════════════════════
         // 🛡️ Rule 8 (post-Stage-2): Use Stage 2 structured signals to
         //    correct any remaining mis-classification.
