@@ -1,12 +1,12 @@
 // ═══════════════════════════════════════════════════════════
-// Ownership Analyzer Worker v1.3.0
+// Ownership Analyzer Worker v1.4.0
 // Routes: /api/health, /api/scrape, /api/batch-scrape, /api/resolve
-// Changes:
-//   ✅ Fix `ok` flag (only 2xx is ok)
-//   ✅ Add retry logic with exponential backoff
-//   ✅ Add error categorization
-//   ✅ Add timing metadata
-//   ✅ Reuse single browser across batch URLs (huge perf win)
+// Changes from v1.3.0:
+//   ✅ Implement handleResolve (was placeholder)
+//   ✅ Implement handleBreadcrumbResolve (was placeholder)
+//   ✅ All /api/resolve errors return HTTP 200 + structured error
+//      (no more 500 noise breaking frontend pipeline)
+//   ✅ Support 3 input modes: { domain, pathHint, title } | { url } | { urls }
 // ═══════════════════════════════════════════════════════════
 
 import puppeteer from "@cloudflare/puppeteer";
@@ -109,7 +109,7 @@ async function scrapeWithBrowser(browser, targetUrl, opts = {}) {
       const html = await page.content();
       const title = await page.title().catch(() => '');
       const finalUrl = page.url();
-      const ok = status >= 200 && status < 300; // ✅ FIXED
+      const ok = status >= 200 && status < 300;
 
       return {
         ok,
@@ -210,6 +210,269 @@ async function scrapeBatch(env, urls, opts = {}) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// /api/resolve — 永遠返回 200,所有錯誤都包裝成 structured response
+// 支援 3 種 input mode:
+//   A. { domain, pathHint, title }  → breadcrumb resolve (via DuckDuckGo)
+//   B. { url }                       → single URL GET 檢查
+//   C. { urls: [...] }               → batch URL 檢查
+// ═══════════════════════════════════════════════════════════
+async function handleResolve(request, env) {
+  // 0. Parse body — 任何 JSON 錯誤都返回 200
+  let body = {};
+  try {
+    body = await request.json();
+  } catch {
+    return corsResponse(JSON.stringify({
+      url: null,
+      query: '',
+      success: false,
+      error: 'invalid_json_body',
+    }), 200);
+  }
+
+  try {
+    // ─── Mode A: Breadcrumb resolve ───
+    if (body.domain) {
+      try {
+        return await handleBreadcrumbResolve(body, env);
+      } catch (e) {
+        console.error('[resolve/breadcrumb]', e.message);
+        return corsResponse(JSON.stringify({
+          url: null,
+          query: '',
+          success: false,
+          error: `breadcrumb_failed: ${e.message}`,
+        }), 200);
+      }
+    }
+
+    // ─── Mode B/C: URL resolve ───
+    const isSingleMode = !!body.url && !body.urls;
+    const inputUrls = body.urls || (body.url ? [body.url] : []);
+
+    if (inputUrls.length === 0) {
+      return corsResponse(JSON.stringify({
+        url: null,
+        success: false,
+        error: 'missing_url_urls_or_domain',
+      }), 200);
+    }
+
+    const targetUrls = inputUrls.slice(0, 20);
+
+    const results = await Promise.all(targetUrls.map(async (targetUrl) => {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+        const response = await fetch(targetUrl, {
+          method: 'GET',
+          redirect: 'follow',
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
+          },
+        });
+        clearTimeout(timeoutId);
+
+        return {
+          originalUrl: targetUrl,
+          finalUrl: response.url || targetUrl,
+          status: response.status,
+          redirected: response.redirected,
+          contentType: response.headers.get('content-type') || '',
+          success: response.ok,
+        };
+      } catch (err) {
+        return {
+          originalUrl: targetUrl,
+          finalUrl: targetUrl,
+          status: 0,
+          redirected: false,
+          contentType: '',
+          success: false,
+          error: err.message,
+        };
+      }
+    }));
+
+    if (isSingleMode) {
+      const r = results[0];
+      return corsResponse(JSON.stringify({
+        url: r.finalUrl,
+        status: r.status,
+        success: r.success,
+        ...(r.error && { error: r.error }),
+      }), 200);
+    }
+
+    return corsResponse(JSON.stringify({
+      results,
+      total: targetUrls.length,
+      successful: results.filter(r => r.success).length,
+    }), 200);
+
+  } catch (err) {
+    // 終極 safety net — 即使上面所有嘢都炸都唔會 500
+    console.error('[resolve/outer]', err.message);
+    return corsResponse(JSON.stringify({
+      url: null,
+      query: '',
+      success: false,
+      error: `handler_failed: ${err.message}`,
+    }), 200);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Breadcrumb Resolve — 用 DuckDuckGo HTML search 還原真實 article URL
+//   Input:  { domain: "reuters.com", pathHint: ["energy", "pe"], title: "..." }
+//   Output: { url: "https://reuters.com/energy/...", query: "...", success: true }
+// 所有錯誤都返回 200 + structured error,frontend pipeline 唔會斷
+// ═══════════════════════════════════════════════════════════
+async function handleBreadcrumbResolve(body, env) {
+  const { domain, pathHint = [], title = '' } = body;
+
+  if (!domain || typeof domain !== 'string') {
+    return corsResponse(JSON.stringify({
+      url: null,
+      query: '',
+      success: false,
+      error: 'missing_domain',
+    }), 200);
+  }
+
+  // 1. Build search query: "site:domain.com hint1 hint2 title..."
+  const cleanDomain = domain
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .trim();
+
+  const hintTokens = (Array.isArray(pathHint) ? pathHint : [])
+    .map(s => String(s).replace(/[._\-/]+/g, ' ').trim())
+    .filter(s => s.length >= 2)
+    .slice(0, 5);
+
+  const titlePart = title
+    ? String(title).split(/\s+/).slice(0, 6).join(' ')
+    : '';
+
+  const queryParts = [`site:${cleanDomain}`, ...hintTokens, titlePart].filter(Boolean);
+  const query = queryParts.join(' ');
+
+  // 2. Fetch DDG HTML endpoint (8 sec timeout)
+  const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  let html;
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const resp = await fetch(ddgUrl, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+    clearTimeout(timeoutId);
+
+    if (!resp.ok) {
+      return corsResponse(JSON.stringify({
+        url: null,
+        query,
+        success: false,
+        error: `ddg_http_${resp.status}`,
+      }), 200);
+    }
+    html = await resp.text();
+  } catch (e) {
+    return corsResponse(JSON.stringify({
+      url: null,
+      query,
+      success: false,
+      error: `ddg_fetch_failed: ${e.message}`,
+    }), 200);
+  }
+
+  // 3. Extract candidate URLs from DDG HTML
+  //    DDG uses <a class="result__a" href="..."> sometimes wrapped via /l/?uddg=
+  const candidates = [];
+  const linkRegex = /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"/gi;
+  let m;
+  while ((m = linkRegex.exec(html)) !== null && candidates.length < 30) {
+    let href = m[1];
+    try {
+      // Normalize DDG redirect wrappers
+      if (href.startsWith('//duckduckgo.com/l/')) {
+        const u = new URL('https:' + href);
+        const real = u.searchParams.get('uddg');
+        if (real) href = decodeURIComponent(real);
+      } else if (href.startsWith('/l/')) {
+        const u = new URL('https://duckduckgo.com' + href);
+        const real = u.searchParams.get('uddg');
+        if (real) href = decodeURIComponent(real);
+      } else if (href.startsWith('//')) {
+        href = 'https:' + href;
+      }
+    } catch {
+      continue;
+    }
+    if (/^https?:\/\//i.test(href)) candidates.push(href);
+  }
+
+  // 4. Pick best candidate that matches the target domain
+  const escapedDomain = cleanDomain.replace(/\./g, '\\.');
+  const domainPattern = new RegExp(
+    `^https?://([a-z0-9-]+\\.)*${escapedDomain}(/|$)`,
+    'i'
+  );
+
+  let best = null;
+  let bestScore = -1;
+  const hintLower = hintTokens.map(h => h.toLowerCase());
+
+  for (const c of candidates) {
+    if (!domainPattern.test(c)) continue;
+    // Score = how many hint tokens appear in the URL path
+    const cLower = c.toLowerCase();
+    let score = 0;
+    for (const h of hintLower) {
+      if (cLower.includes(h)) score++;
+    }
+    // Bonus: longer path = more likely an article (not homepage)
+    try {
+      const pathLen = new URL(c).pathname.replace(/^\/+|\/+$/g, '').length;
+      if (pathLen >= 10) score += 1;
+    } catch {}
+    if (score > bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+
+  if (!best) {
+    return corsResponse(JSON.stringify({
+      url: null,
+      query,
+      success: false,
+      error: 'no_candidate_matched_domain',
+      candidateCount: candidates.length,
+    }), 200);
+  }
+
+  return corsResponse(JSON.stringify({
+    url: best,
+    query,
+    success: true,
+    score: bestScore,
+  }), 200);
+}
+
+// ═══════════════════════════════════════════════════════════
 // MAIN FETCH HANDLER
 // ═══════════════════════════════════════════════════════════
 export default {
@@ -228,7 +491,7 @@ export default {
           hasBrowser: !!env.BROWSER,
           timestamp: new Date().toISOString(),
           worker: 'ownership-analyzer-api',
-          version: '1.3.0'
+          version: '1.4.0'
         }, { headers: corsHeaders });
       }
 
@@ -236,7 +499,7 @@ export default {
       if (url.pathname === '/' || url.pathname === '') {
         return Response.json({
           name: 'ownership-analyzer-api',
-          version: '1.3.0',
+          version: '1.4.0',
           endpoints: [
             'GET  /api/health',
             'POST /api/scrape',
@@ -289,7 +552,6 @@ export default {
           total: targetUrls.length,
           successful: results.filter(r => r.ok).length,
           failed: results.filter(r => !r.ok).length,
-          // Helpful breakdown by error type
           errorBreakdown: results
             .filter(r => !r.ok)
             .reduce((acc, r) => {
@@ -301,7 +563,7 @@ export default {
         }, { headers: corsHeaders });
       }
 
-      // ─── Resolve (unchanged) ───
+      // ─── Resolve ───
       if (url.pathname === '/api/resolve' && request.method === 'POST') {
         return handleResolve(request, env);
       }
@@ -319,6 +581,3 @@ export default {
     }
   }
 };
-
-// ─── handleResolve / handleBreadcrumbResolve 不變,從你 v1.2.0 直接 copy 過嚟 ───
-// (篇幅關係略,直接保留原本兩個 function)
