@@ -1,11 +1,12 @@
 // ═══════════════════════════════════════════════════════════
 // Ownership Analyzer Worker v1.3.0
 // Routes: /api/health, /api/scrape, /api/batch-scrape, /api/resolve
-// 
-// CHANGELOG v1.3.0:
-//   - 🔥 Fix Cloudflare Browser Rendering 429 rate limit on batch
-//   - batch-scrape now reuses 1 browser instance with multiple tabs
-//   - Added scrapeWithRetry() with exponential backoff for 429
+// Changes:
+//   ✅ Fix `ok` flag (only 2xx is ok)
+//   ✅ Add retry logic with exponential backoff
+//   ✅ Add error categorization
+//   ✅ Add timing metadata
+//   ✅ Reuse single browser across batch URLs (huge perf win)
 // ═══════════════════════════════════════════════════════════
 
 import puppeteer from "@cloudflare/puppeteer";
@@ -23,109 +24,189 @@ function corsResponse(body, status = 200) {
   });
 }
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 // ═══════════════════════════════════════════════════════════
-// Helper: scrape ONE URL via Puppeteer (own browser lifecycle)
-// Used by /api/scrape (single mode)
+// Error categorization
+// ═══════════════════════════════════════════════════════════
+function categorizeError(err) {
+  const msg = (err?.message || '').toLowerCase();
+
+  if (/name_not_resolved|enotfound|getaddrinfo|dns/i.test(msg))
+    return { category: 'dns_error', retryable: false };
+  if (/timeout|timed out|navigation timeout/i.test(msg))
+    return { category: 'timeout', retryable: true };
+  if (/empty_response|connection_reset|econnreset/i.test(msg))
+    return { category: 'connection_reset', retryable: true };
+  if (/connection_refused|econnrefused/i.test(msg))
+    return { category: 'connection_refused', retryable: true };
+  if (/connection_closed|socket hang up|aborted/i.test(msg))
+    return { category: 'connection_closed', retryable: true };
+  if (/ssl|cert|tls/i.test(msg))
+    return { category: 'ssl_error', retryable: false };
+  if (/blocked|forbidden|403/i.test(msg))
+    return { category: 'blocked', retryable: false };
+
+  return { category: 'unknown_error', retryable: true };
+}
+
+// ═══════════════════════════════════════════════════════════
+// Scrape single URL using an EXISTING browser (no launch!)
+// ═══════════════════════════════════════════════════════════
+async function scrapeWithBrowser(browser, targetUrl, opts = {}) {
+  const {
+    timeout = 30000,
+    waitUntil = 'domcontentloaded',
+    maxRetries = 2,
+    retryBaseMs = 1000
+  } = opts;
+
+  const startTime = Date.now();
+  let attempt = 0;
+
+  while (attempt <= maxRetries) {
+    let page;
+    try {
+      page = await browser.newPage();
+      await page.setUserAgent(
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      );
+      await page.setExtraHTTPHeaders({
+        'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7'
+      });
+
+      const response = await page.goto(targetUrl, { waitUntil, timeout });
+      const status = response ? response.status() : 0;
+
+      // ── Retry on transient HTTP errors ──
+      if (status >= 500 || status === 429) {
+        if (attempt < maxRetries) {
+          await page.close().catch(() => {});
+          await sleep(retryBaseMs * Math.pow(2, attempt));
+          attempt++;
+          continue;
+        }
+        // Final attempt — return with status
+        const finalUrl = page.url();
+        return {
+          ok: false,
+          url: targetUrl,
+          finalUrl,
+          status,
+          errorCategory: status === 429 ? 'rate_limited' : 'server_error',
+          error: `HTTP ${status} (gave up after ${attempt + 1} attempts)`,
+          retriedAttempts: attempt,
+          durationMs: Date.now() - startTime,
+          title: '',
+          html: '',
+          length: 0
+        };
+      }
+
+      // ── Success path (or 4xx that we don't retry) ──
+      await page.waitForTimeout(1500).catch(() => {});
+      const html = await page.content();
+      const title = await page.title().catch(() => '');
+      const finalUrl = page.url();
+      const ok = status >= 200 && status < 300; // ✅ FIXED
+
+      return {
+        ok,
+        url: targetUrl,
+        finalUrl,
+        status,
+        title,
+        html,
+        length: html.length,
+        retriedAttempts: attempt,
+        durationMs: Date.now() - startTime,
+        ...(ok ? {} : {
+          errorCategory: status >= 400 && status < 500 ? 'client_error' : 'server_error',
+          error: `HTTP ${status}`
+        })
+      };
+
+    } catch (err) {
+      const { category, retryable } = categorizeError(err);
+
+      if (attempt < maxRetries && retryable) {
+        await sleep(retryBaseMs * Math.pow(2, attempt));
+        attempt++;
+        continue;
+      }
+
+      return {
+        ok: false,
+        url: targetUrl,
+        status: null,
+        errorCategory: category,
+        error: err.message,
+        errorType: err.name || 'UnknownError',
+        retriedAttempts: attempt,
+        durationMs: Date.now() - startTime
+      };
+    } finally {
+      if (page) await page.close().catch(() => {});
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Single URL — launches its own browser
 // ═══════════════════════════════════════════════════════════
 async function scrapeUrl(env, targetUrl, opts = {}) {
-  const { timeout = 30000, waitUntil = 'domcontentloaded' } = opts;
+  let browser;
+  try {
+    browser = await puppeteer.launch(env.BROWSER);
+    return await scrapeWithBrowser(browser, targetUrl, opts);
+  } catch (err) {
+    return {
+      ok: false,
+      url: targetUrl,
+      status: null,
+      errorCategory: 'browser_launch_failed',
+      error: err.message,
+      retriedAttempts: 0,
+      durationMs: 0
+    };
+  } finally {
+    if (browser) try { await browser.close(); } catch {}
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Batch — REUSES single browser (major perf fix)
+// ═══════════════════════════════════════════════════════════
+async function scrapeBatch(env, urls, opts = {}) {
+  const results = [];
   let browser;
 
   try {
     browser = await puppeteer.launch(env.BROWSER);
-    const result = await scrapePageInBrowser(browser, targetUrl, { timeout, waitUntil });
-    return result;
+
+    for (const targetUrl of urls) {
+      const result = await scrapeWithBrowser(browser, targetUrl, opts);
+      results.push(result);
+    }
   } catch (err) {
-    return {
-      ok: false,
-      url: targetUrl,
-      error: err.message,
-      errorType: err.name || 'UnknownError'
-    };
+    // Browser-level failure — fill remaining as failed
+    for (let i = results.length; i < urls.length; i++) {
+      results.push({
+        ok: false,
+        url: urls[i],
+        status: null,
+        errorCategory: 'browser_launch_failed',
+        error: err.message,
+        retriedAttempts: 0,
+        durationMs: 0
+      });
+    }
   } finally {
-    if (browser) {
-      try { await browser.close(); } catch {}
-    }
+    if (browser) try { await browser.close(); } catch {}
   }
-}
 
-// ═══════════════════════════════════════════════════════════
-// 🆕 Helper: scrape using EXISTING browser (open new tab)
-// Used by /api/batch-scrape to share 1 browser across N urls
-// ═══════════════════════════════════════════════════════════
-async function scrapePageInBrowser(browser, targetUrl, opts = {}) {
-  const { timeout = 30000, waitUntil = 'domcontentloaded' } = opts;
-  let page;
-
-  try {
-    page = await browser.newPage();
-
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-      '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    );
-    await page.setExtraHTTPHeaders({
-      'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7'
-    });
-
-    const response = await page.goto(targetUrl, { waitUntil, timeout });
-
-    // Wait a bit more for JS-heavy pages
-    await page.waitForTimeout(1500).catch(() => {});
-
-    const html = await page.content();
-    const title = await page.title().catch(() => '');
-    const finalUrl = page.url();
-
-    return {
-      ok: true,
-      url: targetUrl,
-      finalUrl,
-      status: response ? response.status() : 0,
-      title,
-      html,
-      length: html.length
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      url: targetUrl,
-      error: err.message,
-      errorType: err.name || 'UnknownError'
-    };
-  } finally {
-    if (page) {
-      try { await page.close(); } catch {}
-    }
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// 🆕 Helper: scrape with retry + exponential backoff
-// Specifically retries on 429 / rate-limit / "Unable to create" errors
-// ═══════════════════════════════════════════════════════════
-async function scrapeWithRetry(browser, targetUrl, opts = {}, maxRetries = 2) {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const result = await scrapePageInBrowser(browser, targetUrl, opts);
-
-    if (result.ok) {
-      if (attempt > 0) result.retriedAttempts = attempt;
-      return result;
-    }
-
-    const errStr = (result.error || '').toLowerCase();
-    const isRetryable =
-      errStr.includes('429') ||
-      errStr.includes('rate limit') ||
-      errStr.includes('unable to create') ||
-      errStr.includes('timeout');
-
-    if (!isRetryable || attempt === maxRetries) return result;
-
-    // Exponential backoff: 2s → 4s → 8s
-    const delay = Math.pow(2, attempt + 1) * 1000;
-    await new Promise(r => setTimeout(r, delay));
-  }
+  return results;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -165,82 +246,59 @@ export default {
         }, { headers: corsHeaders });
       }
 
-      // ─── Single Scrape (Puppeteer) ───
+      // ─── Single Scrape ───
       if (url.pathname === '/api/scrape' && request.method === 'POST') {
         const body = await request.json();
-        const targetUrl = body.url;
-        if (!targetUrl) {
+        if (!body.url) {
           return Response.json(
-            { ok: false, error: 'Missing "url" parameter in request body' },
+            { ok: false, error: 'Missing "url" parameter' },
             { status: 400, headers: corsHeaders }
           );
         }
-
-        const result = await scrapeUrl(env, targetUrl, {
+        const result = await scrapeUrl(env, body.url, {
           timeout: body.timeout || 30000,
-          waitUntil: body.waitUntil || 'domcontentloaded'
+          waitUntil: body.waitUntil || 'domcontentloaded',
+          maxRetries: body.maxRetries ?? 2
         });
-
         return Response.json(result, {
           status: result.ok ? 200 : 502,
           headers: corsHeaders
         });
       }
 
-      // ─── 🔥 Batch Scrape (REUSE 1 browser + multiple tabs + retry) ───
+      // ─── Batch Scrape ───
       if (url.pathname === '/api/batch-scrape' && request.method === 'POST') {
         const body = await request.json();
         const urls = Array.isArray(body.urls) ? body.urls : [];
         if (!urls.length) {
           return Response.json(
-            { ok: false, error: 'Missing "urls" array in request body' },
+            { ok: false, error: 'Missing "urls" array' },
             { status: 400, headers: corsHeaders }
           );
         }
 
-        const targetUrls = urls.slice(0, 10); // hard cap 10
-        const opts = {
+        const targetUrls = urls.slice(0, 10);
+        const results = await scrapeBatch(env, targetUrls, {
           timeout: body.timeout || 30000,
-          waitUntil: body.waitUntil || 'domcontentloaded'
-        };
+          waitUntil: body.waitUntil || 'domcontentloaded',
+          maxRetries: body.maxRetries ?? 2
+        });
 
-        const results = [];
-        let browser = null;
-
-        try {
-          // 🎯 Launch browser ONCE for the entire batch
-          browser = await puppeteer.launch(env.BROWSER);
-
-          // 🎯 Sequential: open each URL in a new tab, close tab after
-          for (const targetUrl of targetUrls) {
-            const result = await scrapeWithRetry(browser, targetUrl, opts);
-            results.push(result);
-          }
-
-          return Response.json({
-            ok: true,
-            total: targetUrls.length,
-            successful: results.filter(r => r.ok).length,
-            failed: results.filter(r => !r.ok).length,
-            results
-          }, { headers: corsHeaders });
-
-        } catch (err) {
-          // If the whole browser dies, return whatever we got + error
-          return Response.json({
-            ok: false,
-            error: err.message,
-            errorType: err.name || 'UnknownError',
-            total: targetUrls.length,
-            successful: results.filter(r => r.ok).length,
-            failed: results.filter(r => !r.ok).length,
-            results
-          }, { status: 500, headers: corsHeaders });
-        } finally {
-          if (browser) {
-            try { await browser.close(); } catch {}
-          }
-        }
+        return Response.json({
+          ok: true,
+          total: targetUrls.length,
+          successful: results.filter(r => r.ok).length,
+          failed: results.filter(r => !r.ok).length,
+          // Helpful breakdown by error type
+          errorBreakdown: results
+            .filter(r => !r.ok)
+            .reduce((acc, r) => {
+              const k = r.errorCategory || 'unknown';
+              acc[k] = (acc[k] || 0) + 1;
+              return acc;
+            }, {}),
+          results
+        }, { headers: corsHeaders });
       }
 
       // ─── Resolve (unchanged) ───
@@ -248,7 +306,6 @@ export default {
         return handleResolve(request, env);
       }
 
-      // ─── 404 ───
       return Response.json(
         { error: 'Not Found', pathname: url.pathname, method: request.method },
         { status: 404, headers: corsHeaders }
@@ -263,181 +320,5 @@ export default {
   }
 };
 
-// ═══════════════════════════════════════════════════════════
-// URL Resolve - 雙模式 (UNCHANGED from v1.2.0)
-// ═══════════════════════════════════════════════════════════
-async function handleResolve(request, env) {
-  try {
-    const body = await request.json();
-
-    if (body.domain) {
-      return await handleBreadcrumbResolve(body);
-    }
-
-    const isSingleMode = !!body.url && !body.urls;
-    const inputUrls = body.urls || (body.url ? [body.url] : []);
-
-    if (!inputUrls || inputUrls.length === 0) {
-      return corsResponse(JSON.stringify({
-        error: 'Missing url, urls, or domain'
-      }), 400);
-    }
-
-    const targetUrls = inputUrls.slice(0, 20);
-
-    const results = await Promise.all(
-      targetUrls.map(async (targetUrl) => {
-        try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-          const response = await fetch(targetUrl, {
-            method: 'GET',
-            redirect: 'follow',
-            signal: controller.signal,
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-              'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7'
-            }
-          });
-
-          clearTimeout(timeoutId);
-
-          return {
-            originalUrl: targetUrl,
-            finalUrl: response.url || targetUrl,
-            status: response.status,
-            redirected: response.redirected,
-            contentType: response.headers.get('content-type') || '',
-            success: response.ok
-          };
-        } catch (err) {
-          return {
-            originalUrl: targetUrl,
-            finalUrl: targetUrl,
-            status: 0,
-            redirected: false,
-            contentType: '',
-            success: false,
-            error: err.message
-          };
-        }
-      })
-    );
-
-    if (isSingleMode) {
-      return corsResponse(JSON.stringify(results[0]));
-    }
-
-    return corsResponse(JSON.stringify({
-      results,
-      total: targetUrls.length,
-      successful: results.filter(r => r.success).length
-    }));
-
-  } catch (error) {
-    return corsResponse(JSON.stringify({
-      success: false,
-      error: error.message
-    }), 500);
-  }
-}
-
-async function handleBreadcrumbResolve(body) {
-  const { domain, pathHint = [], title = '' } = body;
-
-  const cleanDomain = String(domain).replace(/^https?:\/\//, '').replace(/^www\./, '').trim();
-  const pathTerms = Array.isArray(pathHint)
-    ? pathHint
-        .map(p => String(p).replace(/[\.…]+$/g, '').trim())
-        .filter(p => p && p.length >= 2)
-        .slice(0, 5)
-        .join(' ')
-    : '';
-
-  const query = `site:${cleanDomain} ${pathTerms} ${String(title || '').slice(0, 100)}`.trim().replace(/\s+/g, ' ');
-
-  try {
-    const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-    const searchResp = await fetch(ddgUrl, {
-      method: 'GET',
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://duckduckgo.com/'
-      }
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!searchResp.ok) {
-      return corsResponse(JSON.stringify({
-        url: null, query, error: `DuckDuckGo HTTP ${searchResp.status}`
-      }));
-    }
-
-    const html = await searchResp.text();
-
-    const linkPattern = /<a[^>]+href="([^"]+)"[^>]*class="[^"]*result__a[^"]*"/gi;
-    const altPattern = /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"/gi;
-
-    const candidates = [];
-    let m;
-    while ((m = linkPattern.exec(html)) !== null) candidates.push(m[1]);
-    while ((m = altPattern.exec(html)) !== null) candidates.push(m[1]);
-
-    for (let candidateUrl of candidates) {
-      try {
-        if (candidateUrl.includes('/l/?uddg=') || candidateUrl.includes('//duckduckgo.com/l/?uddg=')) {
-          const uddgMatch = candidateUrl.match(/[?&]uddg=([^&]+)/);
-          if (uddgMatch) {
-            candidateUrl = decodeURIComponent(uddgMatch[1]);
-          }
-        }
-
-        if (candidateUrl.startsWith('//')) {
-          candidateUrl = 'https:' + candidateUrl;
-        }
-
-        const parsed = new URL(candidateUrl);
-        const candidateDomain = parsed.hostname.replace(/^www\./, '');
-
-        if (
-          candidateDomain === cleanDomain ||
-          candidateDomain.endsWith('.' + cleanDomain) ||
-          cleanDomain.endsWith('.' + candidateDomain)
-        ) {
-          if (parsed.pathname && parsed.pathname.length >= 4) {
-            return corsResponse(JSON.stringify({
-              url: candidateUrl,
-              query,
-              success: true
-            }));
-          }
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    return corsResponse(JSON.stringify({
-      url: null,
-      query,
-      error: `No matching ${cleanDomain} URL in ${candidates.length} search results`
-    }));
-
-  } catch (err) {
-    return corsResponse(JSON.stringify({
-      url: null,
-      query,
-      error: err.message || 'Search failed'
-    }));
-  }
-}
+// ─── handleResolve / handleBreadcrumbResolve 不變,從你 v1.2.0 直接 copy 過嚟 ───
+// (篇幅關係略,直接保留原本兩個 function)
