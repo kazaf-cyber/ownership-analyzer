@@ -1,253 +1,36 @@
-import puppeteer from '@cloudflare/puppeteer';
-
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-
-    // CORS preflight
-    if (request.method === 'OPTIONS') {
-      return corsResponse(null, 204);
-    }
-
-    // 健康檢查
-    if (url.pathname === '/api/health') {
-      return corsResponse(JSON.stringify({ 
-        ok: true,
-        status: 'ok', 
-        timestamp: new Date().toISOString(),
-        hasBrowser: !!env.BROWSER,
-        routes: ['/api/health', '/api/scrape', '/api/batch-scrape', '/api/resolve']
-      }));
-    }
-
-    // 單一 URL 抓取（全文）
-    if (url.pathname === '/api/scrape' && request.method === 'POST') {
-      return handleScrape(request, env);
-    }
-
-    // 批次 URL 抓取
-    if (url.pathname === '/api/batch-scrape' && request.method === 'POST') {
-      return handleBatchScrape(request, env);
-    }
-
-    // URL Resolve（跟蹤 redirects，返回最終真實 URL）
-    if (url.pathname === '/api/resolve' && request.method === 'POST') {
-      return handleResolve(request, env);
-    }
-
-    return corsResponse(JSON.stringify({ error: 'Not found' }), 404);
-  }
-};
-
 /**
- * 單一 URL 全文抓取
- */
-async function handleScrape(request, env) {
-  try {
-    const { url, maxChars = 3000, extractText = true } = await request.json();
-
-    if (!url) {
-      return corsResponse(JSON.stringify({ error: 'Missing url' }), 400);
-    }
-
-    const browser = await puppeteer.launch(env.BROWSER);
-    const page = await browser.newPage();
-
-    await page.setViewport({ width: 1280, height: 800 });
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    );
-
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-      const type = req.resourceType();
-      if (['image', 'font', 'media'].includes(type)) {
-        req.abort();
-      } else {
-        req.continue();
-      }
-    });
-
-    await page.goto(url, { 
-      waitUntil: 'domcontentloaded', 
-      timeout: 20000 
-    });
-
-    await page.waitForTimeout(2000);
-
-    const result = await page.evaluate((maxLen) => {
-      const removeSelectors = [
-        'script', 'style', 'noscript', 'iframe',
-        'nav', 'footer', 'header', 
-        '.nav', '.footer', '.header', '.sidebar',
-        '.ad', '.ads', '.advertisement', '.cookie-banner',
-        '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]'
-      ];
-      
-      removeSelectors.forEach(sel => {
-        document.querySelectorAll(sel).forEach(el => el.remove());
-      });
-
-      const mainContent = 
-        document.querySelector('article') ||
-        document.querySelector('main') ||
-        document.querySelector('[role="main"]') ||
-        document.querySelector('.content') ||
-        document.querySelector('.article-body') ||
-        document.querySelector('#content') ||
-        document.body;
-
-      const text = (mainContent?.innerText || '').trim();
-      const title = document.title || '';
-      const metaDesc = document.querySelector('meta[name="description"]')?.content || '';
-      const lang = document.documentElement.lang || '';
-
-      return {
-        title,
-        text: text.substring(0, maxLen),
-        metaDescription: metaDesc,
-        language: lang,
-        textLength: text.length
-      };
-    }, maxChars);
-
-    await page.close();
-    await browser.close();
-
-    return corsResponse(JSON.stringify({
-      url,
-      title: result.title,
-      text: result.text,
-      metaDescription: result.metaDescription,
-      language: result.language,
-      textLength: result.textLength,
-      truncated: result.textLength > maxChars,
-      success: true
-    }));
-
-  } catch (error) {
-    return corsResponse(JSON.stringify({
-      success: false,
-      error: error.message
-    }), 500);
-  }
-}
-
-/**
- * 批次抓取（一次請求處理多個 URL）
- */
-async function handleBatchScrape(request, env) {
-  try {
-    const { urls, maxChars = 3000 } = await request.json();
-
-    if (!urls || !Array.isArray(urls) || urls.length === 0) {
-      return corsResponse(JSON.stringify({ error: 'Missing urls array' }), 400);
-    }
-
-    const targetUrls = urls.slice(0, 10);
-
-    const browser = await puppeteer.launch(env.BROWSER);
-    const results = [];
-
-    for (const targetUrl of targetUrls) {
-      try {
-        const page = await browser.newPage();
-        
-        await page.setViewport({ width: 1280, height: 800 });
-        await page.setUserAgent(
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        );
-
-        await page.setRequestInterception(true);
-        page.on('request', (req) => {
-          const type = req.resourceType();
-          if (['image', 'font', 'media'].includes(type)) {
-            req.abort();
-          } else {
-            req.continue();
-          }
-        });
-
-        await page.goto(targetUrl, { 
-          waitUntil: 'domcontentloaded', 
-          timeout: 15000 
-        });
-
-        await page.waitForTimeout(1500);
-
-        const data = await page.evaluate((maxLen) => {
-          ['script','style','noscript','iframe','nav','footer','header','.ad','.ads','.sidebar']
-            .forEach(sel => document.querySelectorAll(sel).forEach(el => el.remove()));
-
-          const main = document.querySelector('article') ||
-                       document.querySelector('main') ||
-                       document.querySelector('[role="main"]') ||
-                       document.body;
-
-          return {
-            title: document.title || '',
-            text: (main?.innerText || '').trim().substring(0, maxLen),
-          };
-        }, maxChars);
-
-        await page.close();
-
-        results.push({
-          url: targetUrl,
-          title: data.title,
-          text: data.text,
-          success: true
-        });
-
-      } catch (err) {
-        results.push({
-          url: targetUrl,
-          title: '',
-          text: '',
-          success: false,
-          error: err.message
-        });
-      }
-    }
-
-    await browser.close();
-
-    return corsResponse(JSON.stringify({ 
-      results,
-      total: targetUrls.length,
-      successful: results.filter(r => r.success).length
-    }));
-
-  } catch (error) {
-    return corsResponse(JSON.stringify({
-      success: false,
-      error: error.message
-    }), 500);
-  }
-}
-
-/**
- * URL Resolve - 跟蹤 redirects，返回最終真實 URL
- * 接受 { url } 或 { urls: [...] }
- * 用 fetch (輕量，唔需要 browser)
+ * URL Resolve - 雙模式
+ * Mode A: { domain, pathHint, title } → 用 DuckDuckGo 搜尋揾返真實 URL
+ * Mode B: { url } 或 { urls: [...] } → 跟 redirect 揾最終 URL(舊功能保留)
  */
 async function handleResolve(request, env) {
   try {
     const body = await request.json();
+
+    // ════════════════════════════════════════
+    // MODE A: Breadcrumb resolution (新功能)
+    // ════════════════════════════════════════
+    if (body.domain) {
+      return await handleBreadcrumbResolve(body);
+    }
+
+    // ════════════════════════════════════════
+    // MODE B: URL redirect following (原有)
+    // ════════════════════════════════════════
     const isSingleMode = !!body.url && !body.urls;
     const inputUrls = body.urls || (body.url ? [body.url] : []);
 
     if (!inputUrls || inputUrls.length === 0) {
-      return corsResponse(JSON.stringify({ error: 'Missing url or urls' }), 400);
+      return corsResponse(JSON.stringify({ 
+        error: 'Missing url, urls, or domain' 
+      }), 400);
     }
 
-    // 限制最多 20 條，避免濫用
     const targetUrls = inputUrls.slice(0, 20);
 
     const results = await Promise.all(
       targetUrls.map(async (targetUrl) => {
         try {
-          // 用 AbortController 控制 timeout (10 秒)
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 10000);
 
@@ -286,12 +69,10 @@ async function handleResolve(request, env) {
       })
     );
 
-    // 單一 URL 模式：直接返回 object
     if (isSingleMode) {
       return corsResponse(JSON.stringify(results[0]));
     }
 
-    // 批次模式：返回 array + 統計
     return corsResponse(JSON.stringify({
       results,
       total: targetUrls.length,
@@ -307,16 +88,111 @@ async function handleResolve(request, env) {
 }
 
 /**
- * CORS 包裝
+ * 用 DuckDuckGo HTML 搜尋,由 breadcrumb 反向揾真實 URL
  */
-function corsResponse(body, status = 200) {
-  return new Response(body, {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, X-Worker-Key',
+async function handleBreadcrumbResolve(body) {
+  const { domain, pathHint = [], title = '' } = body;
+
+  // 清理 + 構建搜尋 query
+  const cleanDomain = String(domain).replace(/^https?:\/\//, '').replace(/^www\./, '').trim();
+  const pathTerms = Array.isArray(pathHint)
+    ? pathHint
+        .map(p => String(p).replace(/[\.…]+$/g, '').trim())
+        .filter(p => p && p.length >= 2)
+        .slice(0, 5)
+        .join(' ')
+    : '';
+
+  const query = `site:${cleanDomain} ${pathTerms} ${String(title || '').slice(0, 100)}`.trim().replace(/\s+/g, ' ');
+
+  try {
+    // DuckDuckGo HTML 搜尋(無需 API key)
+    const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    const searchResp = await fetch(ddgUrl, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://duckduckgo.com/'
+      }
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!searchResp.ok) {
+      return corsResponse(JSON.stringify({
+        url: null, query, error: `DuckDuckGo HTTP ${searchResp.status}`
+      }));
     }
-  });
+
+    const html = await searchResp.text();
+
+    // DuckDuckGo HTML 結構: <a class="result__a" href="/l/?uddg=ENCODED_URL">
+    // 或者直接係: <a href="https://realsite.com/...">
+    const linkPattern = /<a[^>]+href="([^"]+)"[^>]*class="[^"]*result__a[^"]*"/gi;
+    const altPattern = /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"/gi;
+
+    const candidates = [];
+    let m;
+    while ((m = linkPattern.exec(html)) !== null) candidates.push(m[1]);
+    while ((m = altPattern.exec(html)) !== null) candidates.push(m[1]);
+
+    // 揾第一個 match domain 嘅 URL
+    for (let candidateUrl of candidates) {
+      try {
+        // DuckDuckGo 將真實 URL 包喺 /l/?uddg=ENCODED_URL
+        if (candidateUrl.includes('/l/?uddg=') || candidateUrl.includes('//duckduckgo.com/l/?uddg=')) {
+          const uddgMatch = candidateUrl.match(/[?&]uddg=([^&]+)/);
+          if (uddgMatch) {
+            candidateUrl = decodeURIComponent(uddgMatch[1]);
+          }
+        }
+
+        // 補上 protocol(DDG 有時返 //domain.com/...)
+        if (candidateUrl.startsWith('//')) {
+          candidateUrl = 'https:' + candidateUrl;
+        }
+
+        const parsed = new URL(candidateUrl);
+        const candidateDomain = parsed.hostname.replace(/^www\./, '');
+
+        // Domain 必須 match(完全相同 或 subdomain)
+        if (
+          candidateDomain === cleanDomain ||
+          candidateDomain.endsWith('.' + cleanDomain) ||
+          cleanDomain.endsWith('.' + candidateDomain)
+        ) {
+          // Path 必須有實質內容(避免揾到 homepage)
+          if (parsed.pathname && parsed.pathname.length >= 4) {
+            return corsResponse(JSON.stringify({
+              url: candidateUrl,
+              query,
+              success: true
+            }));
+          }
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return corsResponse(JSON.stringify({
+      url: null,
+      query,
+      error: `No matching ${cleanDomain} URL in ${candidates.length} search results`
+    }));
+
+  } catch (err) {
+    return corsResponse(JSON.stringify({
+      url: null,
+      query,
+      error: err.message || 'Search failed'
+    }));
+  }
 }
