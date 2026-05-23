@@ -1894,26 +1894,31 @@ STEP 3 — ML/TF SCOPE (Is the adverse content within ML/TF predicate offenses?)
   10. Entity IMPLEMENTING compliance programmes (positive news)
   11. General regulatory news where entity is NOT a target
   12. Personal lifestyle controversies without legal consequence
-  13. 🆕 SOE / state-enterprise INTERNAL rule violations without criminal nexus
-       Examples: "crude oil reselling to independent refiners",
-                 "diversion of allocated quotas",
-                 "violation of SOE asset disposal rules",
-                 "internal procurement irregularities"
-       → These are management / regulatory matters, NOT ML/TF predicates
-         (unless the article EXPLICITLY mentions bribery, embezzlement,
-          asset concealment, or proceeds-of-crime laundering)
-  14. 🆕 Industry-specific regulatory probes without criminal nexus
+   13. SOE / state-enterprise INTERNAL rule violations — context-dependent
+       Examples: unauthorized asset disposal, diversion of allocated quotas,
+                 violation of SOE internal procurement rules
+       ⚠️ DO NOT pre-judge based on industry / keyword alone. The SAME headline
+          (e.g. "crude oil reselling investigation") may be:
+            - Sanctions evasion (in-scope)  ← if sanctioned country involved
+            - Bribery / FCPA (in-scope)     ← if officials implicated
+            - Pure SOE quota violation      ← out-of-scope
+          Read the article body. When unsure → POSSIBLE_HIT, not FALSE_HIT.
+       → Classify as out-of-scope ONLY if article explicitly states NO criminal
+         element AND NO sanctioned-party nexus AND NO bribery dimension.
+
+  14. Industry-specific REGULATORY probes without criminal nexus
        Examples: antitrust review, market-share investigation,
                  cartel inquiry (civil), pricing investigation,
                  listing-rule breaches, disclosure violations
        → Out of ML/TF scope unless escalated to criminal charges
-  15. 🆕 Appointment / personnel news where the wrongdoing is BACKGROUND CONTEXT
+
+  15. Appointment / personnel news where target is NOT the wrongdoer
        Example: "Company X appoints Y as president, replacing Z who is
-                 under investigation for [non-ML/TF matter]"
-       → The article SUBJECT is the appointment (a corporate-action event),
-         not the investigation. Even if name matches Y or Z, the matter is
-         either (a) IRRELEVANT_MLTF if wrongdoing is non-ML/TF, or
-                (b) FALSE_HIT if Y is the successor and matter IS ML/TF.
+                 under investigation for [matter]"
+       → If matter is non-ML/TF → IRRELEVANT_MLTF
+       → If matter IS ML/TF but target is the successor Y (not Z) → IRRELEVANT_MLTF
+          (NOT FALSE_HIT — Y is the right person, just not the subject)
+       → Use Stage 2 role analysis to disambiguate.
 
 🚨 CRITICAL ORDER OF EVALUATION:
    When unsure between FALSE_HIT (wrong person) and IRRELEVANT_MLTF
@@ -2920,6 +2925,41 @@ if (r.cls === 'FALSE_HIT') {
     };
   }
 }
+        // ════════════════════════════════════════════════════════════
+        // 🛡️ Rule 8 (post-Stage-2): Use Stage 2 structured signals to
+        //    correct any remaining mis-classification.
+        //    Replaces the unreliable regex-based logic in pre-Stage-2 Rule 7.
+        // ════════════════════════════════════════════════════════════
+        parsed = parsed.map(r => {
+          if (!r._stage2) return r;  // 冇做過 Stage 2 嘅 skip
+          const s2 = r._stage2;
+
+          // Case: target is NOT the subject of wrongdoing (any non-"subject" role)
+          // AND we're confident (conf >= 0.70)
+          // → IRRELEVANT_MLTF wins over FALSE_HIT 
+          //   (because matter-not-about-target is a stronger upstream filter
+          //    than wrong-person, especially when ML/TF matter clearly exists
+          //    but applies to a different party)
+          const conf = typeof s2.confidence === 'number' ? s2.confidence : 0;
+          if (
+            s2.wrongdoingApplies === false &&
+            conf >= 0.70 &&
+            s2.roleType !== 'unrelated' &&        // unrelated stays FALSE_HIT
+            s2.roleType !== 'subject' &&
+            s2.roleType !== 'ambiguous' &&
+            r.cls === 'FALSE_HIT'                  // only re-route from FALSE_HIT
+          ) {
+            const mltfExists = s2.mltfMatterExistsInArticle === true;
+            return {
+              ...r,
+              cls: 'IRRELEVANT_MLTF',
+              confidence: Math.max(r.confidence || 0.5, 0.75),
+              riskCat: mltfExists
+                ? `N/A (ML/TF subject = ${s2.actualSubjectName || 'other party'})`
+                : `N/A (Target is ${s2.roleType}, no ML/TF matter)`,
+              reason: `[Rule 8 — Stage 2 structured signal: target's role = ${s2.roleType}; mltfMatterExistsInArticle=${mltfExists}; mltfMatterAppliesToTarget=false. FALSE_HIT → IRRELEVANT_MLTF because matter (if any) doesn't apply to target.] ${r.reason}`,
+            };
+          }
         return r;
       });
 
@@ -3024,7 +3064,7 @@ if (r.cls === 'FALSE_HIT') {
           })
         );
 
-        // ── Merge Stage 2 results back into `parsed` ─────────────
+       // ── Merge Stage 2 results back into `parsed` ─────────────
         stage2Results.forEach((res) => {
           if (res.status !== 'fulfilled' || !res.value) return;
           const s2 = res.value;
@@ -3035,30 +3075,35 @@ if (r.cls === 'FALSE_HIT') {
           const conf = typeof s2.confidence === 'number' ? s2.confidence : 0;
 
           if (s2.wrongdoingApplies === false && conf >= 0.70) {
-  // unrelated = same name, DIFFERENT person → FALSE_HIT
-  // successor/predecessor/witness/victim/colleague = SAME person, NOT the subject → IRRELEVANT_MLTF
-  const downgrade = s2.roleType === 'unrelated' 
-    ? 'FALSE_HIT' 
-    : 'IRRELEVANT_MLTF';
-  
-  parsed[idx] = {
-    ...original,
-    cls: downgrade,
-    confidence: Math.max(conf, 0.75),
-    riskCat: downgrade === 'FALSE_HIT' 
-      ? 'N/A (Different Person)'
-      : `N/A (Target is ${s2.roleType}, not subject)`,
-    _stage2: s2,
-    reason: downgrade === 'IRRELEVANT_MLTF'
-      ? `🎯 [Stage 2 — role: ${String(s2.roleType).toUpperCase()}] ML/TF-related content exists in this article, but it applies to ${s2.actualSubjectName || 'another party'}, NOT to ${searchEntity}. ${searchEntity} appears in the article only as ${s2.roleType}. ${s2.reasoning}` +
-        (s2.evidenceQuote ? ` Evidence: "${s2.evidenceQuote}"` : '') +
-        `\n\n— ORIGINAL (Stage 1) —\n${original.reason}`
-      : `🎯 [Stage 2 — UNRELATED person, same name] ${s2.reasoning}` +
-        (s2.evidenceQuote ? ` Evidence: "${s2.evidenceQuote}"` : '') +
-        `\n\n— ORIGINAL (Stage 1) —\n${original.reason}`,
-  };
-  console.log(`📉 Stage 2 [#${s2.rank}]: ${original.cls} → ${downgrade} (role: ${s2.roleType})`);
-}
+            // unrelated = same name, DIFFERENT person → FALSE_HIT
+            // successor/predecessor/witness/victim/colleague = SAME person, NOT the subject → IRRELEVANT_MLTF
+            const downgrade = s2.roleType === 'unrelated' 
+              ? 'FALSE_HIT' 
+              : 'IRRELEVANT_MLTF';
+
+            // 構造解釋文字,根據有冇 ML/TF matter 區分 Case A 同 Case B
+            const mltfExists = s2.mltfMatterExistsInArticle === true;
+            const mltfReason = downgrade === 'IRRELEVANT_MLTF'
+              ? (mltfExists
+                  ? `🎯 [Stage 2 — role: ${String(s2.roleType).toUpperCase()}] ML/TF-related content exists in this article, but it applies to ${s2.actualSubjectName || 'another party'}, NOT to ${searchEntity}. ${searchEntity} appears in the article only as ${s2.roleType}. ${s2.reasoning}`
+                  : `🎯 [Stage 2 — role: ${String(s2.roleType).toUpperCase()}] No ML/TF subject matter in this article. ${searchEntity} appears only as ${s2.roleType}. ${s2.reasoning}`)
+              : `🎯 [Stage 2 — UNRELATED person, same name] ${s2.reasoning}`;
+
+            parsed[idx] = {
+              ...original,
+              cls: downgrade,
+              confidence: Math.max(conf, 0.75),
+              riskCat: downgrade === 'FALSE_HIT' 
+                ? 'N/A (Different Person)'
+                : (mltfExists 
+                    ? `N/A (ML/TF subject = ${s2.actualSubjectName || 'other party'})`
+                    : `N/A (Target is ${s2.roleType}, no ML/TF matter)`),
+              _stage2: s2,
+              reason: mltfReason +
+                (s2.evidenceQuote ? ` Evidence: "${s2.evidenceQuote}"` : '') +
+                `\n\n— ORIGINAL (Stage 1) —\n${original.reason}`,
+            };
+            console.log(`📉 Stage 2 [#${s2.rank}]: ${original.cls} → ${downgrade} (role: ${s2.roleType}, mltfExists: ${mltfExists})`);
 
           } else if (s2.wrongdoingApplies === true && conf >= 0.70) {
             // ✅ Stage 2 confirms target IS the subject → annotate + slightly bump confidence
