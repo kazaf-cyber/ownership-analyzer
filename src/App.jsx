@@ -1858,7 +1858,7 @@ STEP 3 — ML/TF SCOPE (Is the adverse content within ML/TF predicate offenses?)
   12. Cybercrime with financial motive (ransomware, BEC)
   13. Regulatory enforcement by AML authorities (HKMA, MAS, SFC, SEC, FCA, FinCEN)
 
-❌ OUT-OF-SCOPE:
+❌ OUT-OF-SCOPE (→ classify as IRRELEVANT_MLTF, NOT FALSE_HIT):
   1.  Civil disputes WITHOUT fraud (contract, IP, defamation)
   2.  Labor / employment disputes (unless forced labor)
   3.  Traffic violations
@@ -1871,6 +1871,38 @@ STEP 3 — ML/TF SCOPE (Is the adverse content within ML/TF predicate offenses?)
   10. Entity IMPLEMENTING compliance programmes (positive news)
   11. General regulatory news where entity is NOT a target
   12. Personal lifestyle controversies without legal consequence
+  13. 🆕 SOE / state-enterprise INTERNAL rule violations without criminal nexus
+       Examples: "crude oil reselling to independent refiners",
+                 "diversion of allocated quotas",
+                 "violation of SOE asset disposal rules",
+                 "internal procurement irregularities"
+       → These are management / regulatory matters, NOT ML/TF predicates
+         (unless the article EXPLICITLY mentions bribery, embezzlement,
+          asset concealment, or proceeds-of-crime laundering)
+  14. 🆕 Industry-specific regulatory probes without criminal nexus
+       Examples: antitrust review, market-share investigation,
+                 cartel inquiry (civil), pricing investigation,
+                 listing-rule breaches, disclosure violations
+       → Out of ML/TF scope unless escalated to criminal charges
+  15. 🆕 Appointment / personnel news where the wrongdoing is BACKGROUND CONTEXT
+       Example: "Company X appoints Y as president, replacing Z who is
+                 under investigation for [non-ML/TF matter]"
+       → The article SUBJECT is the appointment (a corporate-action event),
+         not the investigation. Even if name matches Y or Z, the matter is
+         either (a) IRRELEVANT_MLTF if wrongdoing is non-ML/TF, or
+                (b) FALSE_HIT if Y is the successor and matter IS ML/TF.
+
+🚨 CRITICAL ORDER OF EVALUATION:
+   When unsure between FALSE_HIT (wrong person) and IRRELEVANT_MLTF
+   (right context but out-of-scope matter), evaluate IRRELEVANT_MLTF FIRST.
+   
+   Reasoning: IRRELEVANT_MLTF is a stronger, more upstream filter — if the
+   underlying matter isn't ML/TF, role analysis is moot.
+   
+   Example: "X appoints Y as president; X's former head Z was investigated
+            for crude oil reselling"
+     ❌ WRONG: FALSE_HIT (Y is successor) — assumes the matter cares about us
+     ✅ RIGHT: IRRELEVANT_MLTF — the matter (oil reselling) isn't ML/TF scope
 
 ═══════════════════════════════════════════════════════════
 📋 FINAL CLASSIFICATION MATRIX (6 categories)
@@ -2799,6 +2831,72 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
           };
         }
 
+        // 🛡️ Rule 7 🆕: Catch "FALSE_HIT due to role" when matter is actually
+//                out-of-scope for ML/TF — upgrade to IRRELEVANT_MLTF
+//                (IRRELEVANT_MLTF is a stronger upstream filter than FALSE_HIT)
+if (r.cls === 'FALSE_HIT') {
+  const reasonLower = (r.reason || '').toLowerCase();
+  const snippetLower = (r.snippet || '').toLowerCase();
+  const titleLower = (r.title || '').toLowerCase();
+  const combined = `${reasonLower} ${snippetLower} ${titleLower}`;
+
+  // Signal 1: AI's stated FALSE_HIT reason invokes ROLE (successor/witness/
+  //           victim/family) — not identity contradiction
+  const isRoleBasedFalseHit =
+    /\b(successor|appointee|appointed|replac\w+|new\s+(?:president|ceo|chairman|director))\b/i.test(combined) ||
+    /\b(witness|whistleblower|victim|family\s+member|spouse|relative)\b/i.test(combined) ||
+    reasonLower.includes('role:') ||
+    reasonLower.includes('not the (?:wrongdoer|subject|actor)');
+
+  // Signal 2: The underlying matter is clearly OUT-OF-SCOPE for ML/TF
+  const outOfScopePatterns = [
+    /crude\s+oil\s+resell/i,
+    /oil\s+resell/i,
+    /reselling.*?(?:refineries|refiner|teapot)/i,
+    /soe.*?internal\s+rule/i,
+    /state[- ]owned.*?internal/i,
+    /quota\s+(?:diversion|violation)/i,
+    /antitrust\s+(?:probe|review|investigation)/i,
+    /listing[- ]rule\s+breach/i,
+    /disclosure\s+violation/i,
+    /commercial\s+(?:dispute|breach|litigation)/i,
+    /contract\s+dispute/i,
+    /civil\s+(?:lawsuit|suit|litigation)(?!.*?fraud)/i,
+    /defamation/i,
+    /patent\s+(?:infringement|dispute)/i,
+    /trademark\s+(?:infringement|dispute)/i,
+    /environmental\s+(?:fine|violation)(?!.*?criminal)/i,
+    /personnel\s+(?:reshuffle|change|appointment)/i,
+  ];
+  const isOutOfScopeMatter = outOfScopePatterns.some(p => p.test(combined));
+
+  // Signal 3: NO strong ML/TF indicators in the result
+  const strongMLTFTerms = [
+    /money\s*launder/i, /洗錢/, /洗钱/,
+    /terrorist\s+financ/i, /恐怖.*?融資/, /恐怖.*?融资/,
+    /sanction(?:s|ed|ing)\b.*?(?:list|designat|evas|violat)/i,
+    /制裁.*?(?:名單|名单|規避|规避|違反|违反)/,
+    /ofac.*?sdn/i,
+    /\bproliferation\s+financ/i,
+    /human\s+trafficking/i, /人口販運/, /人口贩运/,
+    /drug\s+trafficking/i, /毒品.*?販運/, /毒品.*?贩运/,
+    /\b(?:fcpa|ukba|icac)\b/i,
+    /bribery.*?(?:charge|conviction|indictment)/i,
+    /賄賂.*?(?:檢控|起訴|定罪)/, /贿赂.*?(?:检控|起诉|定罪)/,
+  ];
+  const hasStrongMLTFSignal = strongMLTFTerms.some(p => p.test(combined));
+
+  // ⚡ Trigger: role-based FALSE_HIT + out-of-scope matter + no strong ML/TF
+  if (isRoleBasedFalseHit && isOutOfScopeMatter && !hasStrongMLTFSignal) {
+    return {
+      ...r,
+      cls: 'IRRELEVANT_MLTF',
+      confidence: Math.min(r.confidence || 0.5, 0.55),
+      riskCat: 'N/A (Out-of-Scope Matter)',
+      reason: `[Auto-upgraded FALSE_HIT → IRRELEVANT_MLTF: the underlying matter is outside ML/TF screening scope (commercial/regulatory, not a predicate offense). Role analysis is moot when the matter itself doesn't concern us.] ${r.reason}`,
+    };
+  }
+}
         return r;
       });
 
