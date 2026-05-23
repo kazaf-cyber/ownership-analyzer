@@ -1,7 +1,9 @@
 // ═══════════════════════════════════════════════════════════
-// Ownership Analyzer Worker
+// Ownership Analyzer Worker v1.2.0
 // Routes: /api/health, /api/scrape, /api/batch-scrape, /api/resolve
 // ═══════════════════════════════════════════════════════════
+
+import puppeteer from "@cloudflare/puppeteer";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -9,15 +11,62 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, X-Worker-Key'
 };
 
-// Helper: JSON Response with CORS
 function corsResponse(body, status = 200) {
   return new Response(body, {
     status,
-    headers: {
-      'Content-Type': 'application/json',
-      ...corsHeaders
-    }
+    headers: { 'Content-Type': 'application/json', ...corsHeaders }
   });
+}
+
+// ═══════════════════════════════════════════════════════════
+// Helper: scrape one URL via Puppeteer
+// ═══════════════════════════════════════════════════════════
+async function scrapeUrl(env, targetUrl, opts = {}) {
+  const { timeout = 30000, waitUntil = 'domcontentloaded' } = opts;
+  let browser;
+
+  try {
+    browser = await puppeteer.launch(env.BROWSER);
+    const page = await browser.newPage();
+
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+      '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    );
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7'
+    });
+
+    const response = await page.goto(targetUrl, { waitUntil, timeout });
+    
+    // Wait a bit more for JS-heavy pages
+    await page.waitForTimeout(1500).catch(() => {});
+    
+    const html = await page.content();
+    const title = await page.title().catch(() => '');
+    const finalUrl = page.url();
+
+    return {
+      ok: true,
+      url: targetUrl,
+      finalUrl,
+      status: response ? response.status() : 0,
+      title,
+      html,
+      length: html.length
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      url: targetUrl,
+      error: err.message,
+      errorType: err.name || 'UnknownError'
+    };
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch {}
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -27,20 +76,19 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
     }
 
     try {
-      // ─── Health Check ───
+      // ─── Health ───
       if (url.pathname === '/api/health') {
         return Response.json({
           ok: true,
           hasBrowser: !!env.BROWSER,
           timestamp: new Date().toISOString(),
           worker: 'ownership-analyzer-api',
-          version: '1.1.0'
+          version: '1.2.0'
         }, { headers: corsHeaders });
       }
 
@@ -57,82 +105,57 @@ export default {
         }, { headers: corsHeaders });
       }
 
-      // ─── Single Scrape (uses Browser Rendering) ───
+      // ─── Single Scrape (Puppeteer) ───
       if (url.pathname === '/api/scrape' && request.method === 'POST') {
         const body = await request.json();
         const targetUrl = body.url;
         if (!targetUrl) {
           return Response.json(
-            { error: 'Missing "url" parameter in request body' },
+            { ok: false, error: 'Missing "url" parameter in request body' },
             { status: 400, headers: corsHeaders }
           );
         }
 
-        const response = await env.BROWSER.fetch(
-          new Request('https://browser.cloudflare.com/v1/fetch', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: targetUrl })
-          })
-        );
-        const html = await response.text();
+        const result = await scrapeUrl(env, targetUrl, {
+          timeout: body.timeout || 30000,
+          waitUntil: body.waitUntil || 'domcontentloaded'
+        });
 
-        return Response.json({
-          ok: true,
-          url: targetUrl,
-          html,
-          length: html.length
-        }, { headers: corsHeaders });
+        return Response.json(result, {
+          status: result.ok ? 200 : 502,
+          headers: corsHeaders
+        });
       }
 
-      // ─── Batch Scrape ───
+      // ─── Batch Scrape (sequential to protect quota) ───
       if (url.pathname === '/api/batch-scrape' && request.method === 'POST') {
         const body = await request.json();
         const urls = Array.isArray(body.urls) ? body.urls : [];
         if (!urls.length) {
           return Response.json(
-            { error: 'Missing "urls" array in request body' },
+            { ok: false, error: 'Missing "urls" array in request body' },
             { status: 400, headers: corsHeaders }
           );
         }
 
-        const targetUrls = urls.slice(0, 20);
-        const results = await Promise.all(
-          targetUrls.map(async (targetUrl) => {
-            try {
-              const response = await env.BROWSER.fetch(
-                new Request('https://browser.cloudflare.com/v1/fetch', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ url: targetUrl })
-                })
-              );
-              const html = await response.text();
-              return {
-                ok: true,
-                url: targetUrl,
-                html,
-                length: html.length
-              };
-            } catch (err) {
-              return {
-                ok: false,
-                url: targetUrl,
-                error: err.message
-              };
-            }
-          })
-        );
+        const targetUrls = urls.slice(0, 10); // hard cap 10
+        const results = [];
+
+        // Sequential = friendlier to Browser Rendering session pool
+        for (const targetUrl of targetUrls) {
+          results.push(await scrapeUrl(env, targetUrl));
+        }
 
         return Response.json({
           ok: true,
           total: targetUrls.length,
           successful: results.filter(r => r.ok).length,
+          failed: results.filter(r => !r.ok).length,
           results
         }, { headers: corsHeaders });
       }
 
-      // ─── ★ NEW: URL Resolve (DuckDuckGo + redirect-follow) ───
+      // ─── Resolve (unchanged) ───
       if (url.pathname === '/api/resolve' && request.method === 'POST') {
         return handleResolve(request, env);
       }
@@ -153,20 +176,16 @@ export default {
 };
 
 // ═══════════════════════════════════════════════════════════
-// URL Resolve - 雙模式
-// Mode A: { domain, pathHint, title } → DuckDuckGo 反查
-// Mode B: { url } 或 { urls: [...] } → 跟 redirect
+// URL Resolve - 雙模式 (unchanged from your version)
 // ═══════════════════════════════════════════════════════════
 async function handleResolve(request, env) {
   try {
     const body = await request.json();
 
-    // MODE A: Breadcrumb resolution
     if (body.domain) {
       return await handleBreadcrumbResolve(body);
     }
 
-    // MODE B: URL redirect following
     const isSingleMode = !!body.url && !body.urls;
     const inputUrls = body.urls || (body.url ? [body.url] : []);
 
@@ -237,9 +256,6 @@ async function handleResolve(request, env) {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-// DuckDuckGo Breadcrumb Resolution
-// ═══════════════════════════════════════════════════════════
 async function handleBreadcrumbResolve(body) {
   const { domain, pathHint = [], title = '' } = body;
 
