@@ -2928,44 +2928,7 @@ if (r.cls === 'FALSE_HIT') {
      return r;
     });
         
-        // ════════════════════════════════════════════════════════════
-        // 🛡️ Rule 8 (post-Stage-2): Use Stage 2 structured signals to
-        //    correct any remaining mis-classification.
-        //    Replaces the unreliable regex-based logic in pre-Stage-2 Rule 7.
-        // ════════════════════════════════════════════════════════════
-        parsed = parsed.map(r => {
-          if (!r._stage2) return r;  // 冇做過 Stage 2 嘅 skip
-          const s2 = r._stage2;
-
-          // Case: target is NOT the subject of wrongdoing (any non-"subject" role)
-          // AND we're confident (conf >= 0.70)
-          // → IRRELEVANT_MLTF wins over FALSE_HIT 
-          //   (because matter-not-about-target is a stronger upstream filter
-          //    than wrong-person, especially when ML/TF matter clearly exists
-          //    but applies to a different party)
-          const conf = typeof s2.confidence === 'number' ? s2.confidence : 0;
-          if (
-            s2.wrongdoingApplies === false &&
-            conf >= 0.70 &&
-            s2.roleType !== 'unrelated' &&        // unrelated stays FALSE_HIT
-            s2.roleType !== 'subject' &&
-            s2.roleType !== 'ambiguous' &&
-            r.cls === 'FALSE_HIT'                  // only re-route from FALSE_HIT
-          ) {
-            const mltfExists = s2.mltfMatterExistsInArticle === true;
-            return {
-              ...r,
-              cls: 'IRRELEVANT_MLTF',
-              confidence: Math.max(r.confidence || 0.5, 0.75),
-              riskCat: mltfExists
-                ? `N/A (ML/TF subject = ${s2.actualSubjectName || 'other party'})`
-                : `N/A (Target is ${s2.roleType}, no ML/TF matter)`,
-              reason: `[Rule 8 — Stage 2 structured signal: target's role = ${s2.roleType}; mltfMatterExistsInArticle=${mltfExists}; mltfMatterAppliesToTarget=false. FALSE_HIT → IRRELEVANT_MLTF because matter (if any) doesn't apply to target.] ${r.reason}`,
-            };
-          }
-        return r;
-      });
-
+       
       // ════════════════════════════════════════════════════════════
       // 🎯 STAGE 2: ROLE-AWARE RE-ANALYSIS (P0)
       // 只針對 Stage 1 嘅 TRUE_HIT / POSSIBLE_HIT 做第二輪分析
