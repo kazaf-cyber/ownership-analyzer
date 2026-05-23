@@ -1309,7 +1309,19 @@ const fetchPageContent = async (url) => {
     return data.text || null;
   } catch { return null; }
 };
-
+  
+const resolveBreadcrumb = async ({ domain, pathHint, title }) => {
+  try {
+    const data = await callWorker('/api/resolve', { domain, pathHint, title });
+    return {
+      url: data.url || null,
+      query: data.query || '',
+      error: data.error || null,
+    };
+  } catch (e) {
+    return { url: null, query: '', error: e.message };
+  }
+};
   const extractUrlsFromPdf = (pdfText) => {
   const urlRegex = /https?:\/\/[^\s)>\]"'›\n]+/g;
   const rawUrls = pdfText.match(urlRegex) || [];
@@ -2284,100 +2296,170 @@ const resultUrls = extractResultAnchors(pdfText);
 console.log(`🔗 Pre-extracted ${resultUrls.length} result anchors (URLs + breadcrumbs):`);
 resultUrls.forEach((a, i) => console.log(`  [${String(i+1).padStart(2,'0')}] ${a}`));;
 
-// ═══════════════════════════════════════════════════════════
-// 🔧 F.6: Page-content scraping pipeline
+
+ // ═══════════════════════════════════════════════════════════
+// 🔧 F.6+R: Resolve → Scrape pipeline (Option B)
 // ═══════════════════════════════════════════════════════════
 let enrichedContent = pdfText;
 let scrapedCount = 0;
 const scrapeStats = {
+  // Anchor classification
+  anchorTotal: resultUrls.length,
+  fullUrlAnchors: 0,
+  breadcrumbAnchors: 0,
+  socialAnchors: 0,
+  // Resolution stats
+  resolveAttempted: 0,
+  resolveSucceeded: 0,
+  resolveFailed: 0,
+  // Scrape stats
   attempted: 0,
   succeeded: 0,
   failed: 0,
   tooShort: 0,
-  breadcrumbOnly: 0,
-  social: 0,
 };
 
-{
-  setProgress(30); setStage('正在解析搜尋結果 URL...');
+// Map: resolved URL → original breadcrumb anchor (for prompt clarity)
+const urlToAnchor = new Map();
 
-  // 🔧 用 reconstructUrlsFromAnchors 分類 anchors(只統計、不打 /api/resolve)
+{
+  // ────────────────────────────────────────────
+  // STEP 1: Classify all anchors
+  // ────────────────────────────────────────────
+  setProgress(28); setStage('正在分類搜尋結果 URL...');
   const anchors = reconstructUrlsFromAnchors(resultUrls);
-  scrapeStats.breadcrumbOnly = anchors.filter(a => a.kind === 'breadcrumb').length;
-  scrapeStats.social = anchors.filter(a => a.kind === 'social').length;
+  const fullUrlAnchors = anchors.filter(a => a.kind === 'full_url');
+  const breadcrumbAnchors = anchors.filter(a => a.kind === 'breadcrumb');
+  const socialAnchors = anchors.filter(a => a.kind === 'social');
+
+  scrapeStats.fullUrlAnchors = fullUrlAnchors.length;
+  scrapeStats.breadcrumbAnchors = breadcrumbAnchors.length;
+  scrapeStats.socialAnchors = socialAnchors.length;
 
   console.log(`🔧 Anchor classification:`);
-  console.log(`   full_url    (scrapable)   : ${anchors.filter(a => a.kind === 'full_url').length}`);
-  console.log(`   breadcrumb  (snippet only): ${scrapeStats.breadcrumbOnly}`);
-  console.log(`   social      (snippet only): ${scrapeStats.social}`);
+  console.log(`   full_url    (direct scrape) : ${fullUrlAnchors.length}`);
+  console.log(`   breadcrumb  (need resolve)  : ${breadcrumbAnchors.length}`);
+  console.log(`   social      (snippet only)  : ${socialAnchors.length}`);
 
-  // 從 PDF 提取真正可 scrape 的完整 URL(extractUrlsFromPdf 已過濾光禿域名)
-  const urls = extractUrlsFromPdf(pdfText);
-  scrapeStats.attempted = urls.length;
+  // ────────────────────────────────────────────
+  // STEP 2: Resolve breadcrumb anchors → real URLs (via /api/resolve)
+  // ────────────────────────────────────────────
+  const resolvedUrls = [];
+  if (breadcrumbAnchors.length > 0) {
+    setProgress(33); setStage(`正在解析 ${breadcrumbAnchors.length} 個 breadcrumb URL...`);
+    console.log(`🔍 Resolving ${breadcrumbAnchors.length} breadcrumb anchor(s) via /api/resolve:`);
+    scrapeStats.resolveAttempted = breadcrumbAnchors.length;
 
-  if (urls.length > 0) {
-    setProgress(40); setStage('正在抓取網頁全文...');
-    console.log(`🌐 Scraping ${urls.length} URL(s)...`);
+    const resolveResults = await Promise.allSettled(
+      breadcrumbAnchors.map(a => resolveBreadcrumb({
+        domain: a.domain,
+        pathHint: a.pathHint,
+        title: '',  // PDF 冇 clean title per anchor
+      }))
+    );
 
-    const pageResults = await Promise.allSettled(urls.map(u => fetchPageContent(u)));
+    resolveResults.forEach((r, i) => {
+      const anchor = breadcrumbAnchors[i];
+      const data = r.status === 'fulfilled' ? r.value : { url: null, error: r.reason?.message };
 
-    const enrichments = urls.map((u, i) => {
+      if (data.url) {
+        resolvedUrls.push(data.url);
+        urlToAnchor.set(data.url, anchor.original);
+        scrapeStats.resolveSucceeded++;
+        console.log(`   ✅ ${anchor.original}`);
+        console.log(`      → ${data.url}`);
+      } else {
+        scrapeStats.resolveFailed++;
+        console.log(`   ❌ ${anchor.original}`);
+        console.log(`      (${data.error || 'no candidate found'} | query: ${data.query || 'n/a'})`);
+      }
+    });
+  }
+
+  // ────────────────────────────────────────────
+  // STEP 3: Combine direct URLs (from PDF) + resolved URLs (from breadcrumbs)
+  // ────────────────────────────────────────────
+  const directUrls = extractUrlsFromPdf(pdfText);
+  const allUrls = [...new Set([...directUrls, ...resolvedUrls])];  // dedup
+  scrapeStats.attempted = allUrls.length;
+
+  // ────────────────────────────────────────────
+  // STEP 4: Scrape all URLs
+  // ────────────────────────────────────────────
+  if (allUrls.length > 0) {
+    setProgress(42); setStage(`正在抓取 ${allUrls.length} 個網頁全文...`);
+    console.log(`🌐 Scraping ${allUrls.length} URL(s) — ${directUrls.length} direct + ${resolvedUrls.length} resolved`);
+
+    const pageResults = await Promise.allSettled(allUrls.map(u => fetchPageContent(u)));
+
+    const enrichments = allUrls.map((u, i) => {
       const result = pageResults[i];
       const text = result.status === 'fulfilled' ? result.value : null;
+      const anchorLabel = urlToAnchor.get(u) ? ` (resolved from "${urlToAnchor.get(u)}")` : '';
 
       if (!text) {
         scrapeStats.failed++;
-        console.log(`   ❌ FAILED: ${u}`);
+        console.log(`   ❌ SCRAPE FAILED: ${u}${anchorLabel}`);
         return '';
       }
       if (text.length < 200) {
         scrapeStats.tooShort++;
-        console.log(`   ⚠️ TOO SHORT (${text.length} chars): ${u}`);
+        console.log(`   ⚠️ TOO SHORT (${text.length} chars): ${u}${anchorLabel}`);
         return '';
       }
       scrapeStats.succeeded++;
       scrapedCount++;
-      console.log(`   ✅ OK (${text.length} chars): ${u}`);
-      return `\n--- PAGE CONTENT: ${u} ---\n${text}\n--- END ---`;
+      console.log(`   ✅ OK (${text.length} chars): ${u}${anchorLabel}`);
+      return `\n--- PAGE CONTENT: ${u}${anchorLabel} ---\n${text}\n--- END ---`;
     }).filter(Boolean).join('\n');
 
     if (enrichments) {
       enrichedContent = pdfText + '\n\n=== FULL PAGE CONTENTS ===\n' + enrichments;
     }
   } else {
-    console.log(`⏭️ No scrapable URLs — all results are snippet-only`);
+    console.log(`⏭️ No URLs to scrape (all anchors are social-only or resolved failed)`);
   }
 
-  // ★ 把抓取統計寫入 prompt,讓 AI 知道邊啲 results 只有 snippet
+  // ────────────────────────────────────────────
+  // STEP 5: Embed pipeline report into AI prompt
+  // ────────────────────────────────────────────
   const scrapeSummary = `
 ═══════════════════════════════════════════════════════════
-📊 PAGE-CONTENT SCRAPING REPORT (for this analysis run)
+📊 URL RESOLUTION & PAGE-CONTENT SCRAPING REPORT
 ═══════════════════════════════════════════════════════════
-  URLs attempted (full URL with path) : ${scrapeStats.attempted}
-  Successfully scraped (>=200 chars)  : ${scrapeStats.succeeded}
-  Failed (network/timeout/blocked)    : ${scrapeStats.failed}
-  Too short to be useful (<200 chars) : ${scrapeStats.tooShort}
-  Breadcrumb-only (no scrapable URL)  : ${scrapeStats.breadcrumbOnly}
-  Social platform (no scrapable URL)  : ${scrapeStats.social}
+ANCHOR CLASSIFICATION (from PDF):
+  Total anchors detected               : ${scrapeStats.anchorTotal}
+    • Full URLs with article path      : ${scrapeStats.fullUrlAnchors}
+    • Breadcrumb anchors (e.g. "x.com › ...")  : ${scrapeStats.breadcrumbAnchors}
+    • Social platform markers (FB/YT/etc): ${scrapeStats.socialAnchors}
+
+BREADCRUMB URL RESOLUTION (via DuckDuckGo "site:" search):
+  Attempted                            : ${scrapeStats.resolveAttempted}
+  Successfully resolved to real URL    : ${scrapeStats.resolveSucceeded}
+  Could not be resolved                : ${scrapeStats.resolveFailed}
+
+PAGE-CONTENT SCRAPING:
+  URLs attempted (direct + resolved)   : ${scrapeStats.attempted}
+  Successfully scraped (≥200 chars)    : ${scrapeStats.succeeded}
+  Failed (network/timeout/blocked)     : ${scrapeStats.failed}
+  Too short to be useful (<200 chars)  : ${scrapeStats.tooShort}
 
 ⚠️ IMPORTANT FOR CLASSIFICATION:
   • For results WITH full page content (marked "--- PAGE CONTENT: <url> ---"
-    below in the analysis section), base your classification on the FULL
-    article body, not just the snippet.
-  • For results WITHOUT full page content (breadcrumb-only / social / failed
-    / too-short), you ONLY have the Google snippet. Snippets are short and
-    lossy — they often quote one sentence out of context. BE EXTRA CONSERVATIVE:
+    below), base your classification on the FULL article body, not the snippet.
+  • For results WITHOUT full page content (resolve failed / social-only /
+    scrape failed / too short), you ONLY have the Google snippet from the PDF.
+    Snippets are short and lossy — they often quote one sentence out of context.
+    BE EXTRA CONSERVATIVE:
       - Do NOT classify as TRUE_HIT based on snippet alone unless the snippet
-        EXPLICITLY states the screened subject IS the wrongdoer (not a
-        successor, witness, judge, defence lawyer, or unrelated person
-        mentioned in passing).
-      - When a snippet mentions the subject's name + a wrongdoing term
-        together, but the relationship is unclear → POSSIBLE_HIT (not TRUE).
+        EXPLICITLY states the screened subject IS the wrongdoer.
+      - When a snippet mentions the subject's name + a wrongdoing term together
+        but the relationship is unclear → POSSIBLE_HIT (not TRUE).
       - Lower confidence by ~0.15 for snippet-only classifications.
 ═══════════════════════════════════════════════════════════
 `;
   enrichedContent = scrapeSummary + '\n' + enrichedContent;
-  console.log(`📊 Scrape stats:`, scrapeStats);
+  console.log(`📊 Final pipeline stats:`, scrapeStats);
 }
 
 setProgress(45); setStage('Poe AI 分析中...');
