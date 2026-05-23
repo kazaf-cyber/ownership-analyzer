@@ -1,28 +1,178 @@
-/**
- * URL Resolve - 雙模式
- * Mode A: { domain, pathHint, title } → 用 DuckDuckGo 搜尋揾返真實 URL
- * Mode B: { url } 或 { urls: [...] } → 跟 redirect 揾最終 URL(舊功能保留)
- */
+// ═══════════════════════════════════════════════════════════
+// Ownership Analyzer Worker
+// Routes: /api/health, /api/scrape, /api/batch-scrape, /api/resolve
+// ═══════════════════════════════════════════════════════════
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Worker-Key'
+};
+
+// Helper: JSON Response with CORS
+function corsResponse(body, status = 200) {
+  return new Response(body, {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      ...corsHeaders
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// MAIN FETCH HANDLER
+// ═══════════════════════════════════════════════════════════
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    // CORS preflight
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: corsHeaders });
+    }
+
+    try {
+      // ─── Health Check ───
+      if (url.pathname === '/api/health') {
+        return Response.json({
+          ok: true,
+          hasBrowser: !!env.BROWSER,
+          timestamp: new Date().toISOString(),
+          worker: 'ownership-analyzer-api',
+          version: '1.1.0'
+        }, { headers: corsHeaders });
+      }
+
+      // ─── Root ───
+      if (url.pathname === '/' || url.pathname === '') {
+        return Response.json({
+          name: 'ownership-analyzer-api',
+          endpoints: [
+            'GET  /api/health',
+            'POST /api/scrape',
+            'POST /api/batch-scrape',
+            'POST /api/resolve'
+          ]
+        }, { headers: corsHeaders });
+      }
+
+      // ─── Single Scrape (uses Browser Rendering) ───
+      if (url.pathname === '/api/scrape' && request.method === 'POST') {
+        const body = await request.json();
+        const targetUrl = body.url;
+        if (!targetUrl) {
+          return Response.json(
+            { error: 'Missing "url" parameter in request body' },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const response = await env.BROWSER.fetch(
+          new Request('https://browser.cloudflare.com/v1/fetch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: targetUrl })
+          })
+        );
+        const html = await response.text();
+
+        return Response.json({
+          ok: true,
+          url: targetUrl,
+          html,
+          length: html.length
+        }, { headers: corsHeaders });
+      }
+
+      // ─── Batch Scrape ───
+      if (url.pathname === '/api/batch-scrape' && request.method === 'POST') {
+        const body = await request.json();
+        const urls = Array.isArray(body.urls) ? body.urls : [];
+        if (!urls.length) {
+          return Response.json(
+            { error: 'Missing "urls" array in request body' },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const targetUrls = urls.slice(0, 20);
+        const results = await Promise.all(
+          targetUrls.map(async (targetUrl) => {
+            try {
+              const response = await env.BROWSER.fetch(
+                new Request('https://browser.cloudflare.com/v1/fetch', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ url: targetUrl })
+                })
+              );
+              const html = await response.text();
+              return {
+                ok: true,
+                url: targetUrl,
+                html,
+                length: html.length
+              };
+            } catch (err) {
+              return {
+                ok: false,
+                url: targetUrl,
+                error: err.message
+              };
+            }
+          })
+        );
+
+        return Response.json({
+          ok: true,
+          total: targetUrls.length,
+          successful: results.filter(r => r.ok).length,
+          results
+        }, { headers: corsHeaders });
+      }
+
+      // ─── ★ NEW: URL Resolve (DuckDuckGo + redirect-follow) ───
+      if (url.pathname === '/api/resolve' && request.method === 'POST') {
+        return handleResolve(request, env);
+      }
+
+      // ─── 404 ───
+      return Response.json(
+        { error: 'Not Found', pathname: url.pathname, method: request.method },
+        { status: 404, headers: corsHeaders }
+      );
+
+    } catch (e) {
+      return Response.json(
+        { ok: false, error: e.message, stack: e.stack },
+        { status: 500, headers: corsHeaders }
+      );
+    }
+  }
+};
+
+// ═══════════════════════════════════════════════════════════
+// URL Resolve - 雙模式
+// Mode A: { domain, pathHint, title } → DuckDuckGo 反查
+// Mode B: { url } 或 { urls: [...] } → 跟 redirect
+// ═══════════════════════════════════════════════════════════
 async function handleResolve(request, env) {
   try {
     const body = await request.json();
 
-    // ════════════════════════════════════════
-    // MODE A: Breadcrumb resolution (新功能)
-    // ════════════════════════════════════════
+    // MODE A: Breadcrumb resolution
     if (body.domain) {
       return await handleBreadcrumbResolve(body);
     }
 
-    // ════════════════════════════════════════
-    // MODE B: URL redirect following (原有)
-    // ════════════════════════════════════════
+    // MODE B: URL redirect following
     const isSingleMode = !!body.url && !body.urls;
     const inputUrls = body.urls || (body.url ? [body.url] : []);
 
     if (!inputUrls || inputUrls.length === 0) {
-      return corsResponse(JSON.stringify({ 
-        error: 'Missing url, urls, or domain' 
+      return corsResponse(JSON.stringify({
+        error: 'Missing url, urls, or domain'
       }), 400);
     }
 
@@ -87,13 +237,12 @@ async function handleResolve(request, env) {
   }
 }
 
-/**
- * 用 DuckDuckGo HTML 搜尋,由 breadcrumb 反向揾真實 URL
- */
+// ═══════════════════════════════════════════════════════════
+// DuckDuckGo Breadcrumb Resolution
+// ═══════════════════════════════════════════════════════════
 async function handleBreadcrumbResolve(body) {
   const { domain, pathHint = [], title = '' } = body;
 
-  // 清理 + 構建搜尋 query
   const cleanDomain = String(domain).replace(/^https?:\/\//, '').replace(/^www\./, '').trim();
   const pathTerms = Array.isArray(pathHint)
     ? pathHint
@@ -106,7 +255,6 @@ async function handleBreadcrumbResolve(body) {
   const query = `site:${cleanDomain} ${pathTerms} ${String(title || '').slice(0, 100)}`.trim().replace(/\s+/g, ' ');
 
   try {
-    // DuckDuckGo HTML 搜尋(無需 API key)
     const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
 
     const controller = new AbortController();
@@ -133,8 +281,6 @@ async function handleBreadcrumbResolve(body) {
 
     const html = await searchResp.text();
 
-    // DuckDuckGo HTML 結構: <a class="result__a" href="/l/?uddg=ENCODED_URL">
-    // 或者直接係: <a href="https://realsite.com/...">
     const linkPattern = /<a[^>]+href="([^"]+)"[^>]*class="[^"]*result__a[^"]*"/gi;
     const altPattern = /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"/gi;
 
@@ -143,10 +289,8 @@ async function handleBreadcrumbResolve(body) {
     while ((m = linkPattern.exec(html)) !== null) candidates.push(m[1]);
     while ((m = altPattern.exec(html)) !== null) candidates.push(m[1]);
 
-    // 揾第一個 match domain 嘅 URL
     for (let candidateUrl of candidates) {
       try {
-        // DuckDuckGo 將真實 URL 包喺 /l/?uddg=ENCODED_URL
         if (candidateUrl.includes('/l/?uddg=') || candidateUrl.includes('//duckduckgo.com/l/?uddg=')) {
           const uddgMatch = candidateUrl.match(/[?&]uddg=([^&]+)/);
           if (uddgMatch) {
@@ -154,7 +298,6 @@ async function handleBreadcrumbResolve(body) {
           }
         }
 
-        // 補上 protocol(DDG 有時返 //domain.com/...)
         if (candidateUrl.startsWith('//')) {
           candidateUrl = 'https:' + candidateUrl;
         }
@@ -162,13 +305,11 @@ async function handleBreadcrumbResolve(body) {
         const parsed = new URL(candidateUrl);
         const candidateDomain = parsed.hostname.replace(/^www\./, '');
 
-        // Domain 必須 match(完全相同 或 subdomain)
         if (
           candidateDomain === cleanDomain ||
           candidateDomain.endsWith('.' + cleanDomain) ||
           cleanDomain.endsWith('.' + candidateDomain)
         ) {
-          // Path 必須有實質內容(避免揾到 homepage)
           if (parsed.pathname && parsed.pathname.length >= 4) {
             return corsResponse(JSON.stringify({
               url: candidateUrl,
