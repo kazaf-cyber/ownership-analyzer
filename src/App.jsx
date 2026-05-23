@@ -3076,13 +3076,14 @@ if (r.cls === 'FALSE_HIT') {
 
           if (s2.wrongdoingApplies === false && conf >= 0.70) {
             // unrelated = same name, DIFFERENT person → FALSE_HIT
-            // successor/predecessor/witness/victim/colleague = SAME person, NOT the subject → IRRELEVANT_MLTF
-            const downgrade = s2.roleType === 'unrelated' 
-              ? 'FALSE_HIT' 
+            // successor / predecessor / witness / victim / colleague
+            //   = SAME person, NOT the subject → IRRELEVANT_MLTF
+            const downgrade = s2.roleType === 'unrelated'
+              ? 'FALSE_HIT'
               : 'IRRELEVANT_MLTF';
 
-            // 構造解釋文字,根據有冇 ML/TF matter 區分 Case A 同 Case B
             const mltfExists = s2.mltfMatterExistsInArticle === true;
+
             const mltfReason = downgrade === 'IRRELEVANT_MLTF'
               ? (mltfExists
                   ? `🎯 [Stage 2 — role: ${String(s2.roleType).toUpperCase()}] ML/TF-related content exists in this article, but it applies to ${s2.actualSubjectName || 'another party'}, NOT to ${searchEntity}. ${searchEntity} appears in the article only as ${s2.roleType}. ${s2.reasoning}`
@@ -3093,9 +3094,9 @@ if (r.cls === 'FALSE_HIT') {
               ...original,
               cls: downgrade,
               confidence: Math.max(conf, 0.75),
-              riskCat: downgrade === 'FALSE_HIT' 
+              riskCat: downgrade === 'FALSE_HIT'
                 ? 'N/A (Different Person)'
-                : (mltfExists 
+                : (mltfExists
                     ? `N/A (ML/TF subject = ${s2.actualSubjectName || 'other party'})`
                     : `N/A (Target is ${s2.roleType}, no ML/TF matter)`),
               _stage2: s2,
@@ -3130,7 +3131,6 @@ if (r.cls === 'FALSE_HIT') {
             console.log(`⚠️ Stage 2 [#${s2.rank}]: inconclusive (conf ${conf})`);
           }
         });
-
         setProgress(95);
         setStage('Stage 2 完成,正在整理結果...');
       }
