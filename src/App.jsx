@@ -942,6 +942,132 @@ function cleanGooglePdfText(rawText) {
   return text.trim();
 }
 
+/* ============================================================
+   🎯 STAGE 2: ROLE-AWARE RE-ANALYSIS (P0)
+   解決 "Wu Junli 接替 Huo Jinsan" 呢類 false positive
+   ============================================================ */
+
+function extractRelevantPassages(fullText, targetName, opts = {}) {
+  const { contextChars = 600, maxPassages = 6, maxTotalChars = 5000 } = opts;
+  if (!fullText || !targetName) return { passages: [], mentions: 0 };
+
+  const isChinese = /[\u4e00-\u9fa5]/.test(targetName);
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const tokens = targetName.split(/\s+/).filter(t => t.length > 1);
+
+  // Romanized names: match either full name OR any token (handles "Chan Tai Man" ↔ "Tai Man Chan")
+  // Chinese: match full string only
+  const patterns = isChinese
+    ? [esc(targetName)]
+    : [tokens.map(esc).join('\\s+'), ...tokens.map(esc)];
+  const regex = new RegExp(patterns.join('|'), 'gi');
+
+  const positions = [];
+  let m;
+  while ((m = regex.exec(fullText)) !== null) {
+    positions.push(m.index);
+    if (positions.length > 80) break;
+  }
+
+  if (positions.length === 0) return { passages: [], mentions: 0 };
+
+  // Merge overlapping context windows
+  const windows = [];
+  for (const p of positions) {
+    const s = Math.max(0, p - contextChars);
+    const e = Math.min(fullText.length, p + contextChars);
+    const last = windows[windows.length - 1];
+    if (last && s <= last[1]) last[1] = Math.max(last[1], e);
+    else windows.push([s, e]);
+  }
+
+  const passages = [];
+  let total = 0;
+  for (const [s, e] of windows.slice(0, maxPassages)) {
+    const p = fullText.slice(s, e);
+    if (total + p.length > maxTotalChars) break;
+    passages.push((s > 0 ? '…' : '') + p + (e < fullText.length ? '…' : ''));
+    total += p.length;
+  }
+
+  return { passages, mentions: positions.length };
+}
+
+const STAGE2_SYSTEM_PROMPT = `You are a senior AML/sanctions screening analyst performing ROLE ANALYSIS.
+
+Your single task: determine whether the SCREENED TARGET is the SUBJECT of any wrongdoing in the article, OR plays a different role (successor, predecessor, witness, victim, etc.).
+
+🚨 THE #1 FALSE-POSITIVE PATTERN IN SCREENING:
+
+   "Company X appoints A as CEO, REPLACING B who was investigated for fraud."
+   
+   → A appears in the article alongside "fraud" + "investigated".
+   → Stage 1 snippet match looks like A is the wrongdoer.
+   → BUT A is the SUCCESSOR. B is the actual subject.
+   → Correct classification: NOT a hit for A.
+
+You MUST trace pronouns ("he/she/they/his/her") to their actual antecedent.
+You MUST distinguish "X did Y" from "X replaced Z who did Y".
+You MUST identify the actual subject name when target is NOT the subject.
+
+Respond with STRICT JSON only — no markdown, no commentary.`;
+
+function buildStage2Prompt({ targetName, knownInfo, passages, originalCls, originalReason, candidateTitle, candidateSource }) {
+  const hasInfo = knownInfo && Object.values(knownInfo).some(v => v && String(v).trim());
+  const knownInfoStr = hasInfo
+    ? Object.entries(knownInfo)
+        .filter(([_, v]) => v && String(v).trim())
+        .map(([k, v]) => `  - ${k}: ${v}`)
+        .join('\n')
+    : '  (no identifying info provided)';
+
+  return `# Screened Target
+Name: "${targetName}"
+Known identifying info:
+${knownInfoStr}
+
+# Article context
+Title: ${candidateTitle || '(unknown)'}
+Source: ${candidateSource || '(unknown)'}
+Stage 1 classification: ${originalCls}
+Stage 1 reasoning: ${originalReason}
+
+# Relevant passages (target mentions + ±600 chars context)
+${passages.map((p, i) => `[Passage ${i + 1}]\n${p}`).join('\n\n')}
+
+# Your task
+
+Determine the ROLE of "${targetName}" in this article. Pick exactly ONE roleType:
+
+  • "subject"      — target IS the wrongdoer / investigated / sanctioned party
+  • "successor"    — target REPLACES someone who is the subject
+                     ("X appointed to replace Y, who was investigated…")
+  • "predecessor"  — target is the FORMER holder; current holder is the subject
+  • "witness"      — target is commentator / spokesperson / interviewed only
+  • "victim"       — target is the victim, not perpetrator
+  • "colleague"    — target works at same org but is NOT implicated
+  • "unrelated"    — same name but clearly a different person/entity
+  • "ambiguous"    — cannot determine from available text
+
+🚨 PRONOUN TRACING IS CRITICAL.
+   "He replaces X, who was charged with fraud" → "he" = target, "X" = subject.
+   Target is SUCCESSOR. wrongdoingApplies = false.
+
+🚨 If target is mentioned in the SAME paragraph as wrongdoing, that ALONE is NOT enough.
+   You must verify the GRAMMATICAL SUBJECT of the wrongdoing sentence is the target.
+
+Output strict JSON only:
+{
+  "isSubject": boolean,
+  "wrongdoingApplies": boolean,
+  "roleType": "subject" | "successor" | "predecessor" | "witness" | "victim" | "colleague" | "unrelated" | "ambiguous",
+  "confidence": 0.0-1.0,
+  "evidenceQuote": "the single most decisive quote from the passages (≤25 words) proving your role assignment",
+  "actualSubjectName": "name of the actual subject if different from target, else empty string",
+  "reasoning": "2-3 sentences. Must explicitly state who is the actual subject of wrongdoing."
+}`;
+}
+
 /* ★ GeoRiskMap — Real World Map (D3.js + TopoJSON) */
 function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
   const wrapRef = React.useRef(null);
@@ -2658,6 +2784,168 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
 
         return r;
       });
+
+      // ════════════════════════════════════════════════════════════
+      // 🎯 STAGE 2: ROLE-AWARE RE-ANALYSIS (P0)
+      // 只針對 Stage 1 嘅 TRUE_HIT / POSSIBLE_HIT 做第二輪分析
+      // 專門識別:target 係主角定係接替者 / 證人 / 受害者
+      // ════════════════════════════════════════════════════════════
+      const stage2Candidates = parsed.filter(r =>
+        (r.cls === 'TRUE_HIT' || r.cls === 'POSSIBLE_HIT') && !r._manualOverride
+      );
+
+      if (stage2Candidates.length > 0) {
+        setProgress(85);
+        setStage(`Stage 2 角色分析中 (${stage2Candidates.length} 項)...`);
+        console.log(`🎯 Stage 2: re-analyzing ${stage2Candidates.length} hits for role`);
+
+        // Build URL → full-page-content map from enrichedContent
+        const pageContentMap = new Map();
+        const pageRe = /--- PAGE CONTENT: ([^\s)]+)[^-]*---\n([\s\S]*?)\n--- END ---/g;
+        let pm;
+        while ((pm = pageRe.exec(enrichedContent)) !== null) {
+          pageContentMap.set(pm[1], pm[2]);
+        }
+        console.log(`📚 Stage 2: have ${pageContentMap.size} full-page contents to query`);
+
+        const stage2Results = await Promise.allSettled(
+          stage2Candidates.map(async (candidate) => {
+            // ── Find the best matching article body ────────────────
+            let articleText = '';
+
+            // Strategy A: match by title or source in scraped pages
+            for (const [, content] of pageContentMap) {
+              const lc = content.toLowerCase();
+              if (
+                (candidate.title && lc.includes(candidate.title.slice(0, 30).toLowerCase())) ||
+                (candidate.source && lc.includes(candidate.source.toLowerCase()))
+              ) {
+                articleText = content;
+                break;
+              }
+            }
+
+            // Strategy B: concat all scraped pages (when title/source can't anchor)
+            if (!articleText && pageContentMap.size > 0) {
+              articleText = [...pageContentMap.values()].join('\n\n').slice(0, 30000);
+            }
+
+            // Strategy C: last resort — snippet + raw PDF text
+            if (!articleText || articleText.length < 100) {
+              articleText = (candidate.snippet || '') + '\n' + (pdfText || '').slice(0, 5000);
+            }
+
+            const { passages, mentions } = extractRelevantPassages(articleText, searchEntity);
+
+            if (mentions === 0 || passages.length === 0) {
+              console.log(`⚠️ Stage 2 [#${candidate.rank}]: NO target mention found in article body → skip`);
+              return null;
+            }
+
+            console.log(`🔬 Stage 2 [#${candidate.rank}]: ${mentions} mentions, ${passages.length} passages → calling LLM`);
+
+            const prompt = buildStage2Prompt({
+              targetName: searchEntity,
+              knownInfo: entityContext,
+              passages,
+              originalCls: candidate.cls,
+              originalReason: candidate.reason,
+              candidateTitle: candidate.title,
+              candidateSource: candidate.source,
+            });
+
+            try {
+              const res = await fetch('https://api.poe.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${apiKey.trim()}`
+                },
+                body: JSON.stringify({
+                  model: 'gemini-3.5-flash',
+                  messages: [
+                    { role: 'system', content: STAGE2_SYSTEM_PROMPT },
+                    { role: 'user', content: prompt }
+                  ],
+                  temperature: 0.05,
+                  max_tokens: 800
+                })
+              });
+              if (!res.ok) return null;
+              const data = await res.json();
+              const raw = data?.choices?.[0]?.message?.content || '{}';
+              const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
+              const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+              if (!jsonMatch) return null;
+              const s2 = JSON.parse(jsonMatch[0]);
+              return { rank: candidate.rank, ...s2 };
+            } catch (e) {
+              console.error(`Stage 2 [#${candidate.rank}] failed:`, e);
+              return null;
+            }
+          })
+        );
+
+        // ── Merge Stage 2 results back into `parsed` ─────────────
+        stage2Results.forEach((res) => {
+          if (res.status !== 'fulfilled' || !res.value) return;
+          const s2 = res.value;
+          const idx = parsed.findIndex(p => p.rank === s2.rank);
+          if (idx === -1) return;
+
+          const original = parsed[idx];
+          const conf = typeof s2.confidence === 'number' ? s2.confidence : 0;
+
+          if (s2.wrongdoingApplies === false && conf >= 0.70) {
+            // ✅ Stage 2 confirmed: target is NOT the wrongdoer → downgrade
+            const downgrade =
+              s2.roleType === 'successor' || s2.roleType === 'predecessor' || s2.roleType === 'unrelated'
+                ? 'FALSE_HIT'
+                : 'IRRELEVANT_MLTF';
+
+            parsed[idx] = {
+              ...original,
+              cls: downgrade,
+              confidence: Math.max(conf, 0.75),
+              riskCat: `N/A (${s2.roleType})`,
+              _stage2: s2,
+              reason:
+                `🎯 [Stage 2 — role: ${String(s2.roleType).toUpperCase()}] ${s2.reasoning}` +
+                (s2.actualSubjectName ? ` Actual subject: ${s2.actualSubjectName}.` : '') +
+                (s2.evidenceQuote ? ` Evidence: "${s2.evidenceQuote}"` : '') +
+                `\n\n— ORIGINAL (Stage 1) —\n${original.reason}`,
+            };
+            console.log(`📉 Stage 2 [#${s2.rank}]: ${original.cls} → ${downgrade} (role: ${s2.roleType})`);
+
+          } else if (s2.wrongdoingApplies === true && conf >= 0.70) {
+            // ✅ Stage 2 confirms target IS the subject → annotate + slightly bump confidence
+            parsed[idx] = {
+              ...original,
+              confidence: Math.min(1.0, Math.max(original.confidence, conf)),
+              _stage2: s2,
+              reason:
+                `🎯 [Stage 2 CONFIRMED — role: ${String(s2.roleType).toUpperCase()}] ${s2.reasoning}` +
+                (s2.evidenceQuote ? ` Evidence: "${s2.evidenceQuote}"` : '') +
+                `\n\n— ORIGINAL (Stage 1) —\n${original.reason}`,
+            };
+            console.log(`✅ Stage 2 [#${s2.rank}]: CONFIRMED ${original.cls} (role: ${s2.roleType})`);
+
+          } else {
+            // ⚠️ Stage 2 inconclusive — keep Stage 1 cls but annotate
+            parsed[idx] = {
+              ...original,
+              _stage2: s2,
+              reason:
+                `🎯 [Stage 2 INCONCLUSIVE — role: ${s2.roleType}, conf: ${conf}] ${s2.reasoning}` +
+                `\n\n— ORIGINAL (Stage 1) —\n${original.reason}`,
+            };
+            console.log(`⚠️ Stage 2 [#${s2.rank}]: inconclusive (conf ${conf})`);
+          }
+        });
+
+        setProgress(95);
+        setStage('Stage 2 完成,正在整理結果...');
+      }
 
       // ═══════════════════════════════════════════════════════
       // 🆕 F.3: COUNT VALIDATION — 警告 AI 是否漏掉結果
