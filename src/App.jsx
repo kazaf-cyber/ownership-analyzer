@@ -1431,7 +1431,7 @@ function ScreeningModule({ entityName: initialEntityName, mode, onFlagSTR }) {
 
 const fetchPageContent = async (url) => {
   try {
-    const data = await callWorker('/api/scrape', { url, maxLength: 3000 });
+    const data = await callWorker('/api/scrape', { url, maxLength: 12000 });
     return data.text || null;
   } catch { return null; }
 };
@@ -2085,17 +2085,34 @@ ${formatEntityContext(entityContext)}
     /* ═══════════════════════════════════════════════════════
        ⭐ Page Content / Snippet 來源說明
        ═══════════════════════════════════════════════════════ */
-    const dataSourceNote = hasPageContent ? `
+   const dataSourceNote = `
 YOU HAVE TWO DATA SOURCES:
-1. Google search result snippets (from PDF)
-2. Full page content of each result (appended below, marked with "--- PAGE CONTENT: [url] ---")
+1. Google search result snippets (from PDF) — ALWAYS available, short, often lossy
+2. Full page content — appended below, marked with "--- PAGE CONTENT: [url] ---"
+   ⚠️ NOT EVERY result has full page content. Check before each classification.
 
-⚠️ Base your classification PRIMARILY on the full page content when available.
-   A snippet alone is NEVER sufficient evidence for TRUE_HIT — verify with full content.
-` : `
-⚠️ NOTE: Only Google search snippets are available (no full page content was scraped).
-   Be CONSERVATIVE — if a snippet is ambiguous, classify as IRRELEVANT_MLTF or POSSIBLE_HIT 
-   rather than TRUE_HIT.
+🚨 PER-RESULT EVIDENCE-AVAILABILITY RULE:
+   For EACH result you classify, FIRST determine which data you have:
+
+   (a) Full page content available → use it as primary evidence.
+       TRUE_HIT requires explicit confirmation in the FULL article body that the
+       screened subject IS the actor of the wrongdoing (not the successor/witness/etc.).
+
+   (b) Snippet ONLY (no full page content) → CONSERVATIVE classification:
+       - Maximum classification = POSSIBLE_HIT (never TRUE_HIT from snippet alone)
+       - Confidence cap = 0.65
+       - Add to missingInfo: "full article verification required"
+       - In reason, explicitly note: "Classification based on snippet only — full article not retrievable"
+
+   (c) Snippet mentions both the subject's name AND a wrongdoing keyword, but does
+       not clarify the GRAMMATICAL ROLE → POSSIBLE_HIT or PENDING_INFO.
+       Examples of ambiguous snippets:
+         "Wu Junli ... investigation into fraud at Sinopec ..."
+            → unclear if Wu Junli IS the investigated party or a related figure
+            → MUST be POSSIBLE_HIT, not TRUE_HIT
+
+🚨 NEVER assume a result has full content just because some other result does.
+   The "--- PAGE CONTENT ---" marker is the ONLY proof of full-content availability.
 `;
 
     /* ═══════════════════════════════════════════════════════
