@@ -2155,42 +2155,7 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
         riskCat: r.riskCat || 'N/A'
       }));
 
-      // ═══════════════════════════════════════════════════════
-      // POST-PROCESSING SAFETY NET
-      // ═══════════════════════════════════════════════════════
-      const hasKnownInfo = entityContext && Object.values(entityContext).some(v => v && String(v).trim() !== '');
-
-            // ═══════════════════════════════════════════════════════
-      // 🆕 NAME COMPARISON HELPERS (handle Asian ↔ Western word order)
-      // ═══════════════════════════════════════════════════════
-      const normalizeNameTokens = (name) => {
-        if (!name) return [];
-        return String(name)
-          .toLowerCase()
-          .replace(/[.,;:'"\-()]/g, ' ')
-          .split(/\s+/)
-          .filter(t => t.length > 1); // drop single-letter initials
-      };
-
-      const hasOnlyLatinChars = (name) => {
-        if (!name) return false;
-        return /^[\x00-\x7F\s]+$/.test(String(name)); // ASCII only = romanized
-      };
-
-      const isSamePersonDifferentOrder = (name1, name2) => {
-        if (!name1 || !name2) return false;
-        if (!hasOnlyLatinChars(name1) || !hasOnlyLatinChars(name2)) return false;
-        const t1 = normalizeNameTokens(name1);
-        const t2 = normalizeNameTokens(name2);
-        if (t1.length === 0 || t2.length === 0) return false;
-        if (t1.length !== t2.length) return false;
-        if (t1.join(' ') === t2.join(' ')) return false; // same order, handled elsewhere
-        return [...t1].sort().join(' ') === [...t2].sort().join(' ');
-      };
-
-      parsed = parsed.map(r => {
-        const hasMLTF = r.matchedKeywords && r.matchedKeywords.length > 0;
-
+      
         // ═══════════════════════════════════════════════════════
 // 🛡️ POST-PROCESSING — Minimal sanity checks only
 // ═══════════════════════════════════════════════════════
