@@ -729,13 +729,28 @@ const ZH_KEYWORDS = [
   '制裁', '恐怖分子', '販運', '洗錢', '反洗錢'
 ];
 
+const ZH_KEYWORDS_CN = [
+  '市场滥用', '监管违规', '逃税', '指控', '贿赂',
+  '腐败', '刑事', '欺诈', '非法', '起诉',
+  '调查', '洗钱', '诉讼', '处罚', '检举',
+  '制裁', '恐怖分子', '贩运', '洗钱', '反洗钱'
+];
+
 function buildQueryAuto(entityName) {
-  const detectedLang = detectLanguage(entityName);
-  const keywords = detectedLang === 'zh' ? ZH_KEYWORDS : EN_KEYWORDS;
+  // 🆕 用詳細偵測,區分 en / zh_tw / zh_cn
+  const fullLang = detectLanguageDetail(entityName);
+
+  let keywords;
+  if (fullLang === 'zh_cn')      keywords = ZH_KEYWORDS_CN;
+  else if (fullLang === 'zh_tw') keywords = ZH_KEYWORDS_TW;
+  else                            keywords = EN_KEYWORDS;
+
   const keywordString = keywords.map(k => `"${k}"`).join(' OR ');
-  // ★ 新格式：實體名稱在前 + 關鍵字在後（OR 連接，無外層括號）
   const query = `"${entityName}" ${keywordString}`;
-  return { query, detectedLang, keywords };
+
+  // detectedLang 返回兼容 UI 嘅 'zh' / 'en'(其他地方仲用緊)
+  const detectedLang = fullLang === 'en' ? 'en' : 'zh';
+  return { query, detectedLang, keywords, fullLang };
 }
 
 const MOCK_EN = [
@@ -1416,6 +1431,11 @@ function ScreeningModule({ entityName: initialEntityName, mode, onFlagSTR }) {
   const buildQuery = isSanction ? buildSanctionQueryAuto : buildQueryAuto;
   const sanctionLang = isSanction ? detectLanguageDetail(searchEntity) : null;
   const sanctionParts = isSanction ? getSanctionKeywordsByPart(sanctionLang || 'en') : null;
+  // 🆕 Adverse Media 嘅 full lang(en / zh_tw / zh_cn)
+  const adverseLang = isAdverseMedia ? detectLanguageDetail(searchEntity) : null;
+  const adverseKeywords = isAdverseMedia
+  ? (adverseLang === 'zh_cn' ? ZH_KEYWORDS_CN : adverseLang === 'zh_tw' ? ZH_KEYWORDS_TW : EN_KEYWORDS)
+  : null;
   const currentKeywordsEN = EN_KEYWORDS;          // adverse media 用
   const currentKeywordsZH = ZH_KEYWORDS;          // adverse media 用
   const mockEN = isSanction ? SANCTION_MOCK_EN : MOCK_EN;
@@ -1597,134 +1617,101 @@ const testWorkerConnection = async () => {
     ? `\n## 🪪 Known Identifying Info (use ONLY to disambiguate same-name cases)\n${formatEntityContext(entityContext)}\n`
     : `\n## ⚠️ No identifying info provided — judge by article context (role, jurisdiction, industry, behaviour pattern)\n`;
 
+  // 🔒 LOCK DOWN URL LIST — same as user's manual Google Advanced Search result page
+  const N = resultUrls.length > 0 ? resultUrls.length : resultCount;
   const urlAnchorBlock = resultUrls.length > 0 ? `
-## 🎯 Expected Output Count: ${resultUrls.length}
-The PDF contains EXACTLY ${resultUrls.length} distinct search results (pre-extracted by deterministic URL scan):
-${resultUrls.map((u, i) => `  [${String(i+1).padStart(2,'0')}] ${u}`).join('\n')}
+## 🔒 LOCKED URL LIST (extracted from user's manual Google search PDF)
+Total URLs/anchors: ${resultUrls.length}
+⚠️ This list IS the user's manual Google Advanced Search result page.
+⚠️ DO NOT skip / merge / duplicate / invent items.
+⚠️ Output exactly ${resultUrls.length} JSON items in this SAME ORDER:
 
-⚠️ Your JSON array MUST contain EXACTLY ${resultUrls.length} items. Do not skip, merge, or duplicate.
+${resultUrls.map((u, i) => `  [${String(i+1).padStart(2,'0')}] ${u}`).join('\n')}
 ` : '';
 
   const moduleType = enrichedContent.toLowerCase().includes('sanction') ? 'sanctions list' : 'adverse media';
 
-  return `You are a senior CDD analyst performing ${moduleType} screening for KYC/AML.
+  return `You are performing ${moduleType} screening for KYC/AML.
 
 # 🎯 Target Entity
 "${searchEntityName}"
 ${knownInfoBlock}
 ${urlAnchorBlock}
 
-# 📋 Task
-For EACH Google search result in the content below, classify into ONE of these FOUR categories:
+# 📋 Per-URL Task (apply to EACH of the ${N} URLs)
 
-## Classification Buckets
+STEP 1 — LOCATE: Find the "--- PAGE CONTENT: <url> ---" block matching this URL/anchor
+        in the data section below.
 
-**1. TRUE_HIT** — The target IS the wrongdoer AND the matter is ML/TF related.
-   In-scope ML/TF matters: money laundering, terrorist financing, sanctions designation/evasion, 
-   bribery/corruption (FCPA/UKBA/ICAC), criminal tax evasion, drug/human/arms trafficking, 
-   fraud with criminal prosecution, insider trading, organized crime, proliferation financing,
-   AML enforcement by HKMA/SFC/MAS/SEC/FCA/OFAC/FinCEN.
+STEP 2 — READ:
+        IF page content block exists → READ THE FULL ARTICLE BODY.
+                                       Classification MUST be based on body.
+                                       Set retrievalStatus = "FULL_BODY".
+        IF NO page content block      → use the PDF snippet only.
+                                       CAP confidence at 0.65.
+                                       Set retrievalStatus = "SNIPPET_ONLY".
 
-**2. FALSE_HIT** — Different person/entity. Name similar but identifiers contradict
-   (different DOB, jurisdiction, industry, company, role). Includes name-similar cases
-   like "陳大文" vs "陳文", "Mary Wong" vs "Mary Wang".
+STEP 3 — IDENTIFY SUBJECT: Who is the grammatical subject of any wrongdoing
+        described in the article?
+        • Trace pronouns ("he/she/they") to their antecedent.
+        • Watch for "X succeeded/replaced/appointed to replace Y, who did Z"
+          → Z applies to Y, NOT X.
 
-**3. IRRELEVANT_MLTF** — Result does NOT contain ML/TF wrongdoing BY THE TARGET.
-   Use this when ANY of the following apply:
-   • Target is the EMPLOYER investigating an employee
-   • Target is the PLAINTIFF / VICTIM
-   • Target is the SUCCESSOR (e.g. "X replaces Y who was investigated for fraud")
-   • Target is a WITNESS / spokesperson / commentator
-   • Civil disputes (contract, IP, employment) without criminal element
-   • Commercial litigation, antitrust review, listing-rule breach
-   • Target IMPLEMENTING compliance programmes (positive news)
-   • General regulatory news where target is not the subject
-   • SOE internal rule violations without criminal/sanctioned-party nexus
-   
-   🚨 IMPORTANT: When ML/TF keywords appear but the WRONGDOER IS NOT THE TARGET,
-   this is IRRELEVANT_MLTF — NOT TRUE_HIT.
+STEP 4 — APPLY CLASSIFICATION FLOW (in order):
+        Q1: Article describes any wrongdoing?
+            NO  → IRRELEVANT_MLTF (or NO_HIT if target not mentioned at all)
+            YES → Q2
+        Q2: Is the target the subject of the wrongdoing?
+            NO  → IRRELEVANT_MLTF. Set actualSubjectName.
+            YES → Q3
+        Q3: Is the wrongdoing ML/TF in scope?
+            (ML, TF, sanctions designation/evasion, bribery, criminal tax evasion,
+             trafficking, criminal fraud, AML enforcement by HKMA/SFC/MAS/SEC/FCA/OFAC)
+            NO  → IRRELEVANT_MLTF
+            YES → Q4
+        Q4: Known info contradicts article?
+            YES → FALSE_HIT
+            NO  → TRUE_HIT (only if confidence ≥ 0.75)
 
-**4. NO_HIT** — Search keywords not found, result has no relevant content, 
-   or target not mentioned at all.
+# 📥 Data Section
+(Articles successfully scraped are marked with --- PAGE CONTENT --- blocks.
+ PDF snippets appear without those markers.)
 
-# 🧭 Decision Process (apply to every result)
+${enrichedContent.slice(0, 80000)}
 
-STEP 1 — Does the article describe wrongdoing?
-   NO  → IRRELEVANT_MLTF (or NO_HIT if target not mentioned)
-   YES → continue
+# 📤 Required Output
 
-STEP 2 — WHO is the wrongdoer in the article?
-   Read the article carefully. Identify the grammatical subject of the wrongdoing.
-   
-   ⚠️ Common pattern to catch:
-       "Company X appoints A as CEO, REPLACING B who was investigated for fraud"
-        → A is the SUCCESSOR. B is the wrongdoer.
-        → If target = A → IRRELEVANT_MLTF (A is not implicated)
-        → If target = B → continue to STEP 3
-   
-   ⚠️ Pronoun tracing is critical:
-       "He replaces X, who was charged with fraud" → "he" = subject of "replaces",
-       so "he" is the new appointee; "X" is the one charged.
-
-STEP 3 — Is the wrongdoer the TARGET?
-   NO  → IRRELEVANT_MLTF (matter exists but applies to another party)
-   YES → continue
-
-STEP 4 — Is the wrongdoing ML/TF in scope?
-   NO  → IRRELEVANT_MLTF (e.g. commercial dispute, civil suit, antitrust)
-   YES → TRUE_HIT
-
-STEP 5 — Name disambiguation (only matters when STEP 1-4 → TRUE_HIT)
-   • Names match exactly (incl. Asian/Western surname-order variants like 
-     "Chan Tai Man" ↔ "Tai Man Chan") → confirm TRUE_HIT
-   • Names are CLOSE but tokens differ ("陳大文" vs "陳文", "Mary Wong" vs "Mary Wang")
-     → FALSE_HIT (different person)
-   • KNOWN INFO contradicts → FALSE_HIT
-
-# ⚖️ Key Principles
-
-🎯 **READ the article, don't keyword-match.** Keywords are noisy. Context determines truth.
-
-🎯 **Trust the article's narrative.** If the article says "Shell INVESTIGATED Dong Wei
-   for corruption", then Dong Wei is the subject, NOT Shell.
-
-🎯 **Conservative TRUE_HIT.** Only assign TRUE_HIT when (a) target is unambiguously
-   the wrongdoer, AND (b) wrongdoing is clearly ML/TF predicate. Confidence ≥ 0.75.
-
-🎯 **When in doubt → IRRELEVANT_MLTF**, never "pending info" or "possible hit".
-   The 4-bucket system has no "I'm not sure" escape hatch on purpose.
-
-# 📥 Data Sources Available
-1. Google search snippets (from PDF) — always available, sometimes lossy
-2. Full page content — appended below with "--- PAGE CONTENT: <url> ---" markers
-   ⚠️ NOT every result has full page content. Check before classifying.
-   ⚠️ Snippet-only results: be extra conservative, max confidence 0.65.
-
-# 📤 Output Format (JSON array, no markdown fences)
+JSON array with EXACTLY ${N} items. Item #i = URL/anchor #i in the LOCKED URL LIST.
 
 [
   {
     "rank": 1,
-    "title": "Article title as appears in PDF",
-    "source": "Publication name",
-    "date": "YYYY-MM-DD",
-    "snippet": "Verbatim 2-3 sentences",
-    "matchedKeywords": ["only keywords that appear in ML/TF context"],
+    "url": "<exact URL/anchor from LOCKED URL LIST position #1>",
+    "title": "<article title>",
+    "source": "<publication name>",
+    "date": "YYYY-MM-DD or empty string",
+    "snippet": "<2-3 sentence verbatim quote (from body if scraped, else PDF)>",
+    "retrievalStatus": "FULL_BODY" | "SNIPPET_ONLY",
+    "matchedKeywords": [<ML/TF keywords actually present in ML/TF context>],
     "cls": "TRUE_HIT" | "FALSE_HIT" | "IRRELEVANT_MLTF" | "NO_HIT",
     "identityMatch": "FULL_MATCH" | "PARTIAL_MATCH" | "NO_INFO" | "CONTRADICTED" | "NAME_SIMILAR" | "DIFFERENT_NAME",
-    "nameInResult": "exact name string as it appears in the result",
+    "nameInResult": "<exact name as appears in article>",
+    "actualSubjectName": "<if wrongdoer ≠ target, who is the actual wrongdoer; else empty>",
     "confidence": 0.0-1.0,
-    "reason": "Natural paragraph (2-3 sentences). State who the actual subject is if different from target. Explain role-based or scope-based reasoning.",
-    "riskCat": "Money Laundering / Sanctions / Bribery / Fraud / N/A",
+    "reason": "<2-3 sentences. Cite specific article quotes. State actual subject if target is not the subject.>",
+    "riskCat": "Money Laundering / Sanctions / Bribery / Fraud / Tax Evasion / N/A",
     "missingInfo": []
   }
 ]
 
-# 🔬 Search Results to Analyze
+⚠️ FINAL CHECKS BEFORE OUTPUT:
+1. Array length = ${N} ? (NOT ${N-1}, NOT ${N+1})
+2. Each item.rank matches its 1-based position?
+3. Each item.url matches the corresponding LOCKED URL LIST position?
+4. For every TRUE_HIT, retrievalStatus = "FULL_BODY" AND confidence ≥ 0.75 ?
+5. For SNIPPET_ONLY items, confidence ≤ 0.65 ?
 
-${enrichedContent.slice(0, 80000)}
-
-Output JSON array with EXACTLY ${resultUrls.length || resultCount} items. Start with [ and end with ]. Nothing else.`;
+Start with [ and end with ]. No markdown fences, no commentary, no explanations outside JSON.`;
 };
     
 
@@ -1733,37 +1720,73 @@ const buildSystemPrompt = () => {
   
   return `You are a senior KYC/AML compliance analyst performing ${moduleName} for a Hong Kong bank.
 
-## Output Contract (non-negotiable)
+## 🚨 ABSOLUTE OUTPUT CONTRACT (non-negotiable)
 - Output ONLY a valid JSON array. No markdown fences. No commentary. No greeting.
 - Start with [ end with ]. Period.
-- Each distinct search result in the PDF = exactly ONE JSON item.
+- You MUST output EXACTLY the number of items in "Expected Output Count".
+- Each output item = one URL/anchor from the LOCKED URL LIST, in input order.
+- Never skip, merge, duplicate, or invent URLs.
 
-## Reasoning Discipline
-- READ the article body, not just snippets. Identify who the actual subject of wrongdoing is.
-- A keyword match alone is NEVER sufficient for TRUE_HIT.
-- If the target appears in an article ONLY as employer / plaintiff / victim / successor /
-  witness / spokesperson, classify as IRRELEVANT_MLTF — even if ML/TF keywords appear.
-- Distinguish "X did Y" from "X replaced Z who did Y".
-- When uncertain between TRUE_HIT and IRRELEVANT_MLTF → choose IRRELEVANT_MLTF.
-- When uncertain between two same-name people → choose FALSE_HIT.
+## 🚨 ABSOLUTE READING CONTRACT
+The user prompt contains scraped article bodies marked:
+  --- PAGE CONTENT: <url> ---
+  <full article body, up to 12000 chars>
+  --- END ---
+
+🔴 For ANY URL with a "--- PAGE CONTENT ---" block, you MUST classify based on the
+   FULL ARTICLE BODY. Do NOT classify from the PDF snippet alone.
+🔴 PDF snippets are 1-2 sentence fragments — they are lossy and often misleading.
+   "Wu Junli replaced Huo Jinsan who was investigated for fraud" in the snippet
+   looks like Wu Junli is being investigated, but the full article makes clear it's Huo.
+🔴 If a URL has NO scraped content (scrape failed / paywall / social-only anchor),
+   classify based on the snippet but CAP confidence at 0.65 and explain limitation.
+
+## 🚨 ROLE ANALYSIS (the #1 false-positive cause)
+
+Before classifying TRUE_HIT, identify WHO is the grammatical subject of the wrongdoing.
+
+Pattern A — SUCCESSOR (most common false positive):
+   "Company X appointed A as CEO, replacing B who was investigated for fraud."
+   → A is the successor. B is the subject of "investigated".
+   → If screened target = A → IRRELEVANT_MLTF (not TRUE_HIT).
+   → actualSubjectName = "B".
+
+Pattern B — PRONOUN TRACING:
+   "He replaces X, who was charged with fraud."
+   → "He" = the new appointee, subject of "replaces"
+   → "X" = subject of "was charged"
+   Target = "He" → IRRELEVANT_MLTF.
+
+Pattern C — EMPLOYER/PLAINTIFF:
+   "Shell PLC sued former trader for embezzlement."
+   → Subject of wrongdoing = trader, not Shell.
+   → Target = Shell PLC → IRRELEVANT_MLTF.
+
+## Classification Discipline
+- Keyword match alone is NEVER sufficient for TRUE_HIT.
+- If target appears in article ONLY as employer/plaintiff/victim/successor/witness/
+  spokesperson → IRRELEVANT_MLTF (even if ML/TF keywords appear).
+- Uncertain TRUE_HIT vs IRRELEVANT_MLTF → choose IRRELEVANT_MLTF.
+- Uncertain same-name people → choose FALSE_HIT.
+- "陳大文" ≠ "陳文" (Chinese token mismatch → FALSE_HIT).
+- "Chan Tai Man" = "Tai Man Chan" (Latin surname-order swap → SAME person).
+- "Mary Wong" ≠ "Mary Wang" (Latin token mismatch → FALSE_HIT).
 
 ## Confidence Calibration
-- 0.90-1.00 : Authoritative source (official designation, conviction, regulator order)
-- 0.75-0.89 : Mainstream media + named regulator + specific allegation + matching identifiers
-- 0.60-0.74 : Single-source media OR partial identifier corroboration
-- 0.40-0.59 : Weak evidence, peripheral mention
-- Below 0.40 : Insufficient — classify as NO_HIT or IRRELEVANT_MLTF
+- 0.90-1.00: Official designation / conviction / regulator order + full body read
+- 0.75-0.89: Mainstream media + named regulator + specific allegation + identifiers + full body
+- 0.60-0.74: Single source OR partial identifier OR snippet-only
+- < 0.60: Insufficient → NO_HIT or IRRELEVANT_MLTF
 
-⚠️ TRUE_HIT REQUIRES confidence ≥ 0.75 AND non-empty matchedKeywords.
+⚠️ TRUE_HIT REQUIRES: confidence ≥ 0.75 AND non-empty matchedKeywords.
 
 ## PDF Parsing Hygiene
-- Skip "AI Overview" / "AI 概覽" sections (Google's auto-summary, not a result).
-- Skip Google UI noise: navigation, pagination, footer, location info.
-- "--- PAGE BREAK ---" is a paper boundary, NOT a new search. Process all pages.
-- If a result spans a page break (title on page 1, snippet on page 2), merge into ONE item.
-- Process EVERY distinct result. Don't skip thin results without snippets.
+- Skip "AI Overview" / "AI 概覽" auto-summary sections.
+- "--- PAGE BREAK ---" is a paper boundary, NOT a new result.
+  Merge results that span page breaks into ONE item.
+- Each URL/anchor in the LOCKED URL LIST = exactly ONE output item.
 
-You are a precision instrument. Conservative, defensible classifications protect the bank.`.trim();
+You are a precision instrument. Defensible classifications protect the bank.`.trim();
 };
 
 
@@ -2137,6 +2160,60 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
       if (!Array.isArray(parsed) || parsed.length === 0) {
         parsed = [{ rank: 1, title: lang === 'zh' ? '無分析結果' : 'No results', source: '', date: '', snippet: lang === 'zh' ? 'AI未返回有效結果。' : 'AI returned no valid results.', matchedKeywords: [], cls: 'NO_HIT', confidence: 1.0, reason: lang === 'zh' ? '返回空結果。' : 'Returned empty results.', riskCat: 'N/A' }];
       }
+      // ═══════════════════════════════════════════════════════
+      // 🔒 N→N BACKFILL: Force AI output count = PDF anchor count
+      // 確保結果條數 100% 等於你手動 Google 搜尋結果頁面條數
+      // ═══════════════════════════════════════════════════════
+      if (resultUrls.length > 0) {
+        const aiByUrl = new Map();
+        const aiByIndex = [];
+        parsed.forEach((r, i) => {
+          if (r.url) aiByUrl.set(r.url, r);
+          aiByIndex[i] = r;
+        });
+
+        const backfilled = resultUrls.map((anchor, i) => {
+          // Strategy 1: AI returned this URL exactly
+          let aiResult = aiByUrl.get(anchor);
+          
+          // Strategy 2: AI returned at this position (URL field may be empty/wrong)
+          if (!aiResult && aiByIndex[i]) {
+            aiResult = { ...aiByIndex[i], url: anchor };
+          }
+
+          if (aiResult) {
+            return { ...aiResult, rank: i + 1, url: anchor };
+          }
+
+          // Strategy 3: Backfill missing
+          console.warn(`⚠️ Backfill missing item #${i + 1}: ${anchor}`);
+          return {
+            rank: i + 1,
+            url: anchor,
+            title: '(AI did not return this URL)',
+            source: '',
+            date: '',
+            snippet: 'AI skipped this URL in its response — likely scrape failed or item lost.',
+            retrievalStatus: 'FAILED',
+            matchedKeywords: [],
+            cls: 'NO_HIT',
+            identityMatch: 'NO_INFO',
+            nameInResult: '',
+            actualSubjectName: '',
+            confidence: 0,
+            reason: `[Auto-backfill] AI did not classify this URL/anchor. Manual review required. Original anchor: ${anchor}`,
+            riskCat: 'N/A (AI Skipped)',
+            missingInfo: [],
+          };
+        });
+
+        if (backfilled.length !== parsed.length) {
+          console.log(`🔒 Backfilled: ${parsed.length} AI items → ${backfilled.length} items (matches ${resultUrls.length} PDF anchors)`);
+        }
+        parsed = backfilled;
+      }
+
+      
       const VALID_CLS = ['TRUE_HIT', 'POSSIBLE_HIT', 'PENDING_INFO', 'FALSE_HIT', 'IRRELEVANT_MLTF', 'NO_HIT'];
             parsed = parsed.map((r, i) => ({
         ...r,
@@ -2923,14 +3000,15 @@ const ResultCard = ({ r }) => {
                   <div className="h-[42px] px-4 rounded-lg border border-slate-200 bg-gradient-to-br from-slate-50 to-slate-100 flex items-center gap-2 min-w-[140px]">
                     <Globe className="w-4 h-4 text-slate-400" />
                     <span className="text-sm font-bold">
-                      {searchEntity ? (
-                        detectLanguage(searchEntity) === 'zh' 
-                          ? <span className="text-red-600">🇨🇳 中文</span> 
-                          : <span className="text-blue-600">🇬🇧 英文</span>
-                      ) : (
-                        <span className="text-slate-400 font-medium">請輸入名稱</span>
-                      )}
-                    </span>
+                    {searchEntity ? (() => {
+                    const detected = detectLanguageDetail(searchEntity);
+                    if (detected === 'zh_cn') return <span className="text-emerald-600">🇨🇳 簡體中文</span>;
+                    if (detected === 'zh_tw') return <span className="text-red-600">🇹🇼 繁體中文</span>;
+                    return <span className="text-blue-600">🇬🇧 英文</span>;
+                   })() : (
+                   <span className="text-slate-400 font-medium">請輸入名稱</span>
+                   )}
+                   </span>
                   </div>
                 </div>
               </div>
@@ -3648,61 +3726,72 @@ const ResultCard = ({ r }) => {
                 </div>
               </>
             ) : (
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-[0_2px_8px_rgba(15,23,42,0.04)] p-5">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
-                    <span className="text-white text-base">🔑</span>
-                  </div>
-                  <div>
-                    <h2 className="text-sm font-bold text-slate-900 tracking-tight">搜尋關鍵字</h2>
-                    <p className="text-[11px] text-slate-500">EN + ZH 雙語 · 自動偵測</p>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="bg-gradient-to-br from-blue-50/50 to-indigo-50/50 rounded-xl border border-blue-100 p-4">
-                    <div className="flex items-center justify-between mb-3 pb-2 border-b border-blue-100">
-                      <h3 className="text-sm font-bold text-blue-700">🇬🇧 English Keywords</h3>
-                      <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-blue-500 text-white">
-                        {EN_KEYWORDS.length}
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {EN_KEYWORDS.map((kw, i) => (
-                        <span 
-                          key={i} 
-                          className="bg-white text-blue-700 border border-blue-200 px-2 py-1 rounded-md text-[11px] font-semibold shadow-sm hover:shadow-md transition-all"
-                        >
-                          {kw}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="bg-gradient-to-br from-red-50/50 to-rose-50/50 rounded-xl border border-red-100 p-4">
-                    <div className="flex items-center justify-between mb-3 pb-2 border-b border-red-100">
-                      <h3 className="text-sm font-bold text-red-700">🇨🇳 中文關鍵字</h3>
-                      <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-red-500 text-white">
-                        {ZH_KEYWORDS.length}
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {ZH_KEYWORDS.map((kw, i) => (
-                        <span 
-                          key={i} 
-                          className="bg-white text-red-700 border border-red-200 px-2 py-1 rounded-md text-[11px] font-semibold shadow-sm hover:shadow-md transition-all"
-                        >
-                          {kw}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-[0_2px_8px_rgba(15,23,42,0.04)] p-5">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+                <span className="text-white text-base">🔑</span>
               </div>
-            )}
+              <div>
+                <h2 className="text-sm font-bold text-slate-900 tracking-tight">搜尋關鍵字</h2>
+                <p className="text-[11px] text-slate-500">
+                  EN + 繁中 + 簡中 · 自動偵測 ·
+                  {adverseLang === 'zh_cn' && <span className="ml-1 text-emerald-600 font-bold">當前:🇨🇳 簡體</span>}
+                  {adverseLang === 'zh_tw' && <span className="ml-1 text-red-600 font-bold">當前:🇹🇼 繁體</span>}
+                  {adverseLang === 'en' && <span className="ml-1 text-blue-600 font-bold">當前:🇬🇧 英文</span>}
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {[
+                { lang: '🇬🇧 English', list: EN_KEYWORDS, color: 'blue', active: adverseLang === 'en' },
+                { lang: '🇹🇼 繁體中文', list: ZH_KEYWORDS_TW, color: 'red', active: adverseLang === 'zh_tw' },
+                { lang: '🇨🇳 簡體中文', list: ZH_KEYWORDS_CN, color: 'emerald', active: adverseLang === 'zh_cn' },
+              ].map(group => (
+                <div key={group.lang} className={`rounded-xl border-2 p-4 transition-all ${
+                  group.active
+                    ? group.color === 'blue' ? 'border-blue-400 bg-blue-50 shadow-md shadow-blue-200'
+                      : group.color === 'red' ? 'border-red-400 bg-red-50 shadow-md shadow-red-200'
+                      : 'border-emerald-400 bg-emerald-50 shadow-md shadow-emerald-200'
+                    : group.color === 'blue' ? 'border-blue-100 bg-blue-50/30'
+                      : group.color === 'red' ? 'border-red-100 bg-red-50/30'
+                      : 'border-emerald-100 bg-emerald-50/30'
+                }`}>
+                  <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
+                    <h3 className={`text-sm font-bold ${
+                      group.color === 'blue' ? 'text-blue-700'
+                        : group.color === 'red' ? 'text-red-700'
+                        : 'text-emerald-700'
+                    }`}>
+                      {group.lang}
+                      {group.active && <span className="ml-1 text-[10px] font-black bg-amber-400 text-amber-900 px-1.5 py-0.5 rounded-full">✓ 使用中</span>}
+                    </h3>
+                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-md text-white ${
+                      group.color === 'blue' ? 'bg-blue-500'
+                        : group.color === 'red' ? 'bg-red-500'
+                        : 'bg-emerald-500'
+                    }`}>{group.list.length}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {group.list.map((kw, i) => (
+                      <span key={i} className={`bg-white border px-2 py-1 rounded-md text-[11px] font-semibold shadow-sm hover:shadow-md transition-all ${
+                        group.color === 'blue' ? 'text-blue-700 border-blue-200'
+                          : group.color === 'red' ? 'text-red-700 border-red-200'
+                          : 'text-emerald-700 border-emerald-200'
+                      }`}>
+                        {kw}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
-      </div>
+       </div>
+      )}
     </div>
-    );
+  </div>
+ );
 }
 /* ── Wrapper Components（保持 API 不變）── */
 function AdverseMediaScreening({ entityName, onFlagSTR }) {
