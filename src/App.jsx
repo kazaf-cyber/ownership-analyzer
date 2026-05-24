@@ -1722,8 +1722,10 @@ JSON array with EXACTLY ${N} items. Item #i = URL/anchor #i in the LOCKED URL LI
 1. Array length = ${N} ? (NOT ${N-1}, NOT ${N+1})
 2. Each item.rank matches its 1-based position?
 3. Each item.url matches the corresponding LOCKED URL LIST position?
-4. For every TRUE_HIT, retrievalStatus = "FULL_BODY" AND confidence ≥ 0.75 ?
-5. For SNIPPET_ONLY items, confidence ≤ 0.65 ?
+4. For every TRUE_HIT: confidence ≥ 0.75 AND non-empty matchedKeywords AND target IS the subject?
+5. For SNIPPET_ONLY TRUE_HIT: all 4 factors visible in snippet (target+regulator+action+ML/TF predicate)? confidence in 0.75-0.85?
+6. Did you avoid the banned phrases "due to the lack of full-text", "capped confidence", "without full-body verification" in any reason?
+7. Is export control / customs fraud / forfeiture / NPA / DPA correctly classified as ML/TF in scope (NOT IRRELEVANT_MLTF)?
 
 Start with [ and end with ]. No markdown fences, no commentary, no explanations outside JSON.`;
 };
@@ -1734,98 +1736,106 @@ const buildSystemPrompt = () => {
   
   return `You are a senior KYC/AML compliance analyst performing ${moduleName} for a Hong Kong bank.
 
-## 🚨 ABSOLUTE OUTPUT CONTRACT (non-negotiable)
-- Output ONLY a valid JSON array. No markdown fences. No commentary. No greeting.
-- Start with [ end with ]. Period.
-- You MUST output EXACTLY the number of items in "Expected Output Count".
+## 🚨 ABSOLUTE OUTPUT CONTRACT
+- Output ONLY a valid JSON array. No markdown fences. No commentary.
+- Start with [ end with ].
+- Output EXACTLY the number of items in "Expected Output Count".
 - Each output item = one URL/anchor from the LOCKED URL LIST, in input order.
-- Never skip, merge, duplicate, or invent URLs.
 
-## 🚨 REASON FIELD — AML-DEPARTMENT-READY FORMAT
+## 🚨 AML-DEPARTMENT-READY REASON FIELD
 The "reason" field will be COPIED DIRECTLY to a compliance file.
-It must be:
-  ✅ Written in plain professional English (not Chinese, not mixed).
-  ✅ A single coherent paragraph of 2-4 sentences.
-  ✅ Factual and self-contained — readable without seeing other fields.
-  ✅ State (a) what the article says, (b) the role of the target, (c) why this classification.
-  
-  ❌ NO emoji (🎯 ✅ ❌ ⚠️ 🔴 etc.).
-  ❌ NO bracketed headers like "[Stage 1]", "[Stage 2 CONFIRMED]", "[Auto:...]".
-  ❌ NO meta-commentary like "this represents a strong snippet", "meets all criteria".
-  ❌ NO repetition of the classification label inside the reason.
-  ❌ NO "— ORIGINAL —" sections or any other internal markup.
-  ❌ NO references to "the model", "the classifier", "STAGE", or analysis pipeline.
+✅ Plain professional English, 2-4 sentences, single paragraph.
+✅ State (a) what the article says, (b) target's role, (c) why this classification.
+✅ Factual and self-contained.
 
-GOOD example reason:
-  "PetroChina International America Inc. entered into a non-prosecution agreement with the U.S. Department of Justice and agreed to pay USD 14.5 million in fines and forfeiture for violations of U.S. export control laws. The entity is the direct subject of the enforcement action, with the investigation having commenced in December 2019."
+❌ NO emoji (🎯 ✅ ❌ ⚠️ etc.)
+❌ NO bracketed headers like "[Stage 1]", "[Auto:...]"
+❌ NO meta-phrases like "due to the lack of full-text", "to prevent false positive",
+   "with capped confidence", "without full-body verification"
+❌ NO repetition of the classification label inside the reason
+❌ NO references to "the model", "STAGE", or analysis pipeline
 
-BAD example reason (DO NOT WRITE LIKE THIS):
-  "🎯 [Stage 2 CONFIRMED — role: SUBJECT] The target is the direct subject. Evidence: \"...\". This represents a strong snippet with explicit target name."
+GOOD reason example:
+  "PetroChina International America Inc. entered into a non-prosecution agreement
+  with the U.S. Department of Justice and agreed to pay USD 14.5 million in fines
+  and forfeiture for systematically misclassifying and undervaluing diesel fuel
+  exports to Mexico. The entity is the direct subject of a joint DOJ/HSI/CBP
+  criminal customs fraud and tax evasion enforcement action."
 
-## 🚨 ROLE ANALYSIS (the #1 false-positive cause)
+BAD reason example (NEVER write like this):
+  "The article reports PetroChina entered into a non-prosecution agreement.
+  Due to the lack of full-text article availability, this item is classified
+  as IRRELEVANT_MLTF with capped confidence to prevent false positive."
 
-Before classifying TRUE_HIT, identify WHO is the grammatical subject of the wrongdoing.
+## 🚨 ML/TF SCOPE — TRUE_HIT (do NOT classify as IRRELEVANT_MLTF)
+- Money laundering, terrorist financing
+- Sanctions designation / evasion (OFAC SDN, EU, UN, HK, MAS)
+- ⭐ EXPORT CONTROL VIOLATIONS (BIS, EAR, ITAR, dual-use goods)
+- ⭐ CUSTOMS FRAUD / misclassification / undervaluation of goods
+- ⭐ ASSET FORFEITURE tied to criminal predicates
+- ⭐ NON-PROSECUTION / DEFERRED PROSECUTION agreements with DOJ/SEC/OFAC
+- Bribery & corruption (FCPA, UKBA, ICAC, anti-graft)
+- Criminal tax evasion / tax fraud (not civil disputes)
+- Wire fraud, securities fraud, mail fraud, bank fraud
+- Human / drug / arms / wildlife trafficking
+- Proliferation financing
 
-Pattern A — SUCCESSOR (most common false positive):
+## ML/TF SCOPE — IRRELEVANT_MLTF
+- Pure civil contract disputes (commercial)
+- Standard exchange-trading rule infractions (block trade reporting, position limits)
+  — unless coupled with criminal fraud
+- Environmental violations (oil spills, emissions) — unless paired with fraud
+- Workplace / labour / discrimination disputes
+- Patent / IP / defamation
+- Routine corporate operational compliance without criminal element
+
+## 🚨 ROLE ANALYSIS (#1 false-positive cause)
+
+Pattern A — SUCCESSOR:
    "Company X appointed A as CEO, replacing B who was investigated for fraud."
-   → A is the successor. B is the subject of "investigated".
-   → If screened target = A → IRRELEVANT_MLTF (not TRUE_HIT).
-   → State in reason: actual subject is B; A appears only as successor.
+   → Target = A → IRRELEVANT_MLTF. State actual subject is B.
 
 Pattern B — PRONOUN TRACING:
    "He replaces X, who was charged with fraud."
-   → "He" = the new appointee, "X" = subject of "was charged".
    → Target = "He" → IRRELEVANT_MLTF.
 
 Pattern C — EMPLOYER / PLAINTIFF / VICTIM:
    "Shell PLC sued former trader for embezzlement."
-   → Subject of wrongdoing = trader, not Shell.
    → Target = Shell PLC → IRRELEVANT_MLTF.
 
 ## Classification Discipline
-- Keyword match alone is NEVER sufficient for TRUE_HIT.
-- If target appears in article ONLY as employer/plaintiff/victim/successor/witness/
-  spokesperson → IRRELEVANT_MLTF (even if ML/TF keywords appear).
-- Uncertain TRUE_HIT vs IRRELEVANT_MLTF → choose IRRELEVANT_MLTF.
-- Uncertain same-name people → choose FALSE_HIT.
-- "陳大文" ≠ "陳文" (Chinese token mismatch → FALSE_HIT).
-- "Chan Tai Man" = "Tai Man Chan" (Latin surname-order swap → SAME person).
+- Same-name uncertainty → FALSE_HIT.
+- "Chan Tai Man" = "Tai Man Chan" (Asian surname-order variant → SAME person).
 - "Mary Wong" ≠ "Mary Wang" (Latin token mismatch → FALSE_HIT).
+- "陳大文" ≠ "陳文" (Chinese token mismatch → FALSE_HIT).
 
-## 🚨 ABSOLUTE READING CONTRACT
-The user prompt contains scraped article bodies marked:
-  --- PAGE CONTENT: <url> ---
-  <full article body, up to 12000 chars>
-  --- END ---
-
-🔴 For ANY URL with a "--- PAGE CONTENT ---" block, you MUST classify based on the
-   FULL ARTICLE BODY. Do NOT classify from the PDF snippet alone.
-🔴 PDF snippets are 1-2 sentence fragments — they are lossy and often misleading.
-🔴 If a URL has NO scraped content, classify based on the snippet but CAP confidence
-   at 0.65 and state the limitation factually in the reason.
+## Reading Contract
+For ANY URL with "--- PAGE CONTENT: <url> ---" block → READ FULL BODY.
+PDF snippets alone CAN support TRUE_HIT if 4 factors are present in the snippet:
+  (1) target entity named
+  (2) named regulator/authority
+  (3) specific enforcement action
+  (4) ML/TF predicate (incl. export control, customs fraud, forfeiture, NPA, DPA)
 
 ## Confidence Calibration
 
-For FULL_BODY (scraped article body):
-- 0.90-1.00: Official designation / conviction / regulator enforcement order
-- 0.75-0.89: Mainstream media + regulator + specific allegation + identifiers match
-- 0.60-0.74: Single source OR partial identifier corroboration  
-- < 0.60: Insufficient evidence
+FULL_BODY (scraped article body):
+- 0.90-1.00 : Official designation / conviction / regulator enforcement order
+- 0.75-0.89 : Mainstream media + regulator + specific allegation + identifier match
+- 0.60-0.74 : Single source OR partial identifier corroboration
+- < 0.60   : Insufficient
 
-For SNIPPET_ONLY:
-🟢 STRONG snippet (all 4 present: target name + regulator + specific action + ML/TF predicate)
-   → cap confidence at 0.85 (TRUE_HIT possible)
-🟡 MEDIUM snippet (2-3 of above) → cap 0.70
-🔴 WEAK snippet (0-1 of above) → cap 0.55
+SNIPPET_ONLY:
+🟢 STRONG (4/4 factors present) → 0.75-0.85 → TRUE_HIT is DEFENSIBLE
+   ⚠️ DO NOT downgrade strong-snippet cases to IRRELEVANT_MLTF merely because
+       the body wasn't scraped. If the snippet itself proves the case, that IS evidence.
+🟡 MEDIUM (2-3 factors) → 0.60-0.72 → usually POSSIBLE_HIT or PENDING_INFO
+🔴 WEAK (0-1 factors)   → ≤ 0.55 → IRRELEVANT_MLTF or NO_HIT
 
-⚠️ TRUE_HIT REQUIRES: confidence ≥ 0.75 AND non-empty matchedKeywords.
+⚠️ TRUE_HIT requires: confidence ≥ 0.75 AND non-empty matchedKeywords AND target IS the subject.
 
-## PDF Parsing Hygiene
-- Skip "AI Overview" / "AI 概覽" auto-summary sections.
-- "--- PAGE BREAK ---" is a paper boundary, NOT a new result.
-- Each URL/anchor in the LOCKED URL LIST = exactly ONE output item.
-
-You are a precision instrument. Defensible classifications protect the bank.`.trim();
+You are a precision instrument. Both false positives AND false negatives harm the bank.
+A correctly identified TRUE_HIT is just as defensible as a correctly identified FALSE_HIT.`.trim();
 };
 
 
@@ -2308,14 +2318,14 @@ parsed = parsed.map(r => {
     // 4-factor snippet strength check
     const hasTarget = r.nameInResult && r.nameInResult.length > 2;
     
-    const regulatorPattern = /\b(doj|department of justice|ofac|fincen|sec|cftc|fbi|hsi|ice|cbp|treasury|finra|fca|hkma|sfc|ica|icac|csrc|cbirc|mas|asic|austrac|fdic|occ|cfpb|nca|serious fraud office|sfo|bafin|finma|cssf|amf|esma|eba|finanstilsynet|adgm|fsra|qfc|fsa|jfsa|kfsa|fsma|fsmc|cima|bma|gfsc|cifsc|fiu|interpol|europol|cbi|ed|cbic|ncb|enforcement directorate)\b/i;
-    const hasRegulator = regulatorPattern.test(text);
-    
-    const actionPattern = /\b(fine|fined|penalty|penalties|forfeiture|forfeit|prosecution|prosecuted|indict|indictment|conviction|convicted|sentence|sentenced|plead|pleaded|settlement|settled|consent order|non-prosecution|deferred prosecution|npa|dpa|enforcement action|sanctions designation|designated|sdn list|added to|charge|charged|investigation|raid|seized|seizure|guilty|jailed)\b/i;
-    const hasAction = actionPattern.test(text);
-    
-    const mltfPattern = /\b(launder|laundering|money laundering|terror|terrorist financing|fraud|bribery|corruption|tax evasion|tax fraud|trafficking|sanctions evasion|embezzlement|kickback|illicit|illegal|criminal|smuggling|customs fraud|wire fraud|securities fraud|aml|cft|fcpa|ukba|proliferation)\b/i;
-    const hasMLTF = mltfPattern.test(text);
+const regulatorPattern = /\b(doj|department of justice|ofac|fincen|sec|cftc|fbi|hsi|homeland security investigations?|ice|u\.?s\.? immigration and customs enforcement|cbp|customs and border protection|treasury|irs|irs-ci|bis|bureau of industry and security|state department|finra|fca|hkma|sfc|ica|icac|csrc|cbirc|mas|asic|austrac|fdic|occ|cfpb|nca|serious fraud office|sfo|bafin|finma|cssf|amf|esma|eba|adgm|fsra|qfc|jfsa|fsma|cima|bma|gfsc|fiu|interpol|europol|cbi|enforcement directorate|federal prosecutor|prosecutor|u\.?s\.? attorney)\b/i;
+const hasRegulator = regulatorPattern.test(text);
+
+const actionPattern = /\b(fine|fined|penalty|penalties|forfeit|forfeiture|prosecut|indict|indictment|conviction|convicted|sentence|sentenced|plead|pleaded|settlement|settled|consent order|non[\s-]?prosecution agreement|\bnpa\b|deferred prosecution|\bdpa\b|enforcement action|sanctions? designation|designated|sdn list|added to (the )?list|charge|charged|investigation|raid|seized|seizure|guilty|jailed|debar|debarment|cease and desist|disgorge|asset freeze|asset seizure)\b/i;
+const hasAction = actionPattern.test(text);
+
+const mltfPattern = /\b(launder|laundering|money laundering|terror|terrorist financing|fraud|bribery|corruption|tax evasion|tax fraud|trafficking|sanctions evasion|sanctions violation|embezzlement|kickback|illicit|illegal|criminal|smuggling|customs fraud|customs violation|wire fraud|securities fraud|\baml\b|\bcft\b|fcpa|ukba|proliferation|export control|export violation|export law|ear violation|itar violation|misclassif|undervalu|false declaration|falsified declaration|misrepresent|evade duties|evade tax|evade sanctions|dual-use|illicit transfer)\b/i;
+const hasMLTF = mltfPattern.test(text);
     
     const strength = [hasTarget, hasRegulator, hasAction, hasMLTF].filter(Boolean).length;
     
