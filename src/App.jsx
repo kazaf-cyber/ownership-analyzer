@@ -1712,7 +1712,7 @@ JSON array with EXACTLY ${N} items. Item #i = URL/anchor #i in the LOCKED URL LI
     "nameInResult": "<exact name as appears in article>",
     "actualSubjectName": "<if wrongdoer ≠ target, who is the actual wrongdoer; else empty>",
     "confidence": 0.0-1.0,
-    "reason": "<2-3 sentences. Cite specific article quotes. State actual subject if target is not the subject.>",
+    "reason": "<MANDATORY: Plain English, 2-4 sentences, single paragraph, AML-department-ready. NO emoji, NO 'Stage X' brackets, NO meta-commentary. State (a) what the article says, (b) the role of the target in the article, (c) why this classification follows. If target is not the subject, name the actual subject. Self-contained — readable without other fields. Example: 'ABC Holdings Ltd is named by the U.S. Department of Justice as the direct subject of a non-prosecution agreement for violations of export control laws. The entity agreed to pay USD 14.5M in fines and forfeiture; the investigation commenced in December 2019.'>",
     "riskCat": "Money Laundering / Sanctions / Bribery / Fraud / Tax Evasion / N/A",
     "missingInfo": []
   }
@@ -1741,19 +1741,26 @@ const buildSystemPrompt = () => {
 - Each output item = one URL/anchor from the LOCKED URL LIST, in input order.
 - Never skip, merge, duplicate, or invent URLs.
 
-## 🚨 ABSOLUTE READING CONTRACT
-The user prompt contains scraped article bodies marked:
-  --- PAGE CONTENT: <url> ---
-  <full article body, up to 12000 chars>
-  --- END ---
+## 🚨 REASON FIELD — AML-DEPARTMENT-READY FORMAT
+The "reason" field will be COPIED DIRECTLY to a compliance file.
+It must be:
+  ✅ Written in plain professional English (not Chinese, not mixed).
+  ✅ A single coherent paragraph of 2-4 sentences.
+  ✅ Factual and self-contained — readable without seeing other fields.
+  ✅ State (a) what the article says, (b) the role of the target, (c) why this classification.
+  
+  ❌ NO emoji (🎯 ✅ ❌ ⚠️ 🔴 etc.).
+  ❌ NO bracketed headers like "[Stage 1]", "[Stage 2 CONFIRMED]", "[Auto:...]".
+  ❌ NO meta-commentary like "this represents a strong snippet", "meets all criteria".
+  ❌ NO repetition of the classification label inside the reason.
+  ❌ NO "— ORIGINAL —" sections or any other internal markup.
+  ❌ NO references to "the model", "the classifier", "STAGE", or analysis pipeline.
 
-🔴 For ANY URL with a "--- PAGE CONTENT ---" block, you MUST classify based on the
-   FULL ARTICLE BODY. Do NOT classify from the PDF snippet alone.
-🔴 PDF snippets are 1-2 sentence fragments — they are lossy and often misleading.
-   "Wu Junli replaced Huo Jinsan who was investigated for fraud" in the snippet
-   looks like Wu Junli is being investigated, but the full article makes clear it's Huo.
-🔴 If a URL has NO scraped content (scrape failed / paywall / social-only anchor),
-   classify based on the snippet but CAP confidence at 0.65 and explain limitation.
+GOOD example reason:
+  "PetroChina International America Inc. entered into a non-prosecution agreement with the U.S. Department of Justice and agreed to pay USD 14.5 million in fines and forfeiture for violations of U.S. export control laws. The entity is the direct subject of the enforcement action, with the investigation having commenced in December 2019."
+
+BAD example reason (DO NOT WRITE LIKE THIS):
+  "🎯 [Stage 2 CONFIRMED — role: SUBJECT] The target is the direct subject. Evidence: \"...\". This represents a strong snippet with explicit target name."
 
 ## 🚨 ROLE ANALYSIS (the #1 false-positive cause)
 
@@ -1763,15 +1770,14 @@ Pattern A — SUCCESSOR (most common false positive):
    "Company X appointed A as CEO, replacing B who was investigated for fraud."
    → A is the successor. B is the subject of "investigated".
    → If screened target = A → IRRELEVANT_MLTF (not TRUE_HIT).
-   → actualSubjectName = "B".
+   → State in reason: actual subject is B; A appears only as successor.
 
 Pattern B — PRONOUN TRACING:
    "He replaces X, who was charged with fraud."
-   → "He" = the new appointee, subject of "replaces"
-   → "X" = subject of "was charged"
-   Target = "He" → IRRELEVANT_MLTF.
+   → "He" = the new appointee, "X" = subject of "was charged".
+   → Target = "He" → IRRELEVANT_MLTF.
 
-Pattern C — EMPLOYER/PLAINTIFF:
+Pattern C — EMPLOYER / PLAINTIFF / VICTIM:
    "Shell PLC sued former trader for embezzlement."
    → Subject of wrongdoing = trader, not Shell.
    → Target = Shell PLC → IRRELEVANT_MLTF.
@@ -1786,7 +1792,19 @@ Pattern C — EMPLOYER/PLAINTIFF:
 - "Chan Tai Man" = "Tai Man Chan" (Latin surname-order swap → SAME person).
 - "Mary Wong" ≠ "Mary Wang" (Latin token mismatch → FALSE_HIT).
 
-## Confidence Calibration (revised for snippet realities)
+## 🚨 ABSOLUTE READING CONTRACT
+The user prompt contains scraped article bodies marked:
+  --- PAGE CONTENT: <url> ---
+  <full article body, up to 12000 chars>
+  --- END ---
+
+🔴 For ANY URL with a "--- PAGE CONTENT ---" block, you MUST classify based on the
+   FULL ARTICLE BODY. Do NOT classify from the PDF snippet alone.
+🔴 PDF snippets are 1-2 sentence fragments — they are lossy and often misleading.
+🔴 If a URL has NO scraped content, classify based on the snippet but CAP confidence
+   at 0.65 and state the limitation factually in the reason.
+
+## Confidence Calibration
 
 For FULL_BODY (scraped article body):
 - 0.90-1.00: Official designation / conviction / regulator enforcement order
@@ -1794,31 +1812,17 @@ For FULL_BODY (scraped article body):
 - 0.60-0.74: Single source OR partial identifier corroboration  
 - < 0.60: Insufficient evidence
 
-For SNIPPET_ONLY (scrape failed / paywalled / blocked):
-🟢 STRONG snippet evidence = ALL FOUR present:
-   (a) target entity name explicit (not paraphrased)
-   (b) named regulator/authority (DOJ, ICE, OFAC, Treasury, HKMA, SFC, MAS, 
-       FCA, FinCEN, SEC, CBI, ICAC, etc.)
-   (c) specific enforcement action (fine, prosecution, conviction, forfeiture,
-       sanctions designation, indictment, settlement, non-prosecution agreement)
-   (d) ML/TF predicate (laundering, fraud, evasion, bribery, sanctions, 
-       trafficking, terrorist financing)
-   → cap confidence at 0.85 (allows TRUE_HIT)
-
-🟡 MEDIUM snippet evidence = 2-3 of above present:
-   → cap confidence at 0.70
-
-🔴 WEAK snippet evidence = 0-1 of above:
-   → cap confidence at 0.55
+For SNIPPET_ONLY:
+🟢 STRONG snippet (all 4 present: target name + regulator + specific action + ML/TF predicate)
+   → cap confidence at 0.85 (TRUE_HIT possible)
+🟡 MEDIUM snippet (2-3 of above) → cap 0.70
+🔴 WEAK snippet (0-1 of above) → cap 0.55
 
 ⚠️ TRUE_HIT REQUIRES: confidence ≥ 0.75 AND non-empty matchedKeywords.
-   → STRONG snippet CAN reach TRUE_HIT (0.75-0.85).
-   → MEDIUM/WEAK snippet → IRRELEVANT_MLTF or NO_HIT.
 
 ## PDF Parsing Hygiene
 - Skip "AI Overview" / "AI 概覽" auto-summary sections.
 - "--- PAGE BREAK ---" is a paper boundary, NOT a new result.
-  Merge results that span page breaks into ONE item.
 - Each URL/anchor in the LOCKED URL LIST = exactly ONE output item.
 
 You are a precision instrument. Defensible classifications protect the bank.`.trim();
@@ -2468,72 +2472,73 @@ parsed = parsed.map(r => {
         );
 
        // ── Merge Stage 2 results back into `parsed` ─────────────
-        stage2Results.forEach((res) => {
-          if (res.status !== 'fulfilled' || !res.value) return;
-          const s2 = res.value;
-          const idx = parsed.findIndex(p => p.rank === s2.rank);
-          if (idx === -1) return;
+stage2Results.forEach((res) => {
+  if (res.status !== 'fulfilled' || !res.value) return;
+  const s2 = res.value;
+  const idx = parsed.findIndex(p => p.rank === s2.rank);
+  if (idx === -1) return;
 
-          const original = parsed[idx];
-          const conf = typeof s2.confidence === 'number' ? s2.confidence : 0;
+  const original = parsed[idx];
+  const conf = typeof s2.confidence === 'number' ? s2.confidence : 0;
+  const cleanReasoning = String(s2.reasoning || '').trim();
 
-          if (s2.wrongdoingApplies === false && conf >= 0.70) {
-            // unrelated = same name, DIFFERENT person → FALSE_HIT
-            // successor / predecessor / witness / victim / colleague
-            //   = SAME person, NOT the subject → IRRELEVANT_MLTF
-            const downgrade = s2.roleType === 'unrelated'
-              ? 'FALSE_HIT'
-              : 'IRRELEVANT_MLTF';
+  if (s2.wrongdoingApplies === false && conf >= 0.70) {
+    // Stage 2 says target is NOT the subject
+    // unrelated → FALSE_HIT | successor/witness/victim/colleague → IRRELEVANT_MLTF
+    const downgrade = s2.roleType === 'unrelated' ? 'FALSE_HIT' : 'IRRELEVANT_MLTF';
+    const mltfExists = s2.mltfMatterExistsInArticle === true;
 
-            const mltfExists = s2.mltfMatterExistsInArticle === true;
+    let amlReason;
+    if (downgrade === 'FALSE_HIT') {
+      amlReason = `The individual/entity mentioned in this article is a different party who happens to share the same name as the screened subject ${searchEntity}. ${cleanReasoning}`;
+    } else if (mltfExists) {
+      amlReason = `The article describes ML/TF-related content, but the wrongdoing applies to ${s2.actualSubjectName || 'another party'}, not to ${searchEntity}. ${searchEntity} appears in the article only in the role of ${s2.roleType}. ${cleanReasoning}`;
+    } else {
+      amlReason = `The article does not contain any ML/TF-related subject matter concerning ${searchEntity}. ${searchEntity} appears in the article only in the role of ${s2.roleType}. ${cleanReasoning}`;
+    }
 
-            const mltfReason = downgrade === 'IRRELEVANT_MLTF'
-              ? (mltfExists
-                  ? `🎯 [Stage 2 — role: ${String(s2.roleType).toUpperCase()}] ML/TF-related content exists in this article, but it applies to ${s2.actualSubjectName || 'another party'}, NOT to ${searchEntity}. ${searchEntity} appears in the article only as ${s2.roleType}. ${s2.reasoning}`
-                  : `🎯 [Stage 2 — role: ${String(s2.roleType).toUpperCase()}] No ML/TF subject matter in this article. ${searchEntity} appears only as ${s2.roleType}. ${s2.reasoning}`)
-              : `🎯 [Stage 2 — UNRELATED person, same name] ${s2.reasoning}`;
+    parsed[idx] = {
+      ...original,
+      cls: downgrade,
+      confidence: Math.max(conf, 0.75),
+      riskCat: downgrade === 'FALSE_HIT'
+        ? 'N/A (Different Person/Entity)'
+        : (mltfExists
+            ? `N/A (Subject = ${s2.actualSubjectName || 'other party'})`
+            : `N/A (Target role: ${s2.roleType})`),
+      _stage2: s2,
+      _stage1Original: { cls: original.cls, reason: original.reason },
+      reason: amlReason,
+    };
+    console.log(`📉 Stage 2 [#${s2.rank}]: ${original.cls} → ${downgrade} (role: ${s2.roleType})`);
 
-            parsed[idx] = {
-              ...original,
-              cls: downgrade,
-              confidence: Math.max(conf, 0.75),
-              riskCat: downgrade === 'FALSE_HIT'
-                ? 'N/A (Different Person)'
-                : (mltfExists
-                    ? `N/A (ML/TF subject = ${s2.actualSubjectName || 'other party'})`
-                    : `N/A (Target is ${s2.roleType}, no ML/TF matter)`),
-              _stage2: s2,
-              reason: mltfReason +
-                (s2.evidenceQuote ? ` Evidence: "${s2.evidenceQuote}"` : '') +
-                `\n\n— ORIGINAL (Stage 1) —\n${original.reason}`,
-            };
-            console.log(`📉 Stage 2 [#${s2.rank}]: ${original.cls} → ${downgrade} (role: ${s2.roleType}, mltfExists: ${mltfExists})`);
+  } else if (s2.wrongdoingApplies === true && conf >= 0.70) {
+    // Stage 2 CONFIRMS target IS the subject
+    const evidenceTail = s2.evidenceQuote
+      ? ` Supporting evidence from the article: "${s2.evidenceQuote}".`
+      : '';
+    const amlReason = `${searchEntity} is confirmed as the direct subject of the wrongdoing described in this article. ${cleanReasoning}${evidenceTail}`;
 
-          } else if (s2.wrongdoingApplies === true && conf >= 0.70) {
-            // ✅ Stage 2 confirms target IS the subject → annotate + slightly bump confidence
-            parsed[idx] = {
-              ...original,
-              confidence: Math.min(1.0, Math.max(original.confidence, conf)),
-              _stage2: s2,
-              reason:
-                `🎯 [Stage 2 CONFIRMED — role: ${String(s2.roleType).toUpperCase()}] ${s2.reasoning}` +
-                (s2.evidenceQuote ? ` Evidence: "${s2.evidenceQuote}"` : '') +
-                `\n\n— ORIGINAL (Stage 1) —\n${original.reason}`,
-            };
-            console.log(`✅ Stage 2 [#${s2.rank}]: CONFIRMED ${original.cls} (role: ${s2.roleType})`);
+    parsed[idx] = {
+      ...original,
+      confidence: Math.min(1.0, Math.max(original.confidence, conf)),
+      _stage2: s2,
+      _stage1Original: { cls: original.cls, reason: original.reason },
+      reason: amlReason,
+    };
+    console.log(`✅ Stage 2 [#${s2.rank}]: CONFIRMED ${original.cls} (role: ${s2.roleType})`);
 
-          } else {
-            // ⚠️ Stage 2 inconclusive — keep Stage 1 cls but annotate
-            parsed[idx] = {
-              ...original,
-              _stage2: s2,
-              reason:
-                `🎯 [Stage 2 INCONCLUSIVE — role: ${s2.roleType}, conf: ${conf}] ${s2.reasoning}` +
-                `\n\n— ORIGINAL (Stage 1) —\n${original.reason}`,
-            };
-            console.log(`⚠️ Stage 2 [#${s2.rank}]: inconclusive (conf ${conf})`);
-          }
-        });
+  } else {
+    // Stage 2 inconclusive — keep Stage 1 cls, but clean the reason
+    parsed[idx] = {
+      ...original,
+      _stage2: s2,
+      _stage1Original: { cls: original.cls, reason: original.reason },
+      reason: original.reason, // keep as-is; cleanReason() in summaryText will strip markers
+    };
+    console.log(`⚠️ Stage 2 [#${s2.rank}]: inconclusive (conf ${conf})`);
+  }
+});
         setProgress(95);
         setStage('Stage 2 完成,正在整理結果...');
       }
@@ -2581,13 +2586,32 @@ parsed = parsed.map(r => {
   }, [results]);
 
   const filteredResults = useMemo(() => filterType === 'ALL' ? results : results.filter(r => r.cls === filterType), [results, filterType]);
-    const summaryText = useMemo(() => {
-    if (!results.length) return '';
-    const clsLabel = (cls) => CLS_CONFIG[cls]?.label || cls;
-    return results.map((r, i) =>
-      `${i + 1}. ${clsLabel(r.cls)}: ${r.reason}`
-    ).join('\n');
-  }, [results]);
+    // AML-ready: strip all internal Stage 1/2 markers, emojis, debug brackets
+const cleanReason = (raw) => {
+  if (!raw) return '';
+  let r = String(raw);
+  // Remove all stage markers and emoji headers
+  r = r.replace(/🎯\s*\[Stage\s*\d[^\]]*\]\s*/gi, '');
+  r = r.replace(/\[Stage\s*\d[^\]]*\]\s*/gi, '');
+  r = r.replace(/\[Auto[^\]]*\]\s*/gi, '');
+  r = r.replace(/\[Manual\][^|]*\|\s*Original\([^)]+\):\s*/gi, '');
+  r = r.replace(/[🎯✅❌⚠️📉⏳🚨ℹ️🔴🟡🟢]/g, '');
+  // Drop the "— ORIGINAL (Stage 1) —" debug appendix entirely
+  r = r.replace(/\n+—\s*ORIGINAL[^]*$/i, '');
+  // Drop trailing "Evidence: \"...\"" if it duplicates the reasoning
+  r = r.replace(/\s*Evidence:\s*"[^"]{0,300}"\s*$/i, '');
+  // Collapse whitespace, trim
+  r = r.replace(/\s+/g, ' ').trim();
+  return r;
+};
+
+const summaryText = useMemo(() => {
+  if (!results.length) return '';
+  const clsLabel = (cls) => CLS_CONFIG[cls]?.label || cls;
+  return results.map((r, i) =>
+    `${i + 1}. ${clsLabel(r.cls)}: ${cleanReason(r.reason)}`
+  ).join('\n\n');
+}, [results]);
    const updateResultCls = (rank, newCls, note) => {
     setResults(prev => prev.map(r =>
       r.rank === rank
