@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════
-// Ownership Analyzer Worker v1.4.0
+// Ownership Analyzer Worker v1.5.0-stealth
 // Routes: /api/health, /api/scrape, /api/batch-scrape, /api/resolve
 // Changes from v1.3.0:
 //   ✅ Implement handleResolve (was placeholder)
@@ -25,6 +25,141 @@ function corsResponse(body, status = 200) {
 }
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ═══════════════════════════════════════════════════════════
+// 🌐 User-Agent Pool + Header Profiles
+// ═══════════════════════════════════════════════════════════
+const UA_PROFILES = [
+  {
+    ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    platform: 'Win32',
+    acceptLang: 'en-US,en;q=0.9',
+  },
+  {
+    ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    platform: 'MacIntel',
+    acceptLang: 'en-US,en;q=0.9,zh-TW;q=0.8',
+  },
+  {
+    ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+    platform: 'MacIntel',
+    acceptLang: 'en-US,en;q=0.9',
+  },
+  {
+    ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+    platform: 'Win32',
+    acceptLang: 'en-US,en;q=0.5',
+  },
+];
+
+function pickProfile(attempt = 0) {
+  // 第一次 random,retry 時換另一個
+  const idx = (Math.floor(Math.random() * UA_PROFILES.length) + attempt) % UA_PROFILES.length;
+  return UA_PROFILES[idx];
+}
+
+// Pick realistic viewport
+function pickViewport() {
+  const viewports = [
+    { width: 1920, height: 1080 },
+    { width: 1366, height: 768 },
+    { width: 1536, height: 864 },
+    { width: 1440, height: 900 },
+  ];
+  return viewports[Math.floor(Math.random() * viewports.length)];
+}
+
+// Referer based on target
+function pickReferer(targetUrl) {
+  try {
+    const host = new URL(targetUrl).hostname;
+    // 大部分搜尋流量都係 Google 點入
+    const referers = [
+      'https://www.google.com/',
+      'https://www.google.com/search',
+      'https://www.bing.com/',
+      `https://${host}/`,  // 同 domain
+    ];
+    return referers[Math.floor(Math.random() * referers.length)];
+  } catch {
+    return 'https://www.google.com/';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 🥷 Stealth init script — 過大部分 bot detection
+// ═══════════════════════════════════════════════════════════
+const STEALTH_SCRIPT = `
+  // 1. Hide webdriver flag
+  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  
+  // 2. Fake plugins (headless Chrome 預設係空)
+  Object.defineProperty(navigator, 'plugins', {
+    get: () => [
+      { name: 'PDF Viewer', filename: 'internal-pdf-viewer' },
+      { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer' },
+      { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer' },
+    ],
+  });
+  
+  // 3. Fake languages
+  Object.defineProperty(navigator, 'languages', {
+    get: () => ['en-US', 'en'],
+  });
+  
+  // 4. Patch permissions API (headless 會 leak)
+  if (navigator.permissions && navigator.permissions.query) {
+    const originalQuery = navigator.permissions.query.bind(navigator.permissions);
+    navigator.permissions.query = (params) =>
+      params && params.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission, onchange: null })
+        : originalQuery(params);
+  }
+  
+  // 5. WebGL vendor spoof
+  try {
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(p) {
+      if (p === 37445) return 'Intel Inc.';
+      if (p === 37446) return 'Intel Iris OpenGL Engine';
+      return getParameter.call(this, p);
+    };
+  } catch (e) {}
+  
+  // 6. Chrome runtime (headless 冇)
+  window.chrome = window.chrome || { runtime: {}, loadTimes: function() {}, csi: function() {} };
+`;
+
+// ═══════════════════════════════════════════════════════════
+// 🚨 Block / Captcha page detection
+// ═══════════════════════════════════════════════════════════
+const BLOCK_PATTERNS = [
+  /access denied/i,
+  /you have been blocked/i,
+  /please verify you are human/i,
+  /are you a robot/i,
+  /captcha/i,
+  /cf-browser-verification/i,
+  /cf-challenge/i,
+  /just a moment/i,
+  /enable javascript and cookies/i,
+  /<title>\s*403[\s\S]{0,20}<\/title>/i,
+  /<title>\s*forbidden\s*<\/title>/i,
+  /<title>\s*attention required/i,
+];
+
+function detectBlock(html, title) {
+  if (!html || html.length < 200) {
+    return { blocked: true, reason: 'content_too_short' };
+  }
+  const sample = (title || '') + ' ' + html.slice(0, 8000);
+  for (const p of BLOCK_PATTERNS) {
+    if (p.test(sample)) {
+      return { blocked: true, reason: `pattern_match: ${p.source.slice(0, 40)}` };
+    }
+  }
+  return { blocked: false };
+}
 
 // ═══════════════════════════════════════════════════════════
 // Error categorization
@@ -67,14 +202,28 @@ async function scrapeWithBrowser(browser, targetUrl, opts = {}) {
   while (attempt <= maxRetries) {
     let page;
     try {
+      // 🎲 每次 attempt 用唔同 profile
+      const profile = pickProfile(attempt);
+      const viewport = pickViewport();
+      const referer = pickReferer(targetUrl);
+
       page = await browser.newPage();
-      await page.setUserAgent(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-        '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      );
+      
+      // ── Stealth setup ──
+      await page.setUserAgent(profile.ua);
+      await page.setViewport(viewport);
       await page.setExtraHTTPHeaders({
-        'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7'
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': profile.acceptLang,
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'Referer': referer,
+        'Upgrade-Insecure-Requests': '1',
       });
+      
+      // Inject stealth script BEFORE any page script runs
+      await page.evaluateOnNewDocument(STEALTH_SCRIPT);
 
       const response = await page.goto(targetUrl, { waitUntil, timeout });
       const status = response ? response.status() : 0;
@@ -83,11 +232,12 @@ async function scrapeWithBrowser(browser, targetUrl, opts = {}) {
       if (status >= 500 || status === 429) {
         if (attempt < maxRetries) {
           await page.close().catch(() => {});
-          await sleep(retryBaseMs * Math.pow(2, attempt));
+          // Exponential backoff + jitter
+          const jitter = Math.random() * 500;
+          await sleep(retryBaseMs * Math.pow(2, attempt) + jitter);
           attempt++;
           continue;
         }
-        // Final attempt — return with status
         const finalUrl = page.url();
         return {
           ok: false,
@@ -104,12 +254,42 @@ async function scrapeWithBrowser(browser, targetUrl, opts = {}) {
         };
       }
 
-      // ── Success path (or 4xx that we don't retry) ──
-      await page.waitForTimeout(1500).catch(() => {});
+      // ── Wait for content (with small jitter to look human) ──
+      const waitMs = 1200 + Math.floor(Math.random() * 800);
+      await page.waitForTimeout(waitMs).catch(() => {});
+      
       const html = await page.content();
       const title = await page.title().catch(() => '');
       const finalUrl = page.url();
       const ok = status >= 200 && status < 300;
+
+      // 🚨 Block page detection — 即使 HTTP 200 都可能係 captcha
+      if (ok) {
+        const blockCheck = detectBlock(html, title);
+        if (blockCheck.blocked) {
+          if (attempt < maxRetries) {
+            await page.close().catch(() => {});
+            // Block 嘅 retry 用更長 backoff
+            const blockBackoff = retryBaseMs * Math.pow(3, attempt) + Math.random() * 1000;
+            await sleep(blockBackoff);
+            attempt++;
+            continue;
+          }
+          return {
+            ok: false,
+            url: targetUrl,
+            finalUrl,
+            status,
+            title,
+            html, // 保留俾你 debug
+            length: html.length,
+            errorCategory: 'blocked',
+            error: `Block detected: ${blockCheck.reason}`,
+            retriedAttempts: attempt,
+            durationMs: Date.now() - startTime,
+          };
+        }
+      }
 
       return {
         ok,
@@ -131,7 +311,8 @@ async function scrapeWithBrowser(browser, targetUrl, opts = {}) {
       const { category, retryable } = categorizeError(err);
 
       if (attempt < maxRetries && retryable) {
-        await sleep(retryBaseMs * Math.pow(2, attempt));
+        const jitter = Math.random() * 500;
+        await sleep(retryBaseMs * Math.pow(2, attempt) + jitter);
         attempt++;
         continue;
       }
@@ -265,16 +446,25 @@ async function handleResolve(request, env) {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-        const response = await fetch(targetUrl, {
-          method: 'GET',
-          redirect: 'follow',
-          signal: controller.signal,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
-          },
-        });
+        const profile = pickProfile(0);
+const response = await fetch(targetUrl, {
+  method: 'GET',
+  redirect: 'follow',
+  signal: controller.signal,
+  headers: {
+    'User-Agent': profile.ua,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': profile.acceptLang,
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'no-cache',
+    'Referer': pickReferer(targetUrl),
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'cross-site',
+    'Sec-Fetch-User': '?1',
+  },
+});
         clearTimeout(timeoutId);
 
         return {
@@ -368,16 +558,23 @@ async function handleBreadcrumbResolve(body, env) {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const resp = await fetch(ddgUrl, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-    });
+    const profile = pickProfile(0);
+const resp = await fetch(ddgUrl, {
+  method: 'GET',
+  redirect: 'follow',
+  signal: controller.signal,
+  headers: {
+    'User-Agent': profile.ua,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': profile.acceptLang,
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Referer': 'https://duckduckgo.com/',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'same-origin',
+  },
+});
     clearTimeout(timeoutId);
 
     if (!resp.ok) {
@@ -491,7 +688,7 @@ export default {
           hasBrowser: !!env.BROWSER,
           timestamp: new Date().toISOString(),
           worker: 'ownership-analyzer-api',
-          version: '1.4.0'
+          version: '1.5.0-stealth'
         }, { headers: corsHeaders });
       }
 
@@ -499,7 +696,7 @@ export default {
       if (url.pathname === '/' || url.pathname === '') {
         return Response.json({
           name: 'ownership-analyzer-api',
-          version: '1.4.0',
+          version: '1.5.0-stealth',
           endpoints: [
             'GET  /api/health',
             'POST /api/scrape',
