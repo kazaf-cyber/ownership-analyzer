@@ -1590,753 +1590,185 @@ const testWorkerConnection = async () => {
     else if (file) setErrorMsg('請上傳 PDF 格式文件（.pdf）');
   };
 
-  /* ── 生成 AI Prompt（制裁篩查 vs 不良媒體各自不同）── */
-    const buildAIPrompt = (searchEntityName, enrichedContent, resultCount, hasPageContent, lang, entityContext, resultUrls = []) => {
-
-   const pdfCleaningNote = `
-═══════════════════════════════════════════════════════════
-⚠️  PDF CONTENT PARSING RULES — READ CAREFULLY BEFORE PARSING
-═══════════════════════════════════════════════════════════
-
-【RULE 1】IGNORE NON-RESULT CONTENT
-- Skip "AI Overview" / "AI 概覽" / "AI 模式" sections entirely.
-- Skip Google UI: navigation tabs (全部/新聞/圖片/影片/網頁/工具), 
-  pagination ("1 2 3 4 5 ... 下一頁", "Goooooogle"), 
-  footers ("說明", "私隱權政策", "條款", "正在顯示個人化結果"),
-  location info ("香港", "馬鞍山", "根據你的活動記錄"),
-  page markers ("第1/2頁", "第2/2頁"),
-  URLs at the very bottom (the google.com/search?... URL).
-
-【RULE 2】RECOGNIZE A SEARCH RESULT
-Every Google search result has this structure:
-  ┌─────────────────────────────────────┐
-  │ [Source Name]                       │  ← e.g. "China Daily"
-  │ [URL fragment] (e.g. site.com › ...)│  ← short breadcrumb URL
-  │ [Title — usually a blue hyperlink]  │  ← e.g. "Sanctions are coming"
-  │ [Snippet — 1-3 lines of text]       │  ← description with date/author
-  └─────────────────────────────────────┘
-Each such block = ONE result. Count them ALL.
-
-【RULE 3】 🚨🚨🚨 SPLIT RESULTS ACROSS PAGE BREAKS 🚨🚨🚨
-This is the #1 cause of missed results. READ THIS TWICE.
-
-When a result is split by "--- PAGE BREAK ---", you MUST merge it.
-
-⚠️ DETECTION PATTERN:
-  If the LAST item before "--- PAGE BREAK ---" looks like a [Title] 
-  (often ending with "...") and has NO snippet after it,
-  AND the FIRST line after "--- PAGE BREAK ---" looks like a snippet
-  (starts with: "由 X 著作", "AU - ", "by X", "YYYY年M月D日 —", 
-   "Updated:", a date pattern, or descriptive prose),
-  → They belong to the SAME result. Merge them.
-
-⚠️ CONCRETE EXAMPLE FROM REAL PDF:
-  ┌─ Page 1 (ending) ──────────────────────────────────┐
-  │ CityUHK Scholars                                    │
-  │ https://scholars.cityu.edu.hk › investig...         │
-  │ Investigating pedestrian-level greenery in urban... │
-  │                                                      │
-  │ --- PAGE BREAK ---                                  │
-  ├─ Page 2 (starting) ────────────────────────────────┤
-  │ 由 J Hua 著作 · 2022 · 被引用 64 次 — We conducted  │
-  │ a citywide investigation of urban greenery...       │
-  │ AU - Cai, Meng. AU - Shi, Yuan...                  │
-  │                                                      │
-  │ 中华护理杂志                                          │  ← NEXT result starts here
-  │ https://zh.zhhlzzs.com › lexeme › show...           │
-  │ 179所三级医院ICU导尿管...                              │
-  └─────────────────────────────────────────────────────┘
+  const buildAIPrompt = (searchEntityName, enrichedContent, resultCount, hasPageContent, lang, entityContext, resultUrls = []) => {
   
-  ✅ CORRECT parsing: 2 results
-     #N   = CityUHK Scholars (title + snippet merged across page break)
-     #N+1 = 中华护理杂志
-  
-  ❌ WRONG parsing: 1 result (skipping CityUHK because it "had no snippet")
-  ❌ WRONG parsing: merging "由 J Hua..." into 中华护理杂志's snippet
+  const hasKnownInfo = entityContext && Object.values(entityContext).some(v => v && String(v).trim());
+  const knownInfoBlock = hasKnownInfo
+    ? `\n## 🪪 Known Identifying Info (use ONLY to disambiguate same-name cases)\n${formatEntityContext(entityContext)}\n`
+    : `\n## ⚠️ No identifying info provided — judge by article context (role, jurisdiction, industry, behaviour pattern)\n`;
 
-【RULE 4】 🔢 MANDATORY COUNT VERIFICATION
-Before producing JSON output, perform this check:
-  STEP A: Scan the entire PDF and count distinct result-URL fragments
-          (lines matching pattern: "domain.com › path" or "https://...").
-          EXCLUDE the google.com/search URL at the bottom.
-  STEP B: Your JSON array MUST have the same number of items as STEP A.
-  STEP C: If counts differ, RE-SCAN — you missed a split result or 
-          mis-grouped two results into one.
+  const urlAnchorBlock = resultUrls.length > 0 ? `
+## 🎯 Expected Output Count: ${resultUrls.length}
+The PDF contains EXACTLY ${resultUrls.length} distinct search results (pre-extracted by deterministic URL scan):
+${resultUrls.map((u, i) => `  [${String(i+1).padStart(2,'0')}] ${u}`).join('\n')}
 
-【RULE 5】RESULTS WITHOUT VISIBLE SNIPPETS STILL COUNT
-Some results may appear with only [Source + URL + Title] and no snippet
-(common for the last result on a page, or thin results).
-→ Still include them. Set the snippet field to the title or empty string.
-
-【RULE 6】DO NOT FABRICATE
-- Never invent results not in the PDF.
-- Never duplicate a result to reach a target count.
-- If you're unsure whether two blocks are one-or-two results, 
-  prefer treating them as TWO (false-positive results are safer 
-  than missed results, since classification will filter them).
-═══════════════════════════════════════════════════════════
-`;
-
-
-const urlAnchorBlock = resultUrls.length > 0 ? `
-═══════════════════════════════════════════════════════════
-🎯 PRE-EXTRACTED URL ANCHORS — AUTHORITATIVE GROUND TRUTH
-═══════════════════════════════════════════════════════════
-
-The system has automatically scanned the PDF and detected EXACTLY 
-${resultUrls.length} unique search result URLs:
-
-${resultUrls.map((u, i) => `  [${String(i+1).padStart(2, '0')}] ${u}`).join('\n')}
-
-🚨🚨🚨 MANDATORY OUTPUT CONTRACT 🚨🚨🚨
-
-  Your JSON array MUST contain EXACTLY ${resultUrls.length} items.
-  Each item corresponds to ONE URL above. No more. No less.
-
-  If your output has fewer than ${resultUrls.length} items → WRONG.
-  If your output has more  than ${resultUrls.length} items → WRONG.
-
-📖 HOW TO USE THESE ANCHORS
-
-For each URL, locate it in the PDF text, then gather its content:
-  • SOURCE NAME → typically 1-2 lines IMMEDIATELY ABOVE the URL
-  • TITLE       → typically the line(s) IMMEDIATELY BELOW the URL
-                  (often blue, often ends with "...")
-  • SNIPPET     → typically the descriptive prose further below the title
-                  (may contain dates, authors, "由 X 著作", etc.)
-
-⚠️ TEXT ORDER ANOMALIES (CRITICAL)
-
-PDF text extraction sometimes places content OUT OF VISUAL ORDER:
-  • A snippet may appear BEFORE its corresponding title
-  • A snippet may appear BEFORE the URL anchor itself
-  • Two consecutive snippets may belong to two DIFFERENT results
-
-Strategy: Always trust the URL anchor list above as your skeleton.
-Walk OUT from each URL (both up and down) to find its content.
-
-⚠️ SPLIT RESULTS ACROSS PAGE BREAKS
-
-If a URL appears on page 1 but its snippet appears on page 2 
-(after "--- PAGE BREAK ---"), they still belong to the SAME result.
-Merge them into one JSON item.
-
-⚠️ IF YOU CAN'T FIND CONTENT FOR A URL
-
-Still output the result. Use the URL itself or domain as the source,
-and put "(Content not clearly extractable)" in the snippet.
-NEVER skip a URL just because its content is hard to parse.
-
-═══════════════════════════════════════════════════════════
+⚠️ Your JSON array MUST contain EXACTLY ${resultUrls.length} items. Do not skip, merge, or duplicate.
 ` : '';
 
-   const reminderText = resultUrls.length > 0 ? `🚨🚨🚨 MANDATORY OUTPUT CONTRACT — READ TWICE 🚨🚨🚨
+  const moduleType = enrichedContent.toLowerCase().includes('sanction') ? 'sanctions list' : 'adverse media';
 
-You MUST produce EXACTLY ${resultUrls.length} JSON items in your output array.
-This count was PRE-COMPUTED by deterministically scanning the PDF for distinct
-result anchors (URLs + breadcrumb lines). It is NOT an estimate.
+  return `You are a senior CDD analyst performing ${moduleType} screening for KYC/AML.
 
-  ✗ Outputting FEWER than ${resultUrls.length} items → WRONG OUTPUT.
-  ✗ Outputting MORE than ${resultUrls.length} items → WRONG OUTPUT.
-  ✓ Output array length MUST equal ${resultUrls.length}. Period.
+# 🎯 Target Entity
+"${searchEntityName}"
+${knownInfoBlock}
+${urlAnchorBlock}
 
-🔢 FINAL COUNT VERIFICATION (do this before submitting):
-  STEP A: Look at the URL anchor list [01]–[${String(resultUrls.length).padStart(2,'0')}] given above.
-  STEP B: Count your JSON items. The count MUST equal ${resultUrls.length}.
-  STEP C: If your count is less than ${resultUrls.length}, you MISSED a result.
-          Re-scan the PDF — especially across "--- PAGE BREAK ---" boundaries.
-  STEP D: If your count is more than ${resultUrls.length}, you DUPLICATED a result.
-          Merge entries that point to the same URL anchor.
+# 📋 Task
+For EACH Google search result in the content below, classify into ONE of these FOUR categories:
 
-⚠️ COMMON CAUSES OF UNDER-COUNTING (avoid these):
-  • Skipping a result because its snippet was hard to find → Output it anyway.
-    Use snippet = "(Snippet not clearly extractable)" and the title from near the URL.
-  • Skipping a result that had no snippet on its page → Output it anyway.
-  • Merging two unrelated results into one because their text was adjacent → Split.
-  • Treating a split result (across page break) as missing data → Merge into ONE item.
+## Classification Buckets
 
-⚠️ COMMON CAUSES OF OVER-COUNTING (avoid these):
-  • Treating the same URL appearing twice as two results → It's ONE result.
-  • Treating "AI Overview" or pagination text as a result → Skip those.
+**1. TRUE_HIT** — The target IS the wrongdoer AND the matter is ML/TF related.
+   In-scope ML/TF matters: money laundering, terrorist financing, sanctions designation/evasion, 
+   bribery/corruption (FCPA/UKBA/ICAC), criminal tax evasion, drug/human/arms trafficking, 
+   fraud with criminal prosecution, insider trading, organized crime, proliferation financing,
+   AML enforcement by HKMA/SFC/MAS/SEC/FCA/OFAC/FinCEN.
 
-Each search result = exactly one JSON item.
-Output starts with [ and ends with ]. Nothing else, no markdown fences.` : `REMINDER: Identify and output ALL distinct search results from the PDF content.
+**2. FALSE_HIT** — Different person/entity. Name similar but identifiers contradict
+   (different DOB, jurisdiction, industry, company, role). Includes name-similar cases
+   like "陳大文" vs "陳文", "Mary Wong" vs "Mary Wang".
 
-⚠️ EXPECTED COUNT: ~${resultCount} items across all PDF pages.
-⚠️ A Google search of 10 results is COMMONLY split across 2 PDF pages — count ALL of them.
-
-CHECKLIST BEFORE OUTPUTTING:
-□ Did I count results from page 1 AND page 2 (and beyond)?
-□ Is my JSON array length close to ${resultCount}?
-□ Did I merge any result that was split across "--- PAGE BREAK ---"?
-
-Do NOT skip or merge any result. Each search result = one JSON item.
-Start with [ end with ]. Nothing else.`;
-
-    /* ═══════════════════════════════════════════════════════
-       ⭐ 共用:3 步驟決策樹 + 5 類分類定義
-       ═══════════════════════════════════════════════════════ */
-       const decisionTree = `
-═══════════════════════════════════════════════════════════
-🧭 3-STEP DECISION TREE — APPLY TO EVERY RESULT
-═══════════════════════════════════════════════════════════
-
-──────────────────────────────────────────────
-STEP 1 — IDENTITY (Is this the TARGET subject?)
-──────────────────────────────────────────────
-
-STEP 1A — NAME MATCH (compare names CHARACTER-BY-CHARACTER first)
-
-⚠️ FIRST — NORMALIZE WORD ORDER FOR ROMANIZED ASIAN NAMES:
-
-Romanized Chinese / Korean / Vietnamese names commonly appear in two orders:
-  • Asian order:    SURNAME + GIVEN NAME    e.g. "Chan Tai Man", "Wong Ka Wai"
-  • Western order:  GIVEN NAME + SURNAME    e.g. "Tai Man Chan", "Ka Wai Wong"
-
-These are the SAME PERSON. When comparing romanized names:
-  1. Tokenize each name (split by spaces, lowercase, ignore punctuation)
-  2. Compare as an UNORDERED SET
-  3. If ALL tokens match (regardless of order) → treat as NAME_EXACT
-
-✅ NAME_EXACT examples (same person, different word order):
-     "Chan Tai Man"   ↔  "Tai Man Chan"     → NAME_EXACT
-     "Wong Ka Wai"    ↔  "Ka Wai Wong"      → NAME_EXACT
-     "Li Ming"        ↔  "Ming Li"          → NAME_EXACT
-     "Kim Jong Un"    ↔  "Jong Un Kim"      → NAME_EXACT
-     "Nguyen Van A"   ↔  "Van A Nguyen"     → NAME_EXACT
-
-❌ NAME_SIMILAR (tokens differ — NOT same person):
-     "Chan Tai Man"   ↔  "Chan Tai"         → NAME_SIMILAR (token missing)
-     "Chan Tai Man"   ↔  "Chan Tai Ming"    → NAME_SIMILAR (token differs)
-     "Chan Tai Man"   ↔  "Chan Tai Man Jr"  → NAME_SIMILAR (extra token,
-                                              unless clearly same person)
-     "Mary Wong"      ↔  "Mary Wang"        → NAME_SIMILAR (Wong ≠ Wang)
-     "Li Wei"         ↔  "Lee Wei"          → NAME_SIMILAR (Li ≠ Lee, unless
-                                              context confirms same person)
-
-⚠️ For CHINESE characters (漢字), word order is FIXED (surname always first).
-    No reordering applies — compare character-by-character as before:
-       "陳大文" ↔ "陳大文" → NAME_EXACT
-       "陳大文" ↔ "大文陳" → NAME_SIMILAR (Chinese names don't reorder)
-
-  🟢 NAME_EXACT     = name matches exactly, OR matches after word-order
-                      normalization (Asian ↔ Western), OR is a recognised
-                      variant of the SAME person:
-                        "John A. Smith" ↔ "John Smith"
-                        "陳大文" ↔ "陳大文 Chan Tai Man"
-                        "Chan Tai Man" ↔ "Tai Man Chan"
-                      → go to STEP 1B
-  🟠 NAME_SIMILAR   = name is SIMILAR but tokens differ (likely different person):
-                      • Chinese: shared family name + different given character(s)
-                          "陳大文" vs "陳文"     (missing character)
-                          "陳大文" vs "陳大明"   (different character)
-                      • Romanized: different token spelling
-                          "Mary Wong" vs "Mary Wang"
-                          "Chan Tai Man" vs "Chan Tai Ming"
-                      → FALSE_HIT (stop here, do NOT proceed to STEP 2)
-  ⚫ DIFFERENT_NAME = completely unrelated name (no shared tokens / characters)
-                      → NO_HIT (stop)
-
-STEP 1B — IDENTITY (only if NAME_EXACT)
-
-  Compare result against KNOWN IDENTIFYING INFORMATION provided.
-
-  🟢 FULL_MATCH     = name + ≥ 2 identifiers match                → go to STEP 2
-  🟡 PARTIAL_MATCH  = name + 1 identifier matches, others unknown → go to STEP 2
-  🔵 NO_INFO        = name matches, but ZERO identifying info     → go to STEP 2
-                       was provided by compliance officer
-  🔴 CONTRADICTED   = name matches + identifiers clearly differ   → FALSE_HIT (stop)
-
-──────────────────────────────────────────────
-STEP 2 — ADVERSE CONTENT (Any negative information?)
-──────────────────────────────────────────────
-Adverse signals:
-  • Criminal charges / convictions / investigations
-  • Regulatory enforcement actions
-  • Lawsuits / litigation
-  • Media reports of misconduct
-  • Sanctions / watchlist mentions
-  • Bankruptcy / insolvency
-  • PEP exposure with risk indicators
-
-If NO adverse content → STEP 3 = FAIL (move to final mapping)
-If YES → go to STEP 3
-
-──────────────────────────────────────────────
-STEP 3 — ML/TF SCOPE (Is the adverse content within ML/TF predicate offenses?)
-──────────────────────────────────────────────
-
-✅ IN-SCOPE:
-  1.  Money Laundering / proceeds of crime
-  2.  Terrorist Financing / CFT
-  3.  Sanctions violations (OFAC, UN, EU, HKMA, UK OFSI, MAS)
-  4.  Sanctions evasion / circumvention / front companies
-  5.  Bribery / corruption (FCPA, UKBA, ICAC)
-  6.  Tax evasion / tax fraud (CRIMINAL level only)
-  7.  Drug trafficking / human trafficking / arms trafficking
-  8.  Fraud with criminal prosecution (Ponzi, securities, investment)
-  9.  Insider trading / market manipulation
-  10. Proliferation financing (WMD-related)
-  11. Organized crime (triads, mafia, syndicates)
-  12. Cybercrime with financial motive (ransomware, BEC)
-  13. Regulatory enforcement by AML authorities (HKMA, MAS, SFC, SEC, FCA, FinCEN)
-
-❌ OUT-OF-SCOPE (→ classify as IRRELEVANT_MLTF, NOT FALSE_HIT):
-  1.  Civil disputes WITHOUT fraud (contract, IP, defamation)
-  2.  Labor / employment disputes (unless forced labor)
-  3.  Traffic violations
-  4.  Environmental violations (unless deliberate / large-scale)
-  5.  Family / personal matters
-  6.  Health / accident events
-  7.  Trademark / patent / commercial litigation (no fraud)
-  8.  Routine consumer complaints / product liability
-  9.  Administrative (non-criminal) tax disputes
-  10. Entity IMPLEMENTING compliance programmes (positive news)
-  11. General regulatory news where entity is NOT a target
-  12. Personal lifestyle controversies without legal consequence
-   13. SOE / state-enterprise INTERNAL rule violations — context-dependent
-       Examples: unauthorized asset disposal, diversion of allocated quotas,
-                 violation of SOE internal procurement rules
-       ⚠️ DO NOT pre-judge based on industry / keyword alone. The SAME headline
-          (e.g. "crude oil reselling investigation") may be:
-            - Sanctions evasion (in-scope)  ← if sanctioned country involved
-            - Bribery / FCPA (in-scope)     ← if officials implicated
-            - Pure SOE quota violation      ← out-of-scope
-          Read the article body. When unsure → POSSIBLE_HIT, not FALSE_HIT.
-       → Classify as out-of-scope ONLY if article explicitly states NO criminal
-         element AND NO sanctioned-party nexus AND NO bribery dimension.
-
-  14. Industry-specific REGULATORY probes without criminal nexus
-       Examples: antitrust review, market-share investigation,
-                 cartel inquiry (civil), pricing investigation,
-                 listing-rule breaches, disclosure violations
-       → Out of ML/TF scope unless escalated to criminal charges
-
-  15. Appointment / personnel news where target is NOT the wrongdoer
-       Example: "Company X appoints Y as president, replacing Z who is
-                 under investigation for [matter]"
-       → If matter is non-ML/TF → IRRELEVANT_MLTF
-       → If matter IS ML/TF but target is the successor Y (not Z) → IRRELEVANT_MLTF
-          (NOT FALSE_HIT — Y is the right person, just not the subject)
-       → Use Stage 2 role analysis to disambiguate.
-
-🚨 CRITICAL ORDER OF EVALUATION:
-   When unsure between FALSE_HIT (wrong person) and IRRELEVANT_MLTF
-   (right context but out-of-scope matter), evaluate IRRELEVANT_MLTF FIRST.
+**3. IRRELEVANT_MLTF** — Result does NOT contain ML/TF wrongdoing BY THE TARGET.
+   Use this when ANY of the following apply:
+   • Target is the EMPLOYER investigating an employee
+   • Target is the PLAINTIFF / VICTIM
+   • Target is the SUCCESSOR (e.g. "X replaces Y who was investigated for fraud")
+   • Target is a WITNESS / spokesperson / commentator
+   • Civil disputes (contract, IP, employment) without criminal element
+   • Commercial litigation, antitrust review, listing-rule breach
+   • Target IMPLEMENTING compliance programmes (positive news)
+   • General regulatory news where target is not the subject
+   • SOE internal rule violations without criminal/sanctioned-party nexus
    
-   Reasoning: IRRELEVANT_MLTF is a stronger, more upstream filter — if the
-   underlying matter isn't ML/TF, role analysis is moot.
+   🚨 IMPORTANT: When ML/TF keywords appear but the WRONGDOER IS NOT THE TARGET,
+   this is IRRELEVANT_MLTF — NOT TRUE_HIT.
+
+**4. NO_HIT** — Search keywords not found, result has no relevant content, 
+   or target not mentioned at all.
+
+# 🧭 Decision Process (apply to every result)
+
+STEP 1 — Does the article describe wrongdoing?
+   NO  → IRRELEVANT_MLTF (or NO_HIT if target not mentioned)
+   YES → continue
+
+STEP 2 — WHO is the wrongdoer in the article?
+   Read the article carefully. Identify the grammatical subject of the wrongdoing.
    
-   Example: "X appoints Y as president; X's former head Z was investigated
-            for crude oil reselling"
-     ❌ WRONG: FALSE_HIT (Y is successor) — assumes the matter cares about us
-     ✅ RIGHT: IRRELEVANT_MLTF — the matter (oil reselling) isn't ML/TF scope
+   ⚠️ Common pattern to catch:
+       "Company X appoints A as CEO, REPLACING B who was investigated for fraud"
+        → A is the SUCCESSOR. B is the wrongdoer.
+        → If target = A → IRRELEVANT_MLTF (A is not implicated)
+        → If target = B → continue to STEP 3
+   
+   ⚠️ Pronoun tracing is critical:
+       "He replaces X, who was charged with fraud" → "he" = subject of "replaces",
+       so "he" is the new appointee; "X" is the one charged.
 
-═══════════════════════════════════════════════════════════
-📋 FINAL CLASSIFICATION MATRIX (6 categories)
-═══════════════════════════════════════════════════════════
+STEP 3 — Is the wrongdoer the TARGET?
+   NO  → IRRELEVANT_MLTF (matter exists but applies to another party)
+   YES → continue
 
-┌──────────────────────┬─────────────────────────┬─────────────────────────┐
-│  STEP 1 Identity     │  STEP 2/3 = ML/TF FOUND │  STEP 2/3 = NO ML/TF    │
-├──────────────────────┼─────────────────────────┼─────────────────────────┤
-│ DIFFERENT_NAME       │  NO_HIT                 │  NO_HIT                 │
-│ NAME_SIMILAR 🆕      │  FALSE_HIT              │  FALSE_HIT              │
-│ CONTRADICTED         │  FALSE_HIT              │  FALSE_HIT              │
-│ NO_INFO              │  🆕 PENDING_INFO        │  IRRELEVANT_MLTF        │
-│ PARTIAL_MATCH        │  POSSIBLE_HIT           │  IRRELEVANT_MLTF        │
-│ FULL_MATCH           │  TRUE_HIT               │  IRRELEVANT_MLTF        │
-└──────────────────────┴─────────────────────────┴─────────────────────────┘
+STEP 4 — Is the wrongdoing ML/TF in scope?
+   NO  → IRRELEVANT_MLTF (e.g. commercial dispute, civil suit, antitrust)
+   YES → TRUE_HIT
 
-🚨 CRITICAL — DO NOT CONFUSE THESE STATES:
-  • NAME_SIMILAR  = name is CLOSE BUT NOT THE SAME PERSON
-                    → Always FALSE_HIT (regardless of content).
-                      Examples:
-                        "陳大文" (search) vs "陳文" (result)    → FALSE_HIT
-                        "陳大文" (search) vs "陳大明" (result)  → FALSE_HIT
-                        "Mary Wong"       vs "Mary Wang"        → FALSE_HIT
-                        "Li Wei"          vs "Lee Wei"          → FALSE_HIT
-                                                                  (unless clearly
-                                                                   same person)
-  • PENDING_INFO  = name match (NAME_EXACT) + ML/TF content + ZERO identifiers
-                    → "Cannot determine yet, CDD must supply identifiers"
-  • POSSIBLE_HIT  = name match (NAME_EXACT) + ML/TF content + 1-2 identifiers partial
-                    → "Probable hit, needs minor corroboration"
-  • TRUE_HIT      = name match (NAME_EXACT) + ML/TF content + ≥ 2 identifiers full
-                    → "Confirmed hit"
+STEP 5 — Name disambiguation (only matters when STEP 1-4 → TRUE_HIT)
+   • Names match exactly (incl. Asian/Western surname-order variants like 
+     "Chan Tai Man" ↔ "Tai Man Chan") → confirm TRUE_HIT
+   • Names are CLOSE but tokens differ ("陳大文" vs "陳文", "Mary Wong" vs "Mary Wang")
+     → FALSE_HIT (different person)
+   • KNOWN INFO contradicts → FALSE_HIT
 
-⚠️ ANTI-FALSE-POSITIVE RULES:
-  1. A keyword match alone is NEVER sufficient for TRUE_HIT.
-  2. Name must match EXACTLY (character-by-character for Chinese, word-by-word
-     for English). Any character / word difference that suggests a different
-     person → NAME_SIMILAR → FALSE_HIT.
-  3. "sued for breach of contract" = IRRELEVANT_MLTF, even if "fraud" appears nearby.
-  4. "under investigation" = TRUE_HIT only if by law enforcement/regulators for ML/TF.
-  5. Entity IMPLEMENTING sanctions/AML compliance ≠ TRUE_HIT.
-  6. Chinese names have extremely high duplication — name-only match is NEVER enough
-     for TRUE_HIT. Always require corroborating identifiers.
-  7. When NO KNOWN INFO is provided and ML/TF content exists (with NAME_EXACT) →
-     MUST be PENDING_INFO (not TRUE_HIT).
-  8. When in doubt between TRUE_HIT and IRRELEVANT_MLTF → IRRELEVANT_MLTF.
-  9. When in doubt between POSSIBLE_HIT and FALSE_HIT → POSSIBLE_HIT.
- 10. When in doubt between NAME_EXACT and NAME_SIMILAR → NAME_SIMILAR (safer).
-`;
+# ⚖️ Key Principles
 
-    /* ═══════════════════════════════════════════════════════
-       ⭐ JSON 輸出格式(統一,修正逗號 bug)
-       ═══════════════════════════════════════════════════════ */
-        const outputFormat = `
-═══════════════════════════════════════════════════════════
-📤 RESPONSE FORMAT — JSON ARRAY ONLY, NO OTHER TEXT
-═══════════════════════════════════════════════════════════
+🎯 **READ the article, don't keyword-match.** Keywords are noisy. Context determines truth.
+
+🎯 **Trust the article's narrative.** If the article says "Shell INVESTIGATED Dong Wei
+   for corruption", then Dong Wei is the subject, NOT Shell.
+
+🎯 **Conservative TRUE_HIT.** Only assign TRUE_HIT when (a) target is unambiguously
+   the wrongdoer, AND (b) wrongdoing is clearly ML/TF predicate. Confidence ≥ 0.75.
+
+🎯 **When in doubt → IRRELEVANT_MLTF**, never "pending info" or "possible hit".
+   The 4-bucket system has no "I'm not sure" escape hatch on purpose.
+
+# 📥 Data Sources Available
+1. Google search snippets (from PDF) — always available, sometimes lossy
+2. Full page content — appended below with "--- PAGE CONTENT: <url> ---" markers
+   ⚠️ NOT every result has full page content. Check before classifying.
+   ⚠️ Snippet-only results: be extra conservative, max confidence 0.65.
+
+# 📤 Output Format (JSON array, no markdown fences)
+
 [
   {
     "rank": 1,
-    "title": "Exact article title",
-    "source": "publication name",
+    "title": "Article title as appears in PDF",
+    "source": "Publication name",
     "date": "YYYY-MM-DD",
-    "snippet": "Verbatim 2-3 sentence excerpt",
-    "matchedKeywords": ["only keywords used in ML/TF context"],
-    "cls": "TRUE_HIT",
-    "identityMatch": "FULL_MATCH",
+    "snippet": "Verbatim 2-3 sentences",
+    "matchedKeywords": ["only keywords that appear in ML/TF context"],
+    "cls": "TRUE_HIT" | "FALSE_HIT" | "IRRELEVANT_MLTF" | "NO_HIT",
+    "identityMatch": "FULL_MATCH" | "PARTIAL_MATCH" | "NO_INFO" | "CONTRADICTED" | "NAME_SIMILAR" | "DIFFERENT_NAME",
     "nameInResult": "exact name string as it appears in the result",
-    "confidence": 0.92,
-    "reason": "Fluent natural paragraph (2-4 sentences) explaining: (a) name comparison, (b) identity assessment, (c) adverse content assessment, (d) ML/TF scope assessment. Do NOT use 'STEP 1/2/3' labels.",
-    "riskCat": "${isSanction ? 'OFAC SDN / EU Sanctions / UN Sanctions / Sanctions Evasion / Asset Freeze / Proliferation / N/A' : 'Money Laundering / Sanctions Evasion / Bribery / Tax Evasion (Criminal) / Terrorist Financing / Fraud (Criminal) / Regulatory Action / N/A'}",
-    "missingInfo": ["DOB", "nationality", "role / position", "company"]
+    "confidence": 0.0-1.0,
+    "reason": "Natural paragraph (2-3 sentences). State who the actual subject is if different from target. Explain role-based or scope-based reasoning.",
+    "riskCat": "Money Laundering / Sanctions / Bribery / Fraud / N/A",
+    "missingInfo": []
   }
 ]
 
-FIELD GUIDELINES:
-  • cls: one of "TRUE_HIT" | "POSSIBLE_HIT" | "PENDING_INFO" | "FALSE_HIT" | "IRRELEVANT_MLTF" | "NO_HIT"
+# 🔬 Search Results to Analyze
 
-  • identityMatch: REQUIRED. One of:
-      - "FULL_MATCH"     = NAME_EXACT + ≥ 2 KNOWN INFO identifiers independently match
-      - "PARTIAL_MATCH"  = NAME_EXACT + 1 identifier matches, others unknown
-      - "NO_INFO"        = NAME_EXACT + NO KNOWN INFO was provided
-      - "CONTRADICTED"   = NAME_EXACT + KNOWN INFO clearly differs
-      - "NAME_SIMILAR"   = 🆕 name is similar but NOT exact (likely different person)
-      - "DIFFERENT_NAME" = name does not match at all
-
-  • nameInResult: REQUIRED. The exact name string as it appears in the search result
-                  (snippet/title). This proves you compared character-by-character.
-                  Example: search="陳大文", nameInResult="陳文" → identityMatch=NAME_SIMILAR
-
-  • missingInfo: REQUIRED when cls = "PENDING_INFO" or "POSSIBLE_HIT".
-      Suggest specific identifiers that CDD should supply, e.g.:
-      ["DOB / age", "nationality", "role / position", "company affiliation", "jurisdiction"]
-      Use empty array [] for all other cls.
-
-  • confidence calibration:
-      - TRUE_HIT:        0.80 - 1.00 (must be ≥ 0.75 or auto-downgraded)
-      - POSSIBLE_HIT:    0.50 - 0.79
-      - PENDING_INFO:    0.40 - 0.65
-      - FALSE_HIT:       0.70 - 0.95 (confidence it is NOT the customer)
-      - IRRELEVANT_MLTF: 0.30 - 0.60
-      - NO_HIT:          0.00 - 0.30
-`;
-
-    /* ═══════════════════════════════════════════════════════
-       ⭐ 已知身份背景(disambiguation 用)
-       ═══════════════════════════════════════════════════════ */
-       const identityBlock = entityContext && Object.values(entityContext).some(v => v) ? `
-═══════════════════════════════════════════
-🪪 KNOWN IDENTIFYING INFORMATION (provided by compliance officer):
-═══════════════════════════════════════════
-${formatEntityContext(entityContext)}
-
-⚠️ CRITICAL USE OF THIS DATA — APPLY STEP 1 RIGOROUSLY:
-
-    STEP 1A first: Compare the name in the result against "${searchEntityName}".
-
-    ⚠️ FOR ROMANIZED NAMES: Compare as UNORDERED TOKEN SET.
-       "Chan Tai Man" and "Tai Man Chan" are the SAME PERSON
-       (Asian surname-first ↔ Western surname-last convention).
-       "Wong Ka Wai" ↔ "Ka Wai Wong" → same person → NAME_EXACT.
-    ⚠️ FOR CHINESE CHARACTERS (漢字): Compare character-by-character;
-       order is fixed (surname always first). No reordering applies.
-
-    • Tokens / characters all match (any order for romanization)
-      → identityMatch = "NAME_EXACT" → proceed to STEP 1B
-    • Tokens / characters partially differ (e.g. "陳大文" → "陳文",
-      "Mary Wong" → "Mary Wang", "Chan Tai Man" → "Chan Tai Ming")
-      → identityMatch = "NAME_SIMILAR" → FALSE_HIT (stop)
-    • Completely different (no shared tokens / characters)
-      → identityMatch = "DIFFERENT_NAME" → NO_HIT
-
-  STEP 1B: Only if name is exact, then compare identifiers:
-    • Identifiers contradict (different age, profession, jurisdiction, company)
-      → identityMatch = "CONTRADICTED" → FALSE_HIT
-    • 1 identifier matches, others unknown
-      → identityMatch = "PARTIAL_MATCH" → POSSIBLE_HIT (if ML/TF) or IRRELEVANT_MLTF
-    • ≥ 2 identifiers match
-      → identityMatch = "FULL_MATCH" → TRUE_HIT (if ML/TF) or IRRELEVANT_MLTF
-` : `
-═══════════════════════════════════════════
-⚠️ NO KNOWN IDENTIFYING INFORMATION PROVIDED
-═══════════════════════════════════════════
-
-  🚨 THIS IS A CRITICAL CONSTRAINT — READ CAREFULLY:
-
-  The compliance officer did NOT provide any identifying details (DOB, nationality,
-  role, company, ID number, address). This means you CANNOT verify whether a result
-  is the actual customer or a DIFFERENT person with the same name.
-
-    BUT YOU MUST STILL APPLY STEP 1A RIGOROUSLY:
-
-  Compare the name in the result against "${searchEntityName}".
-
-    ⚠️ FOR ROMANIZED NAMES: Compare as UNORDERED TOKEN SET.
-       "Chan Tai Man" and "Tai Man Chan" are the SAME PERSON
-       (Asian surname-first ↔ Western surname-last convention).
-    ⚠️ FOR CHINESE CHARACTERS (漢字): Compare character-by-character;
-       order is fixed.
-
-    • Tokens / characters all match (any order for romanization)
-      → identityMatch = "NO_INFO" (cannot verify further) → proceed to STEP 2
-    • Tokens / characters partially differ (e.g. "陳大文" vs "陳文",
-      "Mary Wong" vs "Mary Wang", "Chan Tai Man" vs "Chan Tai Ming")
-      → identityMatch = "NAME_SIMILAR" → FALSE_HIT
-    • Completely different
-      → identityMatch = "DIFFERENT_NAME" → NO_HIT
-
-  Chinese personal names ESPECIALLY have extremely high duplication rates
-  (e.g. "陳志明", "李偉明", "王小明" — thousands of holders each).
-
-  MANDATORY CLASSIFICATION RULES IN THIS SCENARIO (only for NAME_EXACT):
-
-  ┌────────────────────────────────┬──────────────────────────────┐
-  │  Result has ML/TF content      │  Result has NO ML/TF content │
-  ├────────────────────────────────┼──────────────────────────────┤
-  │  → identityMatch = "NO_INFO"   │  → identityMatch = "NO_INFO" │
-  │  → cls = "PENDING_INFO"        │  → cls = "IRRELEVANT_MLTF"   │
-  │  → confidence ≤ 0.65           │  → confidence ≤ 0.55         │
-  │  → missingInfo MUST list       │  → missingInfo = []          │
-  │     specific identifiers       │                              │
-  │     needed (DOB, role, etc.)   │                              │
-  └────────────────────────────────┴──────────────────────────────┘
-
-  🚫 ABSOLUTELY FORBIDDEN in this scenario:
-    • Do NOT classify as TRUE_HIT (impossible without identifier verification)
-    • Do NOT classify as POSSIBLE_HIT (reserved for PARTIAL_MATCH only)
-
-  ✅ The ONLY valid classifications with no KNOWN INFO are:
-     PENDING_INFO, IRRELEVANT_MLTF, NO_HIT, FALSE_HIT (only via NAME_SIMILAR)
-`;
-
-    /* ═══════════════════════════════════════════════════════
-       ⭐ Sanction vs Adverse Media — 共用主體 + 微調差異
-       ═══════════════════════════════════════════════════════ */
-    const taskLine = isSanction
-      ? `TASK: Analyze each Google search result and classify whether the entity is on any sanctions list or involved in sanctions-related violations.`
-      : `TASK: Analyze each Google search result and classify it using the 3-step decision tree below.`;
-
-    const moduleSpecificScopeNote = isSanction ? `
-⚠️ SANCTION-SCREENING SPECIFIC NOTES:
-  • Primary in-scope categories: OFAC SDN, UN, EU, UK OFSI, HKMA, MAS sanctions lists.
-  • Also in-scope: sanctions evasion, asset freezes, travel bans, arms embargoes, secondary sanctions, proliferation financing.
-  • An entity IMPLEMENTING sanctions compliance is NOT a TRUE_HIT.
-  • "sanctions" appearing in general regulatory context (where entity is not the target) ≠ TRUE_HIT.
-` : `
-⚠️ ADVERSE-MEDIA SPECIFIC NOTES:
-  • Focus on ML/TF predicate offences and AML-relevant regulatory actions.
-  • Sanctions findings ARE in-scope here too (treat as TRUE_HIT under "Sanctions Evasion" category).
-`;
-
-    /* ═══════════════════════════════════════════════════════
-       ⭐ Page Content / Snippet 來源說明
-       ═══════════════════════════════════════════════════════ */
-   const dataSourceNote = `
-YOU HAVE TWO DATA SOURCES:
-1. Google search result snippets (from PDF) — ALWAYS available, short, often lossy
-2. Full page content — appended below, marked with "--- PAGE CONTENT: [url] ---"
-   ⚠️ NOT EVERY result has full page content. Check before each classification.
-
-🚨 PER-RESULT EVIDENCE-AVAILABILITY RULE:
-   For EACH result you classify, FIRST determine which data you have:
-
-   (a) Full page content available → use it as primary evidence.
-       TRUE_HIT requires explicit confirmation in the FULL article body that the
-       screened subject IS the actor of the wrongdoing (not the successor/witness/etc.).
-
-   (b) Snippet ONLY (no full page content) → CONSERVATIVE classification:
-       - Maximum classification = POSSIBLE_HIT (never TRUE_HIT from snippet alone)
-       - Confidence cap = 0.65
-       - Add to missingInfo: "full article verification required"
-       - In reason, explicitly note: "Classification based on snippet only — full article not retrievable"
-
-   (c) Snippet mentions both the subject's name AND a wrongdoing keyword, but does
-       not clarify the GRAMMATICAL ROLE → POSSIBLE_HIT or PENDING_INFO.
-       Examples of ambiguous snippets:
-         "Wu Junli ... investigation into fraud at Sinopec ..."
-            → unclear if Wu Junli IS the investigated party or a related figure
-            → MUST be POSSIBLE_HIT, not TRUE_HIT
-
-🚨 NEVER assume a result has full content just because some other result does.
-   The "--- PAGE CONTENT ---" marker is the ONLY proof of full-content availability.
-`;
-
-    /* ═══════════════════════════════════════════════════════
-       ⭐ 組裝最終 Prompt
-       ═══════════════════════════════════════════════════════ */
-    return `You are a senior compliance analyst performing ${isSanction ? 'Sanctions List Screening' : 'Adverse Media Screening'} for KYC/AML purposes.
-
-${taskLine}
-
-═══════════════════════════════════════════
-ENTITY UNDER SCREENING: "${searchEntityName}"
-═══════════════════════════════════════════
-${identityBlock}
-${urlAnchorBlock} 
-${pdfCleaningNote}
-${dataSourceNote}
-${moduleSpecificScopeNote}
-${decisionTree}
-${outputFormat}
-
-Analyze ALL search results from this PDF. ${reminderText}
-
-Content:
 ${enrichedContent.slice(0, 80000)}
 
-${reminderText}`;
-  };
+Output JSON array with EXACTLY ${resultUrls.length || resultCount} items. Start with [ and end with ]. Nothing else.`;
+};
+    
+
+const buildSystemPrompt = () => {
+  const moduleName = isSanction ? 'Sanctions List Screening' : 'Adverse Media Screening';
+  
+  return `You are a senior KYC/AML compliance analyst performing ${moduleName} for a Hong Kong bank.
+
+## Output Contract (non-negotiable)
+- Output ONLY a valid JSON array. No markdown fences. No commentary. No greeting.
+- Start with [ end with ]. Period.
+- Each distinct search result in the PDF = exactly ONE JSON item.
+
+## Reasoning Discipline
+- READ the article body, not just snippets. Identify who the actual subject of wrongdoing is.
+- A keyword match alone is NEVER sufficient for TRUE_HIT.
+- If the target appears in an article ONLY as employer / plaintiff / victim / successor /
+  witness / spokesperson, classify as IRRELEVANT_MLTF — even if ML/TF keywords appear.
+- Distinguish "X did Y" from "X replaced Z who did Y".
+- When uncertain between TRUE_HIT and IRRELEVANT_MLTF → choose IRRELEVANT_MLTF.
+- When uncertain between two same-name people → choose FALSE_HIT.
+
+## Confidence Calibration
+- 0.90-1.00 : Authoritative source (official designation, conviction, regulator order)
+- 0.75-0.89 : Mainstream media + named regulator + specific allegation + matching identifiers
+- 0.60-0.74 : Single-source media OR partial identifier corroboration
+- 0.40-0.59 : Weak evidence, peripheral mention
+- Below 0.40 : Insufficient — classify as NO_HIT or IRRELEVANT_MLTF
+
+⚠️ TRUE_HIT REQUIRES confidence ≥ 0.75 AND non-empty matchedKeywords.
+
+## PDF Parsing Hygiene
+- Skip "AI Overview" / "AI 概覽" sections (Google's auto-summary, not a result).
+- Skip Google UI noise: navigation, pagination, footer, location info.
+- "--- PAGE BREAK ---" is a paper boundary, NOT a new search. Process all pages.
+- If a result spans a page break (title on page 1, snippet on page 2), merge into ONE item.
+- Process EVERY distinct result. Don't skip thin results without snippets.
+
+You are a precision instrument. Conservative, defensible classifications protect the bank.`.trim();
+};
 
 
-   const buildSystemPrompt = () => {
-    const moduleName = isSanction ? 'Sanctions List Screening' : 'Adverse Media Screening';
-    const moduleFocus = isSanction
-      ? 'identifying entities that are designated on sanctions lists (OFAC SDN, UN, EU, UK OFSI, HKMA, MAS), subject to asset freezes, involved in sanctions evasion / circumvention / front-company arrangements, or otherwise within the scope of sanctions enforcement'
-      : 'identifying entities involved in money laundering, terrorist financing, predicate offences (bribery, fraud, tax evasion, drug/human/arms trafficking), or AML-relevant regulatory enforcement actions';
-    const scopeWord = isSanction ? 'sanctions' : 'ML/TF';
-    const scopeViolation = isSanction ? 'sanctions violations' : 'ML/TF predicate offences';
+  
 
-    const pdfParsingNote = `
-PDF PARSING DISCIPLINE
-======================
-You are analyzing text extracted from a Google Search results PDF. Apply these parsing rules STRICTLY:
-
-1. IGNORE "AI Overview" / "AI 概覽" sections - these are Google's auto-generated summaries, NOT search results.
-2. IGNORE Google UI noise: navigation bars, "顯示更多" / "Show more", "翻譯這個網頁" / "Translate this page", pagination, footer.
-3. A single Google search of 10 results is OFTEN split across 2+ PDF pages. "--- PAGE BREAK ---" markers indicate paper boundaries, NOT a new search. PROCESS ALL PAGES.
-4. If the PDF contains TWO DIFFERENT searches (one quoted with 0 results + one unquoted with results), analyze only the unquoted search.
-5. Each real search result has: Source name, URL, Title, Snippet (1-2 lines). LinkedIn, Facebook, HKEXnews PDFs are ALL valid results.
-6. If a single result is split across "--- PAGE BREAK ---" (title on page 1, snippet on page 2), merge into ONE result.
-7. Process EVERY distinct search result. Do not skip, do not merge unrelated items.
-`;
-
-    return `
-ROLE AND MISSION
-================
-You are a senior KYC/AML compliance analyst AI specialising in ${moduleName}.
-
-Your mission: ${moduleFocus}, while MINIMIZING false positives.
-
-You serve a Hong Kong bank's CDD/EDD review process. Your output is reviewed by AML advisory and feeds into Suspicious Transaction Reporting decisions. Inaccurate classifications create real downstream cost:
-  - False positives waste analyst time and create unnecessary customer friction.
-  - False negatives create regulatory risk and potential ML/TF exposure.
-
-OUTPUT CONTRACT (NON-NEGOTIABLE)
-================================
-1. Output ONLY a valid JSON array. Nothing else - no greeting, no commentary, no explanation outside the JSON.
-2. Do NOT wrap in markdown code fences.
-3. Start with [ and end with ]. Period.
-4. Every distinct search result in the PDF must produce EXACTLY ONE JSON item (do not skip, do not merge unrelated results).
-5. Use the exact field names and enum values specified in the user prompt's RESPONSE FORMAT section.
-6. If you cannot identify any results, return an empty array [] - never invent results.
-
-CLASSIFICATION DISCIPLINE (3-STEP DECISION TREE)
-================================================
-Apply this discipline to EVERY result, in this exact order:
-
-  STEP 1 -> SUBJECT MATCH      (Is this the target entity?)
-  STEP 2 -> ADVERSE CONTENT    (Any negative information?)
-  STEP 3 -> ML/TF SCOPE        (Is it within ${scopeWord} scope?)
-
-Decision summary (apply LITERALLY):
-  - Completely different name (no shared chars/words)                -> NO_HIT
-  - Name SIMILAR but NOT exact (e.g. 陳大文 vs 陳文, 陳大文 vs 陳大明,
-    Mary Wong vs Mary Wang) — likely different person                -> FALSE_HIT
-  - Name EXACT + KNOWN INFO contradicts (different person)           -> FALSE_HIT
-  - Name EXACT + No KNOWN INFO + ML/TF content                       -> PENDING_INFO + missingInfo
-  - Name EXACT + No KNOWN INFO + NO ML/TF content                    -> IRRELEVANT_MLTF
-  - Name EXACT + PARTIAL KNOWN INFO match + ML/TF content            -> POSSIBLE_HIT + missingInfo
-  - Name EXACT + PARTIAL KNOWN INFO match + NO ML/TF content         -> IRRELEVANT_MLTF
-  - Name EXACT + FULL KNOWN INFO match + ML/TF content within scope  -> TRUE_HIT
-  - Name EXACT + FULL KNOWN INFO match + NO ML/TF (or out of scope)  -> IRRELEVANT_MLTF
-  - Entity not mentioned / no meaningful content                     -> NO_HIT
-
-⚠️ HARD RULE 1: Name comparison is CHARACTER-BY-CHARACTER for Chinese names and
-   WORD-BY-WORD for English names. Any difference suggesting a different individual
-   → NAME_SIMILAR → FALSE_HIT.
-
-⚠️ HARD RULE 2: TRUE_HIT and POSSIBLE_HIT require NAME_EXACT + at least 1 KNOWN INFO
-   identifier to corroborate. If no KNOWN INFO was provided, the maximum
-   classification for a NAME_EXACT + ML/TF result is PENDING_INFO.
-
-⚠️ HARD RULE 3: NAME_SIMILAR ALWAYS overrides content — even if the article
-   discusses serious ML/TF activity, a similar-but-different name means it is
-   NOT the screened customer. Classify as FALSE_HIT.
-
-⚠️ HARD RULE 4: For ROMANIZED Asian names (Chinese pinyin / Cantonese / Korean /
-   Vietnamese), compare names as UNORDERED TOKEN SETS. The surname can appear
-   FIRST (Asian convention) OR LAST (Western convention) — both are valid
-   representations of the SAME individual.
-     "Chan Tai Man" ↔ "Tai Man Chan"  → NAME_EXACT (same person)
-     "Wong Ka Wai"  ↔ "Ka Wai Wong"   → NAME_EXACT (same person)
-     "Kim Jong Un"  ↔ "Jong Un Kim"   → NAME_EXACT (same person)
-     "Li Ming"      ↔ "Ming Li"       → NAME_EXACT (same person)
-   Only mark as NAME_SIMILAR if at least one TOKEN actually differs in spelling.
-
-⚠️ HARD RULE 5: For CHINESE CHARACTERS (漢字), word order is FIXED — surname
-   always comes first. Do NOT apply token-reorder logic to Chinese characters.
-     "陳大文" ↔ "陳大文" → NAME_EXACT
-     "陳大文" ↔ "大文陳" → NAME_SIMILAR (Chinese names never reorder this way)
-     "陳大文" ↔ "陳文"   → NAME_SIMILAR (token missing)
-
-
-ANTI-FALSE-POSITIVE PRINCIPLES
-==============================
-1. ACCURACY OVER QUANTITY. A wrongly assigned TRUE_HIT is worse than missing one.
-2. A keyword match alone is NEVER sufficient for TRUE_HIT. The keyword must describe the screened entity's DIRECT involvement in ${scopeViolation}.
-3. Chinese personal names have extremely high duplication rates. Name-only match is NEVER sufficient for TRUE_HIT.
-4. An entity IMPLEMENTING compliance / sanctions / AML programmes is NOT a TRUE_HIT (positive news).
-5. General regulatory news where the entity is not the target is NOT a TRUE_HIT.
-6. Civil disputes, contract breaches, employment disputes, IP litigation are NOT ML/TF.
-7. "Under investigation" qualifies as TRUE_HIT ONLY if the investigator is a law enforcement body or financial regulator (HKMA, SFC, MAS, SEC, FCA, FinCEN, ICAC, OFAC, etc.) AND the predicate is ML/TF-related.
-8. When uncertain between TRUE_HIT and IRRELEVANT_MLTF -> choose IRRELEVANT_MLTF and lower confidence.
-9. When uncertain between TRUE_HIT and FALSE_HIT -> choose POSSIBLE_HIT and populate missingInfo.
-
-CONFIDENCE CALIBRATION
-======================
-  0.90 - 1.00 : Direct authoritative source (official sanctions designation, court conviction, regulator enforcement order with named entity)
-  0.75 - 0.89 : Mainstream media reporting + named regulator/investigator + specific allegations + matching identifiers
-  0.60 - 0.74 : Single-source media report OR partial identifier corroboration OR allegations without formal charges
-  0.40 - 0.59 : Weak evidence, ambiguous identity, or peripheral mention
-  Below 0.40  : Insufficient evidence - classify conservatively as NO_HIT or IRRELEVANT_MLTF
-
-HARD RULE 1: TRUE_HIT requires confidence >= 0.75. Below 0.75, MUST downgrade to POSSIBLE_HIT or IRRELEVANT_MLTF.
-HARD RULE 2: TRUE_HIT requires at least one matched keyword in ML/TF context. Empty matchedKeywords array means it cannot be TRUE_HIT.
-
-IDENTITY DISAMBIGUATION
-=======================
-If the user prompt provides "KNOWN IDENTIFYING INFORMATION" about the subject:
-  - Treat this as ground truth about the actual person/entity being screened.
-  - If a search result's identifiers CONTRADICT the known info -> FALSE_HIT.
-  - If a search result has NO identifiers to confirm or deny -> POSSIBLE_HIT.
-  - TRUE_HIT requires at least ONE identifier in the result to corroborate the known info.
-
-If NO identifying information is provided:
-  - Be especially conservative with common names (especially Chinese names).
-  - A name-only match with ML/TF content -> POSSIBLE_HIT (not TRUE_HIT).
-  - Populate missingInfo to flag what the compliance officer should provide.
-
-${pdfParsingNote}
-
-FINAL REMINDER
-==============
-You are a precision instrument, not a coverage maximizer. Conservative, defensible classifications protect both the bank and the customer.
-`.trim();
-  };
 
  const runAnalysis = async () => {
     if (!pdfFile) { setErrorMsg('請先上傳搜尋結果 PDF 文件'); return; }
@@ -2759,174 +2191,75 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
       parsed = parsed.map(r => {
         const hasMLTF = r.matchedKeywords && r.matchedKeywords.length > 0;
 
-        // 🛡️ Rule 1: TRUE_HIT confidence < 0.75 → downgrade to IRRELEVANT_MLTF
-        if (r.cls === 'TRUE_HIT' && r.confidence < 0.75) {
-          return { ...r, cls: 'IRRELEVANT_MLTF', reason: `[Auto-downgraded: confidence ${r.confidence} < 0.75] ${r.reason}`, riskCat: 'N/A (Low Confidence)' };
-        }
+        // ═══════════════════════════════════════════════════════
+// 🛡️ POST-PROCESSING — Minimal sanity checks only
+// ═══════════════════════════════════════════════════════
+// Philosophy: Trust the model's reasoning. Only catch egregious errors.
 
-        // 🛡️ Rule 2: TRUE_HIT with empty matchedKeywords → downgrade to IRRELEVANT_MLTF
-        if (r.cls === 'TRUE_HIT' && r.matchedKeywords.length === 0) {
-          return { ...r, cls: 'IRRELEVANT_MLTF', reason: `[Auto-downgraded: no matched keywords] ${r.reason}`, riskCat: 'N/A (No Keywords)' };
-        }
+// Name normalization helpers (Asian ↔ Western surname order)
+const normalizeNameTokens = (name) => {
+  if (!name) return [];
+  return String(name).toLowerCase()
+    .replace(/[.,;:'"\-()]/g, ' ')
+    .split(/\s+/)
+    .filter(t => t.length > 1);
+};
 
+const hasOnlyLatinChars = (name) => name && /^[\x00-\x7F\s]+$/.test(String(name));
 
-                // 🛡️ Rule 2.5 🆕: Detect "Chan Tai Man" vs "Tai Man Chan" case
-        //    AI may have flagged as NAME_SIMILAR/DIFFERENT_NAME/FALSE_HIT/NO_HIT,
-        //    but tokens match unordered → it's actually the SAME PERSON.
-        if (
-          r.nameInResult &&
-          isSamePersonDifferentOrder(searchEntity, r.nameInResult) &&
-          (r.identityMatch === 'NAME_SIMILAR' ||
-           r.identityMatch === 'DIFFERENT_NAME' ||
-           r.cls === 'FALSE_HIT' ||
-           r.cls === 'NO_HIT')
-        ) {
-          const correctedIdentity = hasKnownInfo ? 'PARTIAL_MATCH' : 'NO_INFO';
-          let correctedCls;
-          if (hasMLTF) {
-            correctedCls = hasKnownInfo ? 'POSSIBLE_HIT' : 'PENDING_INFO';
-          } else {
-            correctedCls = 'IRRELEVANT_MLTF';
-          }
-          const defaultMissing = ['DOB / age', 'nationality', 'role / position', 'company affiliation', 'jurisdiction'];
-          return {
-            ...r,
-            identityMatch: correctedIdentity,
-            cls: correctedCls,
-            confidence: correctedCls === 'POSSIBLE_HIT' ? 0.60 : (correctedCls === 'PENDING_INFO' ? 0.55 : 0.45),
-            missingInfo: (correctedCls === 'PENDING_INFO' || correctedCls === 'POSSIBLE_HIT')
-              ? (r.missingInfo && r.missingInfo.length > 0 ? r.missingInfo : defaultMissing)
-              : [],
-            riskCat: hasMLTF ? r.riskCat : 'N/A',
-            reason: `[Auto-corrected: "${r.nameInResult}" and "${searchEntity}" are the same person — Asian surname-first vs Western surname-last convention.] ${r.reason}`
-          };
-        }
+const isSamePersonDifferentOrder = (name1, name2) => {
+  if (!name1 || !name2) return false;
+  if (!hasOnlyLatinChars(name1) || !hasOnlyLatinChars(name2)) return false;
+  const t1 = normalizeNameTokens(name1);
+  const t2 = normalizeNameTokens(name2);
+  if (t1.length === 0 || t2.length === 0) return false;
+  if (t1.length !== t2.length) return false;
+  if (t1.join(' ') === t2.join(' ')) return false;
+  return [...t1].sort().join(' ') === [...t2].sort().join(' ');
+};
 
-
-        // 🛡️ Rule 3 🆕: identityMatch=NAME_SIMILAR → ALWAYS FALSE_HIT
-        //    (regardless of cls AI assigned — name is the strongest signal)
-        if (r.identityMatch === 'NAME_SIMILAR' && r.cls !== 'FALSE_HIT' && r.cls !== 'NO_HIT') {
-          return {
-            ...r,
-            cls: 'FALSE_HIT',
-            confidence: Math.max(r.confidence || 0.7, 0.80),
-            riskCat: 'N/A (Different Person)',
-            reason: `[Auto-corrected: name "${r.nameInResult || 'in result'}" is similar but NOT exact to "${searchEntity}" — different individual.] ${r.reason}`
-          };
-        }
-
-        // 🛡️ Rule 4: No KNOWN INFO + NAME_EXACT + ML/TF content
-        //           → MUST be PENDING_INFO (block TRUE_HIT/POSSIBLE_HIT upgrades)
-        if (
-          !hasKnownInfo &&
-          (r.identityMatch === 'NO_INFO' || r.identityMatch === 'PARTIAL_MATCH' || r.identityMatch === 'FULL_MATCH') &&
-          hasMLTF &&
-          (r.cls === 'TRUE_HIT' || r.cls === 'POSSIBLE_HIT')
-        ) {
-          const defaultMissing = ['DOB / age', 'nationality', 'role / position', 'company affiliation', 'jurisdiction'];
-          return {
-            ...r,
-            cls: 'PENDING_INFO',
-            identityMatch: 'NO_INFO',
-            confidence: Math.min(r.confidence || 0.5, 0.60),
-            missingInfo: r.missingInfo && r.missingInfo.length > 0 ? r.missingInfo : defaultMissing,
-            reason: `[Auto-downgraded: no KNOWN INFO provided — identity cannot be confirmed; awaiting CDD identifiers.] ${r.reason}`
-          };
-        }
-
-        // 🛡️ Rule 5: identityMatch=CONTRADICTED → force FALSE_HIT
-        if (r.identityMatch === 'CONTRADICTED' && r.cls !== 'FALSE_HIT' && r.cls !== 'NO_HIT') {
-          return {
-            ...r,
-            cls: 'FALSE_HIT',
-            confidence: Math.max(r.confidence || 0.7, 0.75),
-            reason: `[Auto-corrected: KNOWN INFO contradicts — different person.] ${r.reason}`
-          };
-        }
-
-        // 🛡️ Rule 6: identityMatch=FULL/PARTIAL + NO ML/TF + cls=NO_HIT
-        //           → upgrade to IRRELEVANT_MLTF (audit trail)
-        if (
-          (r.identityMatch === 'FULL_MATCH' || r.identityMatch === 'PARTIAL_MATCH') &&
-          !hasMLTF &&
-          r.cls === 'NO_HIT'
-        ) {
-          return {
-            ...r,
-            cls: 'IRRELEVANT_MLTF',
-            confidence: Math.min(r.confidence || 0.5, 0.50),
-            reason: `[Auto-upgraded: identity matches KNOWN INFO but content is non-ML/TF — documented as reviewed.] ${r.reason}`
-          };
-        }
-
-        // 🛡️ Rule 7 🆕: Catch "FALSE_HIT due to role" when matter is actually
-//                out-of-scope for ML/TF — upgrade to IRRELEVANT_MLTF
-//                (IRRELEVANT_MLTF is a stronger upstream filter than FALSE_HIT)
-if (r.cls === 'FALSE_HIT') {
-  const reasonLower = (r.reason || '').toLowerCase();
-  const snippetLower = (r.snippet || '').toLowerCase();
-  const titleLower = (r.title || '').toLowerCase();
-  const combined = `${reasonLower} ${snippetLower} ${titleLower}`;
-
-  // Signal 1: AI's stated FALSE_HIT reason invokes ROLE (successor/witness/
-  //           victim/family) — not identity contradiction
-  const isRoleBasedFalseHit =
-    /\b(successor|appointee|appointed|replac\w+|new\s+(?:president|ceo|chairman|director))\b/i.test(combined) ||
-    /\b(witness|whistleblower|victim|family\s+member|spouse|relative)\b/i.test(combined) ||
-    reasonLower.includes('role:') ||
-    reasonLower.includes('not the (?:wrongdoer|subject|actor)');
-
-  // Signal 2: The underlying matter is clearly OUT-OF-SCOPE for ML/TF
-  const outOfScopePatterns = [
-    /crude\s+oil\s+resell/i,
-    /oil\s+resell/i,
-    /reselling.*?(?:refineries|refiner|teapot)/i,
-    /soe.*?internal\s+rule/i,
-    /state[- ]owned.*?internal/i,
-    /quota\s+(?:diversion|violation)/i,
-    /antitrust\s+(?:probe|review|investigation)/i,
-    /listing[- ]rule\s+breach/i,
-    /disclosure\s+violation/i,
-    /commercial\s+(?:dispute|breach|litigation)/i,
-    /contract\s+dispute/i,
-    /civil\s+(?:lawsuit|suit|litigation)(?!.*?fraud)/i,
-    /defamation/i,
-    /patent\s+(?:infringement|dispute)/i,
-    /trademark\s+(?:infringement|dispute)/i,
-    /environmental\s+(?:fine|violation)(?!.*?criminal)/i,
-    /personnel\s+(?:reshuffle|change|appointment)/i,
-  ];
-  const isOutOfScopeMatter = outOfScopePatterns.some(p => p.test(combined));
-
-  // Signal 3: NO strong ML/TF indicators in the result
-  const strongMLTFTerms = [
-    /money\s*launder/i, /洗錢/, /洗钱/,
-    /terrorist\s+financ/i, /恐怖.*?融資/, /恐怖.*?融资/,
-    /sanction(?:s|ed|ing)\b.*?(?:list|designat|evas|violat)/i,
-    /制裁.*?(?:名單|名单|規避|规避|違反|违反)/,
-    /ofac.*?sdn/i,
-    /\bproliferation\s+financ/i,
-    /human\s+trafficking/i, /人口販運/, /人口贩运/,
-    /drug\s+trafficking/i, /毒品.*?販運/, /毒品.*?贩运/,
-    /\b(?:fcpa|ukba|icac)\b/i,
-    /bribery.*?(?:charge|conviction|indictment)/i,
-    /賄賂.*?(?:檢控|起訴|定罪)/, /贿赂.*?(?:检控|起诉|定罪)/,
-  ];
-  const hasStrongMLTFSignal = strongMLTFTerms.some(p => p.test(combined));
-
-  // ⚡ Trigger: role-based FALSE_HIT + out-of-scope matter + no strong ML/TF
-  if (isRoleBasedFalseHit && isOutOfScopeMatter && !hasStrongMLTFSignal) {
+parsed = parsed.map(r => {
+  
+  // 🛡️ Sanity 1: TRUE_HIT confidence < 0.75 → downgrade
+  if (r.cls === 'TRUE_HIT' && r.confidence < 0.75) {
     return {
       ...r,
       cls: 'IRRELEVANT_MLTF',
-      confidence: Math.min(r.confidence || 0.5, 0.55),
-      riskCat: 'N/A (Out-of-Scope Matter)',
-      reason: `[Auto-upgraded FALSE_HIT → IRRELEVANT_MLTF: the underlying matter is outside ML/TF screening scope (commercial/regulatory, not a predicate offense). Role analysis is moot when the matter itself doesn't concern us.] ${r.reason}`,
+      riskCat: 'N/A (Low Confidence)',
+      reason: `[Auto: TRUE_HIT requires confidence ≥ 0.75, got ${r.confidence}] ${r.reason}`
     };
-    }
-   }
-     return r;
-    });
+  }
+
+  // 🛡️ Sanity 2: TRUE_HIT with no matched keywords → downgrade
+  if (r.cls === 'TRUE_HIT' && (!r.matchedKeywords || r.matchedKeywords.length === 0)) {
+    return {
+      ...r,
+      cls: 'IRRELEVANT_MLTF',
+      riskCat: 'N/A (No Keywords)',
+      reason: `[Auto: TRUE_HIT requires non-empty matchedKeywords] ${r.reason}`
+    };
+  }
+
+  // 🛡️ Utility: Asian/Western name order normalization
+  // "Chan Tai Man" ↔ "Tai Man Chan" should be treated as same person
+  if (
+    r.nameInResult &&
+    isSamePersonDifferentOrder(searchEntity, r.nameInResult) &&
+    (r.identityMatch === 'NAME_SIMILAR' || r.identityMatch === 'DIFFERENT_NAME' ||
+     r.cls === 'FALSE_HIT' || r.cls === 'NO_HIT')
+  ) {
+    const hasMLTF = r.matchedKeywords && r.matchedKeywords.length > 0;
+    return {
+      ...r,
+      identityMatch: 'FULL_MATCH',
+      cls: hasMLTF ? r.cls === 'FALSE_HIT' ? 'TRUE_HIT' : 'TRUE_HIT' : 'IRRELEVANT_MLTF',
+      confidence: hasMLTF ? Math.max(r.confidence, 0.75) : 0.45,
+      reason: `[Auto: "${r.nameInResult}" = "${searchEntity}" — same person, Asian/Western surname-order variant] ${r.reason}`
+    };
+  }
+
+  return r;
+});
         
        
       // ════════════════════════════════════════════════════════════
