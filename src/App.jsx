@@ -1643,13 +1643,27 @@ ${urlAnchorBlock}
 STEP 1 — LOCATE: Find the "--- PAGE CONTENT: <url> ---" block matching this URL/anchor
         in the data section below.
 
-STEP 2 — READ:
+STEP 2 — READ & SCORE EVIDENCE STRENGTH:
         IF page content block exists → READ THE FULL ARTICLE BODY.
-                                       Classification MUST be based on body.
-                                       Set retrievalStatus = "FULL_BODY".
-        IF NO page content block      → use the PDF snippet only.
-                                       CAP confidence at 0.65.
-                                       Set retrievalStatus = "SNIPPET_ONLY".
+                                       retrievalStatus = "FULL_BODY".
+                                       Apply FULL_BODY confidence scale.
+        IF NO page content block      → analyze the PDF snippet carefully.
+                                       retrievalStatus = "SNIPPET_ONLY".
+                                       
+                                       Score snippet strength:
+                                       Count how many of these are present:
+                                       □ Target entity name (explicit)
+                                       □ Named regulator/court/agency
+                                       □ Specific enforcement action with detail
+                                         (fine $$, indictment, conviction, NPA, DPA,
+                                          settlement, forfeiture, designation)
+                                       □ ML/TF predicate keyword in context
+                                       
+                                       4/4 → STRONG → cap 0.85 (TRUE_HIT possible)
+                                       2-3 → MEDIUM → cap 0.70
+                                       0-1 → WEAK → cap 0.55
+                                       
+                                       Set evidenceStrength accordingly.
 
 STEP 3 — IDENTIFY SUBJECT: Who is the grammatical subject of any wrongdoing
         described in the article?
@@ -1772,13 +1786,34 @@ Pattern C — EMPLOYER/PLAINTIFF:
 - "Chan Tai Man" = "Tai Man Chan" (Latin surname-order swap → SAME person).
 - "Mary Wong" ≠ "Mary Wang" (Latin token mismatch → FALSE_HIT).
 
-## Confidence Calibration
-- 0.90-1.00: Official designation / conviction / regulator order + full body read
-- 0.75-0.89: Mainstream media + named regulator + specific allegation + identifiers + full body
-- 0.60-0.74: Single source OR partial identifier OR snippet-only
-- < 0.60: Insufficient → NO_HIT or IRRELEVANT_MLTF
+## Confidence Calibration (revised for snippet realities)
+
+For FULL_BODY (scraped article body):
+- 0.90-1.00: Official designation / conviction / regulator enforcement order
+- 0.75-0.89: Mainstream media + regulator + specific allegation + identifiers match
+- 0.60-0.74: Single source OR partial identifier corroboration  
+- < 0.60: Insufficient evidence
+
+For SNIPPET_ONLY (scrape failed / paywalled / blocked):
+🟢 STRONG snippet evidence = ALL FOUR present:
+   (a) target entity name explicit (not paraphrased)
+   (b) named regulator/authority (DOJ, ICE, OFAC, Treasury, HKMA, SFC, MAS, 
+       FCA, FinCEN, SEC, CBI, ICAC, etc.)
+   (c) specific enforcement action (fine, prosecution, conviction, forfeiture,
+       sanctions designation, indictment, settlement, non-prosecution agreement)
+   (d) ML/TF predicate (laundering, fraud, evasion, bribery, sanctions, 
+       trafficking, terrorist financing)
+   → cap confidence at 0.85 (allows TRUE_HIT)
+
+🟡 MEDIUM snippet evidence = 2-3 of above present:
+   → cap confidence at 0.70
+
+🔴 WEAK snippet evidence = 0-1 of above:
+   → cap confidence at 0.55
 
 ⚠️ TRUE_HIT REQUIRES: confidence ≥ 0.75 AND non-empty matchedKeywords.
+   → STRONG snippet CAN reach TRUE_HIT (0.75-0.85).
+   → MEDIUM/WEAK snippet → IRRELEVANT_MLTF or NO_HIT.
 
 ## PDF Parsing Hygiene
 - Skip "AI Overview" / "AI 概覽" auto-summary sections.
@@ -2262,17 +2297,44 @@ const isSamePersonDifferentOrder = (name1, name2) => {
 
 parsed = parsed.map(r => {
   
-  // 🛡️ Sanity 1: TRUE_HIT confidence < 0.75 → downgrade
+ // 🛡️ Sanity 1: TRUE_HIT 降級 — but ONLY if snippet evidence is genuinely weak
   if (r.cls === 'TRUE_HIT' && r.confidence < 0.75) {
+    const text = `${r.title || ''} ${r.snippet || ''} ${r.reason || ''}`.toLowerCase();
+    
+    // 4-factor snippet strength check
+    const hasTarget = r.nameInResult && r.nameInResult.length > 2;
+    
+    const regulatorPattern = /\b(doj|department of justice|ofac|fincen|sec|cftc|fbi|hsi|ice|cbp|treasury|finra|fca|hkma|sfc|ica|icac|csrc|cbirc|mas|asic|austrac|fdic|occ|cfpb|nca|serious fraud office|sfo|bafin|finma|cssf|amf|esma|eba|finanstilsynet|adgm|fsra|qfc|fsa|jfsa|kfsa|fsma|fsmc|cima|bma|gfsc|cifsc|fiu|interpol|europol|cbi|ed|cbic|ncb|enforcement directorate)\b/i;
+    const hasRegulator = regulatorPattern.test(text);
+    
+    const actionPattern = /\b(fine|fined|penalty|penalties|forfeiture|forfeit|prosecution|prosecuted|indict|indictment|conviction|convicted|sentence|sentenced|plead|pleaded|settlement|settled|consent order|non-prosecution|deferred prosecution|npa|dpa|enforcement action|sanctions designation|designated|sdn list|added to|charge|charged|investigation|raid|seized|seizure|guilty|jailed)\b/i;
+    const hasAction = actionPattern.test(text);
+    
+    const mltfPattern = /\b(launder|laundering|money laundering|terror|terrorist financing|fraud|bribery|corruption|tax evasion|tax fraud|trafficking|sanctions evasion|embezzlement|kickback|illicit|illegal|criminal|smuggling|customs fraud|wire fraud|securities fraud|aml|cft|fcpa|ukba|proliferation)\b/i;
+    const hasMLTF = mltfPattern.test(text);
+    
+    const strength = [hasTarget, hasRegulator, hasAction, hasMLTF].filter(Boolean).length;
+    
+    // STRONG snippet (4/4): 提升 confidence 到 0.78 + 保留 TRUE_HIT
+    if (strength >= 4) {
+      console.log(`✅ Strong snippet rescued #${r.rank}: ${strength}/4 evidence factors`);
+      return {
+        ...r,
+        confidence: Math.max(r.confidence, 0.78),
+        reason: `[Auto: Strong snippet evidence retained TRUE_HIT — ${strength}/4 factors: target+regulator+action+ML/TF] ${r.reason}`
+      };
+    }
+    
+    // MEDIUM/WEAK snippet: 真正降級
     return {
       ...r,
       cls: 'IRRELEVANT_MLTF',
-      riskCat: 'N/A (Low Confidence)',
-      reason: `[Auto: TRUE_HIT requires confidence ≥ 0.75, got ${r.confidence}] ${r.reason}`
+      riskCat: `N/A (Snippet evidence ${strength}/4, conf ${r.confidence})`,
+      reason: `[Auto: Insufficient evidence for TRUE_HIT — only ${strength}/4 snippet factors present, confidence ${r.confidence}] ${r.reason}`
     };
   }
 
-  // 🛡️ Sanity 2: TRUE_HIT with no matched keywords → downgrade
+  // 🛡️ Sanity 2: TRUE_HIT 必須有 matched keywords
   if (r.cls === 'TRUE_HIT' && (!r.matchedKeywords || r.matchedKeywords.length === 0)) {
     return {
       ...r,
