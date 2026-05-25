@@ -427,7 +427,7 @@ const i18n = {
     companies: 'companies', persons: 'persons', entitiesRatedHigh: 'Entities rated High', pastNextReview: 'Past next review date',
     riskDistribution: 'Risk Distribution', entityTypes: 'Entity Types', avgRiskScoreTrend: 'Avg Risk Score Trend', autoTodos: 'Auto-Generated Todos',
     noPendingTodos: '✅ No pending todos', urgentItems: 'urgent items',
-    addEntity: '+ Add Entity', selected: 'selected', clear: 'Clear',
+    addEntity: '+ Add Entity', selected: 'selected', clear: 'Clear', clearSelection: 'Clear Selection',
     name: 'Name', type: 'Type', jurisdiction: 'Jurisdiction', risk: 'Risk', flags: 'Flags', docs: 'Docs', actions: 'Actions', delete: 'Delete',
     overview: 'Overview', documents: 'Documents', screening: 'Screening', str: 'STR', notes: 'Notes', riskTab: 'Risk',
     lastReview: 'Last Review', nextReview: 'Next Review', pep: 'PEP', sanctioned: 'Sanctioned', negativeNews: 'Negative News',
@@ -560,7 +560,7 @@ const i18n = {
     companies: '間公司', persons: '位自然人', entitiesRatedHigh: '高風險實體', pastNextReview: '已逾期',
     riskDistribution: '風險分佈', entityTypes: '實體類型', avgRiskScoreTrend: '平均風險趨勢', autoTodos: '自動待辦',
     noPendingTodos: '✅ 無待辦', urgentItems: '項緊急',
-    addEntity: '+ 新增實體', selected: '已選', clear: '清除',
+    addEntity: '+ 新增實體', selected: '已選', clear: '清除', clearSelection: '取消選取',
     name: '名稱', type: '類型', jurisdiction: '管轄地', risk: '風險', flags: '標記', docs: '文件', actions: '操作', delete: '刪除',
     overview: '總覽', documents: '文件', screening: '篩查', str: 'STR', notes: '備註', riskTab: '風險',
     lastReview: '上次審查', nextReview: '下次審查', pep: 'PEP 政治敏感人物', sanctioned: '受制裁', negativeNews: '負面新聞',
@@ -735,6 +735,8 @@ const ZH_KEYWORDS_CN = [
   '调查', '洗钱', '诉讼', '处罚', '检举',
   '制裁', '恐怖分子', '贩运', '洗钱', '反洗钱'
 ];
+
+const ZH_KEYWORDS_TW = ZH_KEYWORDS;
 
 function buildQueryAuto(entityName) {
   // 🆕 用詳細偵測,區分 en / zh_tw / zh_cn
@@ -4798,34 +4800,25 @@ export default function KYCSystem() {
 
         {/* ✅ Adverse Media Tab */}
           <div className={detailTab === 'adverseMedia' ? 'pb-2' : 'hidden'}>
-          <AdverseMediaScreening key={`ams-${ent.id}`} entityName={ent.name} onFlagSTR={(info) => {
-            updateEntity(ent.id, {
-              str: {
-                flagged: true,
-                submittedDate: null,
-                mlroApproved: false,
-                mlroDate: null,
-                _source: info.source,
-                _detail: `${info.title} | Risk: ${info.riskCat} | Confidence: ${Math.round(info.confidence * 100)}%`,
-              }
-            });
-            // 自動加入備註
-            updateEntity(ent.id, {
-              str: {
-                flagged: true,
-                submittedDate: null,
-                mlroApproved: false,
-                mlroDate: null,
-              },
-              notes: [...ent.notes, {
-                id: gid(),
-                text: `🚨 STR flagged via ${info.source}: "${info.title}" (${info.riskCat}, ${Math.round(info.confidence * 100)}% confidence)`,
-                date: today,
-                author: 'System',
-              }],
-            });
-            showToast(lang === 'zh' ? '🚨 已標記 STR 並新增備註' : '🚨 STR flagged & note added');
-          }} />
+         <AdverseMediaScreening key={`ams-${ent.id}`} entityName={ent.name} onFlagSTR={(info) => {
+  updateEntity(ent.id, {
+    str: {
+      flagged: true,
+      submittedDate: null,
+      mlroApproved: false,
+      mlroDate: null,
+      _source: info.source,
+      _detail: `${info.title} | Risk: ${info.riskCat} | Confidence: ${Math.round(info.confidence * 100)}%`,
+    },
+    notes: [...ent.notes, {
+      id: gid(),
+      text: `🚨 STR flagged via ${info.source}: "${info.title}" (${info.riskCat}, ${Math.round(info.confidence * 100)}% confidence)`,
+      date: today,
+      author: 'System',
+    }],
+  });
+  showToast(lang === 'zh' ? '🚨 已標記 STR 並新增備註' : '🚨 STR flagged & note added');
+}} />
         </div>
 
         <div className={detailTab === 'sanctionScreening' ? 'pb-2' : 'hidden'}>
