@@ -1529,6 +1529,81 @@ const resolveBreadcrumb = async ({ domain, pathHint, title }) => {
     return { url: null, query: '', error: e.message };
   }
 };
+
+/**
+ * 🆕 Fix 3: Poe Web-Search bot pre-search enrichment
+ * 仿真 Poe Chat 嘅 auto-browsing 行為 —
+ * 喺主分析之前先用 Poe 嘅 dedicated Web-Search bot 搜集 entity 背景,
+ * 包括中文名、role、listed company affiliation 等。
+ *
+ * 重要:只用真正有 web search capability 嘅 bot,
+ *      絕對唔 fall back 去 model training data(防止 hallucination)。
+ *      如果 Web-Search bot 失敗(plan 唔包 / quota 用完 / 等等),
+ *      就 silently skip,主分析 flow 唔受影響。
+ */
+const enrichWithPoeWebSearch = async (entityName, apiKeyVal, knownInfo) => {
+  if (!entityName || !apiKeyVal) return null;
+
+  const knownInfoStr = knownInfo && Object.values(knownInfo).some(v => v && String(v).trim())
+    ? formatEntityContext(knownInfo)
+    : '';
+
+  const searchPrompt = `Search the web for FACTUAL information about this entity for KYC/AML screening:
+
+ENTITY: "${entityName}"
+${knownInfoStr ? `\nKYC team context:\n${knownInfoStr}\n` : ''}
+Find specifically (only state what is verifiable from public sources):
+1. Chinese name(s) / 中文姓名 / aliases / romanization variants
+2. Current and past roles (director / CEO / shareholder of which company)
+3. Listed company affiliations (HKEX / SSE / SGX / NASDAQ etc.) with stock codes if known
+4. Jurisdictions of operation
+5. Any publicly reported regulatory enforcement or legal proceedings (facts only, no speculation)
+
+Constraints:
+- Maximum 400 words.
+- Stick strictly to verifiable public information. NEVER fabricate.
+- If web search returns NOTHING relevant or you have no factual data, output ONLY: "NO_BACKGROUND_AVAILABLE"
+- Cite source URLs at the end.`;
+
+  try {
+    const res = await fetch('https://api.poe.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKeyVal.trim()}`,
+      },
+      body: JSON.stringify({
+        model: 'Web-Search',
+        messages: [
+          { role: 'user', content: searchPrompt }
+        ],
+        temperature: 0.1,
+        max_tokens: 1000,
+      }),
+    });
+
+    if (!res.ok) {
+      console.warn(`⚠️ Poe Web-Search HTTP ${res.status} — bot may not be available, skipping`);
+      return null;
+    }
+
+    const data = await res.json();
+    const text = data?.choices?.[0]?.message?.content || '';
+
+    if (!text || text.length < 80 || text.includes('NO_BACKGROUND_AVAILABLE')) {
+      console.log(`⏭️ Poe Web-Search returned no useful background (${text.length} chars)`);
+      return null;
+    }
+
+    console.log(`✅ Poe Web-Search pre-search succeeded (${text.length} chars of context)`);
+    return text;
+  } catch (e) {
+    console.warn(`⚠️ Poe Web-Search exception (skipping):`, e.message);
+    return null;
+  }
+};
+
+  
   const extractUrlsFromPdf = (pdfText) => {
   const urlRegex = /https?:\/\/[^\s)>\]"'›\n]+/g;
   const rawUrls = pdfText.match(urlRegex) || [];
@@ -2207,6 +2282,39 @@ PAGE-CONTENT SCRAPING:
   console.log(`📊 Final pipeline stats:`, scrapeStats);
 }
 
+enrichedContent = scrapeSummary + '\n' + enrichedContent;
+  console.log(`📊 Final pipeline stats:`, scrapeStats);
+}
+
+// ═══════════════════════════════════════════════════════════
+// 🆕 Fix 3: Poe Web-Search 預檢索(仿真 Poe Chat auto-browsing)
+// ═══════════════════════════════════════════════════════════
+setProgress(43);
+setStage('正在向 Poe Web-Search 取得實體背景...');
+const preSearchContext = await enrichWithPoeWebSearch(searchEntity, apiKey, entityContext);
+if (preSearchContext) {
+  const block = `\n=== 🌐 ENTITY BACKGROUND (Poe Web-Search Pre-Research) ===
+This is supplementary background research on the entity, retrieved from Poe's web search bot.
+Use this to:
+  • Disambiguate same-name cases (verify Chinese name / role / affiliation match)
+  • Cross-reference snippet claims against known facts
+  • Identify aliases or romanization variants the article may use
+DO NOT cite this section as primary evidence — only use it for entity disambiguation.
+
+${preSearchContext}
+=== END BACKGROUND ===\n\n`;
+  enrichedContent = block + enrichedContent;
+  console.log(`📚 Pre-search context prepended (${preSearchContext.length} chars)`);
+} else {
+  console.log(`⏭️ Pre-search skipped — proceeding with PDF + scraped content only`);
+}
+
+setProgress(45); setStage('Poe AI 分析中...');
+
+/* ★ 用真實的 resultUrls 數量,移除舊的 externalUrlCount 計算 */
+const resultCount = resultUrls.length > 0 ? resultUrls.length : 10;
+
+      
 setProgress(45); setStage('Poe AI 分析中...');
 
 /* ★ 用真實的 resultUrls 數量,移除舊的 externalUrlCount 計算 */
@@ -2356,14 +2464,23 @@ parsed = parsed.map(r => {
     // 4-factor snippet strength check
     const hasTarget = r.nameInResult && r.nameInResult.length > 2;
     
-const regulatorPattern = /\b(doj|department of justice|ofac|fincen|sec|cftc|fbi|hsi|homeland security investigations?|ice|u\.?s\.? immigration and customs enforcement|cbp|customs and border protection|treasury|irs|irs-ci|bis|bureau of industry and security|state department|finra|fca|hkma|sfc|ica|icac|csrc|cbirc|mas|asic|austrac|fdic|occ|cfpb|nca|serious fraud office|sfo|bafin|finma|cssf|amf|esma|eba|adgm|fsra|qfc|jfsa|fsma|cima|bma|gfsc|fiu|interpol|europol|cbi|enforcement directorate|federal prosecutor|prosecutor|u\.?s\.? attorney)\b/i;
-const hasRegulator = regulatorPattern.test(text);
+// === 🆕 Fix 1: English + Chinese (繁簡) regex 分開判斷,因為 \b 唔識 CJK ===
+    
+    // 1️⃣ Regulator / Authority
+    const regulatorPatternEN = /\b(doj|department of justice|ofac|fincen|sec|cftc|fbi|hsi|homeland security investigations?|ice|u\.?s\.? immigration and customs enforcement|cbp|customs and border protection|treasury|irs|irs-ci|bis|bureau of industry and security|state department|finra|fca|hkma|sfc|ica|icac|csrc|cbirc|mas|asic|austrac|fdic|occ|cfpb|nca|serious fraud office|sfo|bafin|finma|cssf|amf|esma|eba|adgm|fsra|qfc|jfsa|fsma|cima|bma|gfsc|fiu|interpol|europol|cbi|enforcement directorate|federal prosecutor|prosecutor|u\.?s\.? attorney)\b/i;
+    const regulatorPatternZH = /(廉署|廉政公署|廉政總署|金管局|香港金融管理局|證監會|香港證券及期貨事務監察委員會|司法部|海關|警方|警務處|香港警務處|檢察院|海關總署|稅務局|稅局|律政司|公安部|公安|檢察|中國人民銀行|中國證券監督管理委員會|中國銀保監會|銀保監|外管局|外匯管理局|新加坡金融管理局|金管會|證期局|法務部|地檢署|高檢署|最高檢察署|司法院|央行|新華社|检察院|海关|公安|检察|证监会|银保监|央行|纪委|国家监察委)/;
+    const hasRegulator = regulatorPatternEN.test(text) || regulatorPatternZH.test(text);
 
-const actionPattern = /\b(fine|fined|penalty|penalties|forfeit|forfeiture|prosecut|indict|indictment|conviction|convicted|sentence|sentenced|plead|pleaded|settlement|settled|consent order|non[\s-]?prosecution agreement|\bnpa\b|deferred prosecution|\bdpa\b|enforcement action|sanctions? designation|designated|sdn list|added to (the )?list|charge|charged|investigation|raid|seized|seizure|guilty|jailed|debar|debarment|cease and desist|disgorge|asset freeze|asset seizure)\b/i;
-const hasAction = actionPattern.test(text);
+    // 2️⃣ Enforcement action
+    const actionPatternEN = /\b(fine|fined|penalty|penalties|forfeit|forfeiture|prosecut|indict|indictment|conviction|convicted|sentence|sentenced|plead|pleaded|settlement|settled|consent order|non[\s-]?prosecution agreement|\bnpa\b|deferred prosecution|\bdpa\b|enforcement action|sanctions? designation|designated|sdn list|added to (the )?list|charge|charged|investigation|raid|seized|seizure|guilty|jailed|debar|debarment|cease and desist|disgorge|asset freeze|asset seizure)\b/i;
+    const actionPatternZH = /(罰款|罰金|處罰|沒收|充公|起訴|檢控|檢舉|控告|定罪|判刑|入罪|認罪|和解|調查|查處|查辦|偵查|偵辦|逮捕|拘捕|拘留|羈押|搜查|查封|凍結|資產凍結|資產充公|凍結資產|制裁|被制裁|遭制裁|列入名單|列入制裁|警告信|譴責|處分|懲處|懲罰|入禀|入稟|提堂|押後|候判|罚款|处罚|起诉|检控|定罪|判刑|和解|调查|逮捕|查封|冻结|制裁|处分|惩处|入狱|监禁|判处|判决)/;
+    const hasAction = actionPatternEN.test(text) || actionPatternZH.test(text);
 
-const mltfPattern = /\b(launder|laundering|money laundering|terror|terrorist financing|fraud|bribery|corruption|tax evasion|tax fraud|trafficking|sanctions evasion|sanctions violation|embezzlement|kickback|illicit|illegal|criminal|smuggling|customs fraud|customs violation|wire fraud|securities fraud|\baml\b|\bcft\b|fcpa|ukba|proliferation|export control|export violation|export law|ear violation|itar violation|misclassif|undervalu|false declaration|falsified declaration|misrepresent|evade duties|evade tax|evade sanctions|dual-use|illicit transfer)\b/i;
-const hasMLTF = mltfPattern.test(text);
+    // 3️⃣ ML/TF predicate
+    const mltfPatternEN = /\b(launder|laundering|money laundering|terror|terrorist financing|fraud|bribery|corruption|tax evasion|tax fraud|trafficking|sanctions evasion|sanctions violation|embezzlement|kickback|illicit|illegal|criminal|smuggling|customs fraud|customs violation|wire fraud|securities fraud|\baml\b|\bcft\b|fcpa|ukba|proliferation|export control|export violation|export law|ear violation|itar violation|misclassif|undervalu|false declaration|falsified declaration|misrepresent|evade duties|evade tax|evade sanctions|dual-use|illicit transfer)\b/i;
+    const mltfPatternZH = /(洗錢|清洗黑錢|反洗錢|恐怖融資|恐怖分子融資|資恐|資助恐怖|詐騙|欺詐|詐欺|行賄|受賄|賄賂|貪污|貪腐|腐敗|逃稅|漏稅|逃漏稅|販毒|販運|人口販運|販賣人口|武器走私|軍火走私|走私|侵占|挪用|盜用|犯罪|刑事|非法|違法|出口管制|出口違規|海關詐欺|海關詐騙|證券詐欺|電信詐欺|電匯詐欺|銀行詐欺|郵件詐欺|金融詐欺|商業詐欺|逃避制裁|規避制裁|制裁規避|擴散融資|大規模殺傷性武器|內幕交易|操縱市場|市場操縱|空殼公司|地下錢莊|地下钱庄|洗钱|反洗钱|恐怖融资|资恐|资助恐怖|诈骗|欺诈|行贿|受贿|贿赂|贪污|贪腐|腐败|逃税|漏税|贩毒|贩运|人口贩运|武器走私|侵占|挪用|犯罪|刑事|非法|违法|出口管制|海关欺诈|证券欺诈|逃避制裁|规避制裁|内幕交易|操纵市场|空壳公司)/;
+    const hasMLTF = mltfPatternEN.test(text) || mltfPatternZH.test(text);
+    // === END Fix 1 ===
     
     const strength = [hasTarget, hasRegulator, hasAction, hasMLTF].filter(Boolean).length;
     
@@ -2423,9 +2540,18 @@ const hasMLTF = mltfPattern.test(text);
       // 只針對 Stage 1 嘅 TRUE_HIT / POSSIBLE_HIT 做第二輪分析
       // 專門識別:target 係主角定係接替者 / 證人 / 受害者
       // ════════════════════════════════════════════════════════════
-      const stage2Candidates = parsed.filter(r =>
-        (r.cls === 'TRUE_HIT' || r.cls === 'POSSIBLE_HIT') && !r._manualOverride
-      );
+      // 🆕 Fix 2a: 擴大 Stage 2 覆蓋範圍 —
+// 除咗 NO_HIT 之外,所有類別都做角色分析。
+// 原因:
+//  • IRRELEVANT_MLTF 可能其實係 TRUE_HIT(Stage 1 因為 snippet 中文 regex 漏咗而誤降級)
+//  • FALSE_HIT 可能其實係同人(Stage 1 NAME_SIMILAR 判錯)
+//  • PENDING_INFO 可以由 article body 補回身份判斷
+// extractRelevantPassages 會自動 skip 冇 target mention 嘅 article,
+// 所以新增嘅 API call 都只係用喺真係相關嘅 case,唔會大幅增加 cost。
+// Cost 估算:典型 10 個結果裡面,大約 ~3-5 個會真正觸發 LLM call。
+const stage2Candidates = parsed.filter(r =>
+  r.cls !== 'NO_HIT' && !r._manualOverride
+);
 
       if (stage2Candidates.length > 0) {
         setProgress(85);
@@ -2560,8 +2686,17 @@ stage2Results.forEach((res) => {
     };
     console.log(`📉 Stage 2 [#${s2.rank}]: ${original.cls} → ${downgrade} (role: ${s2.roleType})`);
 
-  } else if (s2.wrongdoingApplies === true && conf >= 0.70) {
+ } else if (s2.wrongdoingApplies === true && conf >= 0.70) {
     // Stage 2 CONFIRMS target IS the subject
+    
+    // 🆕 Fix 2b: 如果 Stage 1 誤判為 IRRELEVANT_MLTF / FALSE_HIT 但 Stage 2 高信心
+    //  確認 target 係主角 + 有 ML/TF matter → 升級為 TRUE_HIT。
+    //  呢個係 Fix 1 嘅 safety net(就算中文 regex 仲漏咗某啲詞,Stage 2 都會救返)。
+    const shouldUpgrade = (original.cls === 'IRRELEVANT_MLTF' || original.cls === 'FALSE_HIT')
+                       && conf >= 0.75
+                       && s2.mltfMatterExistsInArticle === true;
+    const newCls = shouldUpgrade ? 'TRUE_HIT' : original.cls;
+
     const evidenceTail = s2.evidenceQuote
       ? ` Supporting evidence from the article: "${s2.evidenceQuote}".`
       : '';
@@ -2569,12 +2704,19 @@ stage2Results.forEach((res) => {
 
     parsed[idx] = {
       ...original,
+      cls: newCls,
       confidence: Math.min(1.0, Math.max(original.confidence, conf)),
       _stage2: s2,
       _stage1Original: { cls: original.cls, reason: original.reason },
       reason: amlReason,
+      ...(shouldUpgrade ? { riskCat: 'Upgraded by Stage 2 role analysis' } : {}),
     };
-    console.log(`✅ Stage 2 [#${s2.rank}]: CONFIRMED ${original.cls} (role: ${s2.roleType})`);
+
+    if (shouldUpgrade) {
+      console.log(`📈 Stage 2 [#${s2.rank}]: ${original.cls} → TRUE_HIT (UPGRADED, role: ${s2.roleType}, conf ${conf})`);
+    } else {
+      console.log(`✅ Stage 2 [#${s2.rank}]: CONFIRMED ${original.cls} (role: ${s2.roleType})`);
+    }
 
   } else {
     // Stage 2 inconclusive — keep Stage 1 cls, but clean the reason
