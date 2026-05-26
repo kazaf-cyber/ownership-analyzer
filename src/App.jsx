@@ -2293,7 +2293,7 @@ setProgress(43);
 setStage('正在向 Poe Web-Search 取得實體背景...');
 const preSearchContext = await enrichWithPoeWebSearch(searchEntity, apiKey, entityContext);
 if (preSearchContext) {
-  const block = `\n=== 🌐 ENTITY BACKGROUND (Poe Web-Search Pre-Research) ===
+  const bgBlock = `\n=== 🌐 ENTITY BACKGROUND (Poe Web-Search Pre-Research) ===
 This is supplementary background research on the entity, retrieved from Poe's web search bot.
 Use this to:
   • Disambiguate same-name cases (verify Chinese name / role / affiliation match)
@@ -2303,17 +2303,11 @@ DO NOT cite this section as primary evidence — only use it for entity disambig
 
 ${preSearchContext}
 === END BACKGROUND ===\n\n`;
-  enrichedContent = block + enrichedContent;
+  enrichedContent = bgBlock + enrichedContent;
   console.log(`📚 Pre-search context prepended (${preSearchContext.length} chars)`);
 } else {
   console.log(`⏭️ Pre-search skipped — proceeding with PDF + scraped content only`);
 }
-
-setProgress(45); setStage('Poe AI 分析中...');
-
-/* ★ 用真實的 resultUrls 數量,移除舊的 externalUrlCount 計算 */
-const resultCount = resultUrls.length > 0 ? resultUrls.length : 10;
-
       
 setProgress(45); setStage('Poe AI 分析中...');
 
