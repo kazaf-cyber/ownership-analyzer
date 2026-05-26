@@ -2282,10 +2282,6 @@ PAGE-CONTENT SCRAPING:
   console.log(`📊 Final pipeline stats:`, scrapeStats);
 }
 
-enrichedContent = scrapeSummary + '\n' + enrichedContent;
-  console.log(`📊 Final pipeline stats:`, scrapeStats);
-}
-
 // ═══════════════════════════════════════════════════════════
 // 🆕 Fix 3: Poe Web-Search 預檢索
 // ═══════════════════════════════════════════════════════════
