@@ -2287,11 +2287,16 @@ enrichedContent = scrapeSummary + '\n' + enrichedContent;
 }
 
 // ═══════════════════════════════════════════════════════════
-// 🆕 Fix 3: Poe Web-Search 預檢索(仿真 Poe Chat auto-browsing)
+// 🆕 Fix 3: Poe Web-Search 預檢索
 // ═══════════════════════════════════════════════════════════
 setProgress(43);
 setStage('正在向 Poe Web-Search 取得實體背景...');
-const preSearchContext = await enrichWithPoeWebSearch(searchEntity, apiKey, entityContext);
+let preSearchContext = null;
+try {
+  preSearchContext = await enrichWithPoeWebSearch(searchEntity, apiKey, entityContext);
+} catch (preSearchErr) {
+  console.warn('Pre-search failed (non-fatal):', preSearchErr);
+}
 if (preSearchContext) {
   const bgBlock = `\n=== 🌐 ENTITY BACKGROUND (Poe Web-Search Pre-Research) ===
 This is supplementary background research on the entity, retrieved from Poe's web search bot.
@@ -2308,8 +2313,9 @@ ${preSearchContext}
 } else {
   console.log(`⏭️ Pre-search skipped — proceeding with PDF + scraped content only`);
 }
-      
-setProgress(45); setStage('Poe AI 分析中...');
+
+setProgress(45);
+setStage('Poe AI 分析中...');
 
 /* ★ 用真實的 resultUrls 數量,移除舊的 externalUrlCount 計算 */
 const resultCount = resultUrls.length > 0 ? resultUrls.length : 10;
