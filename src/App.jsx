@@ -2270,12 +2270,14 @@ PAGE-CONTENT SCRAPING:
   • For results WITHOUT full page content (resolve failed / social-only /
     scrape failed / too short), you ONLY have the Google snippet from the PDF.
     Snippets are short and lossy — they often quote one sentence out of context.
-    BE EXTRA CONSERVATIVE:
-      - Do NOT classify as TRUE_HIT based on snippet alone unless the snippet
-        EXPLICITLY states the screened subject IS the wrongdoer.
-      - When a snippet mentions the subject's name + a wrongdoing term together
-        but the relationship is unclear → POSSIBLE_HIT (not TRUE).
-      - Lower confidence by ~0.15 for snippet-only classifications.
+    SNIPPET HANDLING (balanced, NOT over-conservative):
+  - A snippet that clearly states "X agreed to pay $Y in fines to resolve
+    [regulator] investigation into [predicate]" IS strong TRUE_HIT evidence.
+    Do NOT downgrade these just because the full body wasn't scraped.
+  - Only downgrade when the relationship between target and wrongdoing is
+    genuinely ambiguous in the snippet text.
+  - Trust your reasoning. If your "reason" field describes a clear TRUE_HIT,
+    your "cls" field MUST be TRUE_HIT (consistency check).
 ═══════════════════════════════════════════════════════════
 `;
   enrichedContent = scrapeSummary + '\n' + enrichedContent;
@@ -2545,9 +2547,13 @@ parsed = parsed.map(r => {
 // extractRelevantPassages 會自動 skip 冇 target mention 嘅 article,
 // 所以新增嘅 API call 都只係用喺真係相關嘅 case,唔會大幅增加 cost。
 // Cost 估算:典型 10 個結果裡面,大約 ~3-5 個會真正觸發 LLM call。
-const stage2Candidates = parsed.filter(r =>
-  r.cls !== 'NO_HIT' && !r._manualOverride
-);
+// 🆕 Fix 4: Stage 2 必須覆蓋 NO_HIT —
+// 之前嘅版本只覆蓋 IRRELEVANT_MLTF / FALSE_HIT,
+// 但 Stage 1 嘅過度保守會將清楚嘅 TRUE_HIT 誤判為 NO_HIT,
+// 結果 fallback 完全失效。
+// 現改為:只要唔係 manual override,全部都做角色分析,
+// 由 extractRelevantPassages 自動 skip 冇 target mention 嘅 article。
+const stage2Candidates = parsed.filter(r => !r._manualOverride);
 
       if (stage2Candidates.length > 0) {
         setProgress(85);
@@ -2688,9 +2694,15 @@ stage2Results.forEach((res) => {
     // 🆕 Fix 2b: 如果 Stage 1 誤判為 IRRELEVANT_MLTF / FALSE_HIT 但 Stage 2 高信心
     //  確認 target 係主角 + 有 ML/TF matter → 升級為 TRUE_HIT。
     //  呢個係 Fix 1 嘅 safety net(就算中文 regex 仲漏咗某啲詞,Stage 2 都會救返)。
-    const shouldUpgrade = (original.cls === 'IRRELEVANT_MLTF' || original.cls === 'FALSE_HIT')
-                       && conf >= 0.75
-                       && s2.mltfMatterExistsInArticle === true;
+    // 🆕 Fix 4b: NO_HIT 都要可以 upgrade
+// Stage 1 嘅過度保守會將 NPA/DPA/export violations 等清楚 TRUE_HIT
+// 誤判為 NO_HIT(reasoning 講係 hit,但 cls 出 NO_HIT)。
+// 加返 NO_HIT 做 upgrade 候選。
+const shouldUpgrade = (original.cls === 'IRRELEVANT_MLTF' 
+                    || original.cls === 'FALSE_HIT'
+                    || original.cls === 'NO_HIT')
+                   && conf >= 0.75
+                   && s2.mltfMatterExistsInArticle === true;
     const newCls = shouldUpgrade ? 'TRUE_HIT' : original.cls;
 
     const evidenceTail = s2.evidenceQuote
