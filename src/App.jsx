@@ -4195,6 +4195,8 @@ export default function KYCSystem() {
   const [svgTransform, setSvgTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [hoveredNode, setHoveredNode] = useState(null);
   const [entityFilter, setEntityFilter] = useState('');
+  const [isPanning, setIsPanning] = useState(false);          // ⬅ NEW
+  const panStartRef = useRef({ x: 0, y: 0, tx: 0, ty: 0 });   // ⬅ NEW
   const [modalType, setModalType] = useState(null);
   const [modalData, setModalData] = useState({});
   const [settingsTab, setSettingsTab] = useState('weights');
@@ -4839,15 +4841,57 @@ export default function KYCSystem() {
 {/* ★ NEW: Zoom controls */}
 <button onClick={() => setSvgTransform(p => ({ ...p, scale: Math.min(3, +(p.scale + 0.2).toFixed(1)) }))} className="bg-gray-200 text-gray-600 px-2 py-1 rounded text-xs" title={t.zoomIn}>🔍+</button>
 <button onClick={() => setSvgTransform(p => ({ ...p, scale: Math.max(0.3, +(p.scale - 0.2).toFixed(1)) }))} className="bg-gray-200 text-gray-600 px-2 py-1 rounded text-xs" title={t.zoomOut}>🔍−</button>
-<button onClick={() => setSvgTransform({ x: 0, y: 0, scale: 1 })} className="bg-gray-200 text-gray-600 px-2 py-1 rounded text-xs" title={t.resetView}>↺</button>
+<button 
+  onClick={() => { 
+    setSvgTransform({ x: 0, y: 0, scale: 1 }); 
+    setIsPanning(false); 
+  }} 
+  className="bg-gray-200 text-gray-600 px-2 py-1 rounded text-xs" 
+  title={t.resetView}
+>↺</button>
 <span className="text-xs text-gray-400">{Math.round(svgTransform.scale * 100)}%</span>
 {/* ★ END NEW */}
               <button onClick={() => openModal('addRel', { sourceId: '', targetId: '', type: 'ownership', percentage: '', shares: '', description: '', inputMode: 'shares' })} className="bg-blue-600 text-white px-2 py-1 rounded text-xs">{t.addRelationship}</button>
               {dagSelected && <button onClick={() => setDagSelected(null)} className="bg-gray-200 text-gray-600 px-2 py-1 rounded text-xs">{t.clearSelection}</button>}
             </div>
-            <div className="flex-1 overflow-auto relative" onClick={() => setContextMenu(null)}>
-              <svg ref={svgRef} width={W} height={Math.max(H, 350)}
-  onWheel={e => { e.preventDefault(); setSvgTransform(p => ({ ...p, scale: Math.max(0.3, Math.min(3, +(p.scale + (e.deltaY > 0 ? -0.1 : 0.1)).toFixed(1))) })); }}>
+           <div className="flex-1 overflow-auto relative" onClick={() => setContextMenu(null)}>
+  <svg
+    ref={svgRef}
+    width={W * svgTransform.scale}                            /* ⬅ 跟 scale 變闊 → overflow-auto 識出 scrollbar */
+    height={Math.max(H, 350) * svgTransform.scale}            /* ⬅ 跟 scale 變高 */
+    style={{ cursor: isPanning ? 'grabbing' : 'grab', userSelect: 'none' }}
+    onWheel={e => {
+      e.preventDefault();
+      setSvgTransform(p => ({
+        ...p,
+        scale: Math.max(0.3, Math.min(3, +(p.scale + (e.deltaY > 0 ? -0.1 : 0.1)).toFixed(1)))
+      }));
+    }}
+    onMouseDown={e => {
+      // 只喺空白區域(SVG 本身,唔係 node)觸發 pan
+      if (e.target === e.currentTarget) {
+        setIsPanning(true);
+        panStartRef.current = {
+          x: e.clientX,
+          y: e.clientY,
+          tx: svgTransform.x,
+          ty: svgTransform.y,
+        };
+      }
+    }}
+    onMouseMove={e => {
+      if (!isPanning) return;
+      const dx = e.clientX - panStartRef.current.x;
+      const dy = e.clientY - panStartRef.current.y;
+      setSvgTransform(p => ({
+        ...p,
+        x: panStartRef.current.tx + dx,
+        y: panStartRef.current.ty + dy,
+      }));
+    }}
+    onMouseUp={() => setIsPanning(false)}
+    onMouseLeave={() => setIsPanning(false)}
+  >
               <defs>
                   <marker id="arr" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#94a3b8" /></marker>
                   <marker id="arrH" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#3b82f6" /></marker>
