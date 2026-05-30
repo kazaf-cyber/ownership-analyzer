@@ -2887,6 +2887,18 @@ stage2Results.forEach((res) => {
     return r;
   };
 
+// Strip leading "<Label>, because" or "<Label>: because" prefix from reason
+  const stripLabelPrefix = (reason) => {
+    if (!reason) return '';
+    let r = String(reason).trim();
+    r = r.replace(/^(true hit|false hit|no hit|irrelevant ml\/tf)\s*[,:]\s*/i, '');
+    r = r.replace(/^(真實命中|誤報|無命中|無關\s*ml\/tf)\s*[,:,:]\s*/i, '');
+    if (!/^because\s/i.test(r)) {
+      r = `because ${r}`;
+    }
+    return r;
+  };
+  
  const summaryText = useMemo(() => {
     if (!results.length) return '';
     return results.map((r, i) => {
@@ -2952,11 +2964,6 @@ const ResultCard = ({ r }) => {
 
     // Display reason starts with "because ..." (label is shown separately, no duplicate)
     const displayReason = stripLabelPrefix(cleanReason(r.reason));
-
-    // Build display reason — ensure "<Label>, because" prefix is present (English-only)
-    const cleanedReason = cleanReason(r.reason) || '';
-    const hasPrefix = /^(true hit|false hit|no hit|irrelevant ml\/tf)\s*,\s*because/i.test(cleanedReason);
-    const displayReason = hasPrefix ? cleanedReason : `${labelDisplay}, because ${cleanedReason}`;
 
     // Accent colour for left bar + label colour
     const accent = {
