@@ -1917,10 +1917,32 @@ Pattern C — EMPLOYER / PLAINTIFF / VICTIM:
    → Target = Shell PLC → IRRELEVANT_MLTF.
 
 ## Classification Discipline
-- Same-name uncertainty → FALSE_HIT.
-- "Chan Tai Man" = "Tai Man Chan" (Asian surname-order variant → SAME person).
-- "Mary Wong" ≠ "Mary Wang" (Latin token mismatch → FALSE_HIT).
-- "陳大文" ≠ "陳文" (Chinese token mismatch → FALSE_HIT).
+
+### For INDIVIDUAL (person) screening:
+- Strong identifier mismatch (DOB / nationality / role contradicts known info) → FALSE_HIT
+- "Chan Tai Man" = "Tai Man Chan" (Asian surname-order variant → SAME person)
+- "Mary Wong" ≠ "Mary Wang" (Latin token mismatch → FALSE_HIT)
+- "陳大文" ≠ "陳文" (Chinese token mismatch → FALSE_HIT)
+- Same-name uncertainty WITHOUT other context → PENDING_INFO (request CDD), not FALSE_HIT
+
+### For CORPORATE (company) screening:
+⚠️ Corporate entities have far less name ambiguity than individuals.
+   When the article clearly refers to the same corporate entity:
+   
+   • Has ML/TF content     → TRUE_HIT
+   • No ML/TF content      → IRRELEVANT_MLTF
+                              (e.g. ESG reports, employee profiles, awards,
+                               compliance announcements, commercial disputes
+                               unrelated to ML/TF, corporate news)
+   
+⚠️ DO NOT classify as FALSE_HIT unless:
+   1. Different jurisdiction + different industry (e.g. "ABC Holdings Pty Ltd"
+      Australian tech startup vs "ABC Holdings Ltd" Hong Kong shipping), OR
+   2. Article explicitly refers to a clearly different legal entity with the
+      same name
+      
+⚠️ "Same entity but routine business content" is IRRELEVANT_MLTF, NOT FALSE_HIT.
+   The entity IS the screened subject — just no adverse content to report.
 
 ## Reading Contract
 For ANY URL with "--- PAGE CONTENT: <url> ---" block → READ FULL BODY.
@@ -2553,12 +2575,41 @@ parsed = parsed.map(r => {
 // 結果 fallback 完全失效。
 // 現改為:只要唔係 manual override,全部都做角色分析,
 // 由 extractRelevantPassages 自動 skip 冇 target mention 嘅 article。
-const stage2Candidates = parsed.filter(r => !r._manualOverride);
+// ⭐ FIX 3: 偵測係咪公司 entity
+//   公司 entity 唔做 Stage 2 角色分析(只適用於個人姓名歧義)
+const isCompanyEntity = (() => {
+  // 1. 名稱包含公司後綴
+  const companySuffixPattern = /\b(ltd|limited|inc|incorporated|corp|corporation|co|llc|plc|gmbh|sa|ag|nv|bv|spa|srl|holdings?|group|company|enterprises?|industries|international|trading|investments?)\b\.?/i;
+  const chineseCompanyPattern = /(有限公司|股份有限公司|集團|控股|實業|企業|工業|貿易|投資|公司|商行|企業社)/;
+  
+  if (companySuffixPattern.test(searchEntity) || chineseCompanyPattern.test(searchEntity)) {
+    return true;
+  }
+  
+  // 2. 補充資料無 DOB 同 gender(個人 KYC 通常會填)
+  const hasIndividualInfo = entityContext && (entityContext.dob || entityContext.gender);
+  if (hasIndividualInfo) return false;
+  
+  // 3. 補充資料填咗「公司/職稱」但實體名唔似人名
+  if (entityContext?.company && !/^[A-Z][a-z]+\s+[A-Z][a-z]+/.test(searchEntity)) {
+    return true;
+  }
+  
+  return false;
+})();
 
-      if (stage2Candidates.length > 0) {
-        setProgress(85);
-        setStage(`Stage 2 角色分析中 (${stage2Candidates.length} 項)...`);
-        console.log(`🎯 Stage 2: re-analyzing ${stage2Candidates.length} hits for role`);
+const stage2Candidates = isCompanyEntity 
+  ? []  // ⭐ 公司 entity 信 Stage 1 結果,唔做 Stage 2
+  : parsed.filter(r => !r._manualOverride);
+
+if (isCompanyEntity) {
+  console.log(`🏢 Detected company entity "${searchEntity}" — skipping Stage 2 role analysis`);
+}
+
+if (stage2Candidates.length > 0) {
+  setProgress(85);
+  setStage(`Stage 2 角色分析中 (${stage2Candidates.length} 項)...`);
+  console.log(`🎯 Stage 2: re-analyzing ${stage2Candidates.length} hits for role`);
 
         // Build URL → full-page-content map from enrichedContent
         const pageContentMap = new Map();
@@ -2659,18 +2710,52 @@ stage2Results.forEach((res) => {
   const cleanReasoning = String(s2.reasoning || '').trim();
 
   if (s2.wrongdoingApplies === false && conf >= 0.70) {
-    // Stage 2 says target is NOT the subject
-    // unrelated → FALSE_HIT | successor/witness/victim/colleague → IRRELEVANT_MLTF
-    const downgrade = s2.roleType === 'unrelated' ? 'FALSE_HIT' : 'IRRELEVANT_MLTF';
+    // ⭐ FIX 1: 更嚴格判斷 FALSE_HIT vs IRRELEVANT_MLTF
+    //   - FALSE_HIT 只用喺「明確不同 entity」(AI 報告咗 actualSubjectName 而且唔同名)
+    //   - 其他一律 IRRELEVANT_MLTF(同一 entity 但無 ML/TF 內容)
     const mltfExists = s2.mltfMatterExistsInArticle === true;
-
-    let amlReason;
-    if (downgrade === 'FALSE_HIT') {
-      amlReason = `The individual/entity mentioned in this article is a different party who happens to share the same name as the screened subject ${searchEntity}. ${cleanReasoning}`;
-    } else if (mltfExists) {
-      amlReason = `The article describes ML/TF-related content, but the wrongdoing applies to ${s2.actualSubjectName || 'another party'}, not to ${searchEntity}. ${searchEntity} appears in the article only in the role of ${s2.roleType}. ${cleanReasoning}`;
+    
+    // 標準化名字做比較(去除 Ltd/Limited/Inc 等後綴)
+    const normalizeName = (n) => String(n || '')
+      .toLowerCase()
+      .replace(/\b(ltd|limited|inc|incorporated|corp|corporation|co|company|llc|plc|有限公司|股份有限公司|有限|公司)\b\.?/g, '')
+      .replace(/[.,;:'"()]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    
+    const targetNorm = normalizeName(searchEntity);
+    const subjectNorm = normalizeName(s2.actualSubjectName);
+    const hasNamedDifferentSubject = subjectNorm && 
+                                      subjectNorm !== targetNorm && 
+                                      !subjectNorm.includes(targetNorm) && 
+                                      !targetNorm.includes(subjectNorm);
+    
+    let downgrade;
+    if (s2.roleType === 'unrelated' && hasNamedDifferentSubject) {
+      // 真正同名不同人:AI 明確指出另一個唔同名嘅 entity
+      downgrade = 'FALSE_HIT';
     } else {
-      amlReason = `The article does not contain any ML/TF-related subject matter concerning ${searchEntity}. ${searchEntity} appears in the article only in the role of ${s2.roleType}. ${cleanReasoning}`;
+      // 其他全部 IRRELEVANT_MLTF(包括:同一 entity 但無 ML/TF、successor、witness 等)
+      downgrade = 'IRRELEVANT_MLTF';
+    }
+
+    // ⭐ FIX 2: 唔再強制套用 hardcoded template
+    //   用 AI 嘅 cleanReasoning 做主體,只加少少 context
+    let amlReason;
+    
+    if (downgrade === 'FALSE_HIT') {
+      // 真正 FALSE_HIT:同名不同 entity
+      amlReason = cleanReasoning || 
+        `Identity mismatch confirmed. The article refers to ${s2.actualSubjectName}, a different entity from the screened subject ${searchEntity}.`;
+    } else if (mltfExists && hasNamedDifferentSubject) {
+      // 有 ML/TF 內容,但主體係另一 entity
+      amlReason = cleanReasoning || 
+        `The article describes ML/TF-related content concerning ${s2.actualSubjectName}, not ${searchEntity}.`;
+    } else {
+      // 最常見:同一 entity 但無 ML/TF 內容(ESG 報告、員工 profile、商業糾紛等)
+      // ⭐ 完全用 AI 嘅 reasoning,唔加任何 hardcoded 句式
+      amlReason = cleanReasoning || 
+        `No ML/TF-related adverse content found regarding ${searchEntity} in this article.`;
     }
 
     parsed[idx] = {
@@ -2678,16 +2763,15 @@ stage2Results.forEach((res) => {
       cls: downgrade,
       confidence: Math.max(conf, 0.75),
       riskCat: downgrade === 'FALSE_HIT'
-        ? 'N/A (Different Person/Entity)'
-        : (mltfExists
-            ? `N/A (Subject = ${s2.actualSubjectName || 'other party'})`
-            : `N/A (Target role: ${s2.roleType})`),
+        ? 'N/A (Different Entity)'
+        : (mltfExists && hasNamedDifferentSubject
+            ? `N/A (Subject = ${s2.actualSubjectName})`
+            : 'N/A (No ML/TF Content)'),
       _stage2: s2,
       _stage1Original: { cls: original.cls, reason: original.reason },
       reason: amlReason,
     };
-    console.log(`📉 Stage 2 [#${s2.rank}]: ${original.cls} → ${downgrade} (role: ${s2.roleType})`);
-
+    console.log(`📉 Stage 2 [#${s2.rank}]: ${original.cls} → ${downgrade} (role: ${s2.roleType}, hasNamedDiffSubject: ${hasNamedDifferentSubject})`);
  } else if (s2.wrongdoingApplies === true && conf >= 0.70) {
     // Stage 2 CONFIRMS target IS the subject
     
