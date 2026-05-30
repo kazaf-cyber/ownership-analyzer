@@ -703,7 +703,6 @@ function detectLanguage(text) {
 const CLS_CONFIG = {
   'TRUE_HIT': {
     label: 'True Hit',
-    labelZh: '真實命中',
     desc: 'The hit is confirmed to be the subject and is associated with negative news related to ML/TF or sanctions',
     icon: AlertTriangle,
     bg: 'bg-red-50',
@@ -713,7 +712,6 @@ const CLS_CONFIG = {
   },
   'FALSE_HIT': {
     label: 'False Hit',
-    labelZh: '誤報',
     desc: 'Full name / gender / DOB / age / company DO NOT match — different person/entity',
     icon: XCircle,
     bg: 'bg-amber-50',
@@ -723,7 +721,6 @@ const CLS_CONFIG = {
   },
   'IRRELEVANT_MLTF': {
     label: 'Irrelevant ML/TF',
-    labelZh: '無關 ML/TF',
     desc: 'No ML/TF-related negative news. Per CDD rule, no need to fully verify identity when there is no ML/TF content.',
     icon: Info,
     bg: 'bg-slate-50',
@@ -733,7 +730,6 @@ const CLS_CONFIG = {
   },
   'NO_HIT': {
     label: 'No Hit',
-    labelZh: '無命中',
     desc: 'No search keywords found, or the search returned no result, or target not mentioned at all',
     icon: CheckCircle,
     bg: 'bg-green-50',
@@ -2891,20 +2887,15 @@ stage2Results.forEach((res) => {
     return r;
   };
 
-  const summaryText = useMemo(() => {
+ const summaryText = useMemo(() => {
     if (!results.length) return '';
     return results.map((r, i) => {
       const c = CLS_CONFIG[r.cls] || CLS_CONFIG['NO_HIT'];
-      const labelDisplay = detectedLang === 'zh' ? c.labelZh : c.label;
-      const reason = cleanReason(r.reason) || 'no reason provided';
-
-      // Ensure reason starts with "<Label>, because " — if AI followed format, keep; else prepend.
-      const hasPrefix = /^(true hit|false hit|no hit|irrelevant ml\/tf|真實命中|誤報|無命中|無關 ml\/tf)\s*,\s*because/i.test(reason);
-      const fullReason = hasPrefix ? reason : `${labelDisplay}, because ${reason}`;
-
-      return `${i + 1}. ${labelDisplay}: ${fullReason}`;
+      const labelDisplay = c.label; // English only
+      const reasonBody = stripLabelPrefix(cleanReason(r.reason)) || 'because no reason provided';
+      return `${i + 1}. ${labelDisplay}: ${reasonBody}`;
     }).join('\n\n');
-  }, [results, detectedLang]);
+  }, [results]);
 
   const updateResultCls = (rank, newCls, note) => {
     const labelMap = {
@@ -2957,11 +2948,14 @@ stage2Results.forEach((res) => {
 const ResultCard = ({ r }) => {
     const c = CLS_CONFIG[r.cls] || CLS_CONFIG['NO_HIT'];
     const isOpen = expandedId === r.rank;
-    const labelDisplay = detectedLang === 'zh' ? c.labelZh : c.label;
+    const labelDisplay = c.label; // English only
 
-    // Build display reason — ensure "<Label>, because" prefix is present
+    // Display reason starts with "because ..." (label is shown separately, no duplicate)
+    const displayReason = stripLabelPrefix(cleanReason(r.reason));
+
+    // Build display reason — ensure "<Label>, because" prefix is present (English-only)
     const cleanedReason = cleanReason(r.reason) || '';
-    const hasPrefix = /^(true hit|false hit|no hit|irrelevant ml\/tf|真實命中|誤報|無命中|無關 ml\/tf)\s*,\s*because/i.test(cleanedReason);
+    const hasPrefix = /^(true hit|false hit|no hit|irrelevant ml\/tf)\s*,\s*because/i.test(cleanedReason);
     const displayReason = hasPrefix ? cleanedReason : `${labelDisplay}, because ${cleanedReason}`;
 
     // Accent colour for left bar + label colour
@@ -3723,7 +3717,7 @@ const ResultCard = ({ r }) => {
                       <div className={`text-2xl font-black ${c.text} tracking-tight`}>{counts[key]}</div>
                       <div className={`text-[10px] ${c.text} font-bold uppercase tracking-wider mt-0.5 flex items-center justify-center gap-1`}>
                         <Icon className="w-3 h-3" />
-                        <span className="truncate">{detectedLang === 'zh' ? c.labelZh : c.label}</span>
+                        <span className="truncate">{c.label}</span>
                       </div>
                     </div>
                   );
@@ -3760,10 +3754,10 @@ const ResultCard = ({ r }) => {
               <div className="bg-white rounded-2xl border border-slate-200 p-2 shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
                 <div className="flex gap-1 flex-wrap">
                   {[
-                    { k: 'ALL', l: detectedLang === 'zh' ? '全部' : 'All', count: results.length, color: 'slate' },
+                    { k: 'ALL', l: 'All', count: results.length, color: 'slate' },
                     ...Object.entries(CLS_CONFIG).map(([k, c]) => ({
                       k,
-                      l: detectedLang === 'zh' ? c.labelZh : c.label,
+                      l: c.label,
                       count: counts[k],
                       color: k === 'TRUE_HIT' ? 'red' : k === 'FALSE_HIT' ? 'amber' : k === 'IRRELEVANT_MLTF' ? 'slate' : 'emerald'
                     }))
@@ -3797,7 +3791,7 @@ const ResultCard = ({ r }) => {
               {/* Point-form result list */}
               <div className="space-y-2">
                 {filteredResults.length === 0
-                  ? <div className="text-center py-8 text-sm text-slate-400">{detectedLang === 'zh' ? '無結果' : 'No results'}</div>
+                  ? <div className="text-center py-8 text-sm text-slate-400">No results</div>
                   : filteredResults.map(r => <ResultCard key={r.rank} r={r} />)
                 }
               </div>
@@ -3806,14 +3800,14 @@ const ResultCard = ({ r }) => {
                 onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); }}
                 className="w-full py-2 rounded-lg text-xs text-slate-500 border border-dashed hover:border-slate-400 hover:text-slate-700"
               >
-                🔄 {detectedLang === 'zh' ? '重新分析（清除結果）' : 'Re-analyze (clear results)'}
+                🔄 Re-analyze (clear results)
               </button>
 
               {/* Copyable Poe-Chat-format summary */}
               <div className="bg-slate-50 rounded-xl border p-4">
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-sm font-bold text-slate-700">
-                    📋 {detectedLang === 'zh' ? '分析結果摘要（可複製）' : 'Analysis Summary (Copy & Paste)'}
+                    📋 Analysis Summary (Copy & Paste)
                   </h3>
                   <button
                     onClick={() => {
@@ -3826,9 +3820,7 @@ const ResultCard = ({ r }) => {
                       copied ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-white hover:bg-slate-600'
                     }`}
                   >
-                    {copied
-                      ? (detectedLang === 'zh' ? '✅ 已複製' : '✅ Copied')
-                      : (detectedLang === 'zh' ? '📋 複製全部' : '📋 Copy All')}
+                    {copied ? '✅ Copied' : '📋 Copy All'}
                   </button>
                 </div>
                 <pre className="w-full max-h-96 overflow-y-auto text-xs font-mono bg-white border rounded-lg p-3 whitespace-pre-wrap text-slate-700 select-all">
