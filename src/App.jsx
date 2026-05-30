@@ -701,12 +701,46 @@ function detectLanguage(text) {
 }
 
 const CLS_CONFIG = {
-  'TRUE_HIT': { label: 'True Hit', labelZh: '真實命中', desc: 'The hit is confirmed to be the subject and is associated with negative news related to ML/TF or sanctions', icon: AlertTriangle, bg: 'bg-red-50', border: 'border-red-300', text: 'text-red-700', badge: 'bg-red-100 text-red-800 border-red-200' },
-  'POSSIBLE_HIT': { label: 'Possible Hit', labelZh: '存疑待核實', desc: 'Name matches and content is ML/TF related, with 1-2 partial identifiers corroborating but not fully confirmed', icon: Search, bg: 'bg-purple-50', border: 'border-purple-300', text: 'text-purple-700', badge: 'bg-purple-100 text-purple-800 border-purple-200' },
-  'PENDING_INFO': { label: 'Pending Info', labelZh: '待補資料', desc: 'Name matches with ML/TF content, but ZERO identifying info provided — CDD must supply identifiers before this can be classified as TRUE/FALSE/POSSIBLE', icon: Loader, bg: 'bg-indigo-50', border: 'border-indigo-300', text: 'text-indigo-700', badge: 'bg-indigo-100 text-indigo-800 border-indigo-200' },
-  'FALSE_HIT': { label: 'False Hit', labelZh: '誤報', desc: 'Identifiers (DOB / nationality / role / company) clearly contradict the customer — different person/entity', icon: XCircle, bg: 'bg-amber-50', border: 'border-amber-300', text: 'text-amber-700', badge: 'bg-amber-100 text-amber-800 border-amber-200' },
-  'IRRELEVANT_MLTF': { label: 'Irrelevant to ML/TF', labelZh: '無關 ML/TF', desc: 'Identity matches or plausibly matches, but content is NOT within ML/TF scope — reviewed and documented', icon: Info, bg: 'bg-slate-50', border: 'border-slate-300', text: 'text-slate-600', badge: 'bg-slate-100 text-slate-700 border-slate-200' },
-  'NO_HIT': { label: 'No Hit', labelZh: '無命中', desc: 'No search keywords found, or the search returned no result, or entity is clearly different', icon: CheckCircle, bg: 'bg-green-50', border: 'border-green-300', text: 'text-green-700', badge: 'bg-green-100 text-green-800 border-green-200' }
+  'TRUE_HIT': {
+    label: 'True Hit',
+    labelZh: '真實命中',
+    desc: 'The hit is confirmed to be the subject and is associated with negative news related to ML/TF or sanctions',
+    icon: AlertTriangle,
+    bg: 'bg-red-50',
+    border: 'border-red-300',
+    text: 'text-red-700',
+    badge: 'bg-red-100 text-red-800 border-red-200'
+  },
+  'FALSE_HIT': {
+    label: 'False Hit',
+    labelZh: '誤報',
+    desc: 'Full name / gender / DOB / age / company DO NOT match — different person/entity',
+    icon: XCircle,
+    bg: 'bg-amber-50',
+    border: 'border-amber-300',
+    text: 'text-amber-700',
+    badge: 'bg-amber-100 text-amber-800 border-amber-200'
+  },
+  'IRRELEVANT_MLTF': {
+    label: 'Irrelevant ML/TF',
+    labelZh: '無關 ML/TF',
+    desc: 'No ML/TF-related negative news. Per CDD rule, no need to fully verify identity when there is no ML/TF content.',
+    icon: Info,
+    bg: 'bg-slate-50',
+    border: 'border-slate-300',
+    text: 'text-slate-600',
+    badge: 'bg-slate-100 text-slate-700 border-slate-200'
+  },
+  'NO_HIT': {
+    label: 'No Hit',
+    labelZh: '無命中',
+    desc: 'No search keywords found, or the search returned no result, or target not mentioned at all',
+    icon: CheckCircle,
+    bg: 'bg-green-50',
+    border: 'border-green-300',
+    text: 'text-green-700',
+    badge: 'bg-green-100 text-green-800 border-green-200'
+  }
 };
 
 
@@ -1008,9 +1042,10 @@ function extractRelevantPassages(fullText, targetName, opts = {}) {
   return { passages, mentions: positions.length };
 }
 
-const STAGE2_SYSTEM_PROMPT = `You are a senior AML/sanctions screening analyst performing ROLE ANALYSIS.
+const STAGE2_SYSTEM_PROMPT = `You are a senior CDD compliance analyst performing ROLE ANALYSIS on a previously classified article.
 
-Your single task: determine whether the SCREENED TARGET is the SUBJECT of any wrongdoing in the article, OR plays a different role (successor, predecessor, witness, victim, etc.).
+Your single task: determine whether the SCREENED TARGET is the SUBJECT of any wrongdoing in the article,
+OR plays a different role (successor, predecessor, witness, victim, plaintiff/employer, etc.).
 
 🚨 THE #1 FALSE-POSITIVE PATTERN IN SCREENING:
 
@@ -1019,7 +1054,7 @@ Your single task: determine whether the SCREENED TARGET is the SUBJECT of any wr
    → A appears in the article alongside "fraud" + "investigated".
    → Stage 1 snippet match looks like A is the wrongdoer.
    → BUT A is the SUCCESSOR. B is the actual subject.
-   → Correct classification: NOT a hit for A.
+   → Correct: NOT a hit for A. Target's correct classification = IRRELEVANT_MLTF.
 
 You MUST trace pronouns ("he/she/they/his/her") to their actual antecedent.
 You MUST distinguish "X did Y" from "X replaced Z who did Y".
@@ -1076,19 +1111,12 @@ Determine the ROLE of "${targetName}" in this article. Pick exactly ONE roleType
   CASE A: Article has NO ML/TF matter at all
     Example: "X appointed CEO, replacing Y who retired"
     → mltfMatterExistsInArticle = false
-    → reasoning should state: "No ML/TF subject matter in article"
 
   CASE B: Article HAS ML/TF matter, but target is not the subject
     Example: "X appointed CEO, replacing Y who was investigated for fraud"
     → mltfMatterExistsInArticle = true
     → mltfMatterAppliesToTarget = false
     → actualSubjectName = "Y"
-    → reasoning MUST state: "ML/TF matter (fraud investigation) applies to Y, 
-       not to target X. X appears only as successor."
-
-  ⚠️ DO NOT claim "no ML/TF nexus" when the article clearly describes
-     wrongdoing of ANY party. Report the matter accurately, then explain
-     that it doesn't apply to the target.
 
 Output strict JSON only:
 {
@@ -1096,15 +1124,16 @@ Output strict JSON only:
   "wrongdoingApplies": boolean,
   "roleType": "subject" | "successor" | "predecessor" | "witness" | "victim" | "colleague" | "unrelated" | "ambiguous",
 
-  "mltfMatterExistsInArticle": boolean,  
-  "mltfMatterAppliesToTarget": boolean,      
-  
+  "mltfMatterExistsInArticle": boolean,
+  "mltfMatterAppliesToTarget": boolean,
+
   "confidence": 0.0-1.0,
   "evidenceQuote": "the single most decisive quote from the passages (≤25 words) proving your role assignment",
   "actualSubjectName": "name of the actual subject if different from target, else empty string",
-  "reasoning": "2-3 sentences. Must explicitly state who is the actual subject of wrongdoing."
+  "reasoning": "2-3 sentences. Plain English. Must explicitly state who is the actual subject of wrongdoing. No emoji, no [Stage X] markers, no 'due to lack of...' phrasing."
 }`;
 }
+
 
 /* ★ GeoRiskMap — Real World Map (D3.js + TopoJSON) */
 function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
@@ -1726,12 +1755,28 @@ const testWorkerConnection = async () => {
   const buildAIPrompt = (searchEntityName, enrichedContent, resultCount, hasPageContent, lang, entityContext, resultUrls = []) => {
   
   const hasKnownInfo = entityContext && Object.values(entityContext).some(v => v && String(v).trim());
+  
+  // 🪪 3-tier KNOWN INFO block with explicit Tier instructions
   const knownInfoBlock = hasKnownInfo
-    ? `\n## 🪪 Known Identifying Info (use ONLY to disambiguate same-name cases)\n${formatEntityContext(entityContext)}\n`
-    : `\n## ⚠️ No identifying info provided — judge by article context (role, jurisdiction, industry, behaviour pattern)\n`;
+    ? `\n## 🪪 KNOWN INFO (CDD-supplied) — use ALL of these to disambiguate same-name cases
+${formatEntityContext(entityContext)}
 
-  // 🔒 LOCK DOWN URL LIST — same as user's manual Google Advanced Search result page
+⚠️ INSTRUCTIONS for using KNOWN INFO:
+  • TIER 1 — If article party EXPLICITLY CONTRADICTS any of the above (different DOB, different nationality, clearly different company in clearly different jurisdiction) → FALSE_HIT.
+  • TIER 2 — If 1-2 identifiers tally → identity is PARTIALLY MATCHED. Proceed with ML/TF content judgement.
+  • Do NOT invent identifiers not present in the list above.
+`
+    : `\n## 🪪 NO KNOWN INFO PROVIDED BY CDD (TIER 3)
+
+⚠️ INSTRUCTIONS:
+  • Judge purely by article context: role, jurisdiction, industry, behaviour pattern.
+  • Do NOT fabricate identifiers.
+  • Per CDD rule: if article has NO ML/TF content → IRRELEVANT_MLTF (no need to verify identity).
+  • If article HAS ML/TF content AND target IS the actual subject → TRUE_HIT.
+`;
+
   const N = resultUrls.length > 0 ? resultUrls.length : resultCount;
+  
   const urlAnchorBlock = resultUrls.length > 0 ? `
 ## 🔒 LOCKED URL LIST (extracted from user's manual Google search PDF)
 Total URLs/anchors: ${resultUrls.length}
@@ -1744,7 +1789,7 @@ ${resultUrls.map((u, i) => `  [${String(i+1).padStart(2,'0')}] ${u}`).join('\n')
 
   const moduleType = enrichedContent.toLowerCase().includes('sanction') ? 'sanctions list' : 'adverse media';
 
-  return `You are performing ${moduleType} screening for KYC/AML.
+  return `You are performing ${moduleType} screening per the CDD instructions in your system prompt.
 
 # 🎯 Target Entity
 "${searchEntityName}"
@@ -1753,56 +1798,41 @@ ${urlAnchorBlock}
 
 # 📋 Per-URL Task (apply to EACH of the ${N} URLs)
 
-STEP 1 — LOCATE: Find the "--- PAGE CONTENT: <url> ---" block matching this URL/anchor
-        in the data section below.
+STEP 1 — LOCATE: Find the "--- PAGE CONTENT: <url> ---" block matching this URL/anchor in the data section.
 
-STEP 2 — READ & SCORE EVIDENCE STRENGTH:
-        IF page content block exists → READ THE FULL ARTICLE BODY.
-                                       retrievalStatus = "FULL_BODY".
-                                       Apply FULL_BODY confidence scale.
-        IF NO page content block      → analyze the PDF snippet carefully.
-                                       retrievalStatus = "SNIPPET_ONLY".
-                                       
-                                       Score snippet strength:
-                                       Count how many of these are present:
-                                       □ Target entity name (explicit)
-                                       □ Named regulator/court/agency
-                                       □ Specific enforcement action with detail
-                                         (fine $$, indictment, conviction, NPA, DPA,
-                                          settlement, forfeiture, designation)
-                                       □ ML/TF predicate keyword in context
-                                       
-                                       4/4 → STRONG → cap 0.85 (TRUE_HIT possible)
-                                       2-3 → MEDIUM → cap 0.70
-                                       0-1 → WEAK → cap 0.55
-                                       
-                                       Set evidenceStrength accordingly.
+STEP 2 — READ THE ACTUAL CONTENT:
+   ✅ If "--- PAGE CONTENT ---" block exists → READ THE FULL ARTICLE BODY.
+                                               retrievalStatus = "FULL_BODY".
+   ⚠️ If NO content block → analyse the PDF snippet carefully.
+                            retrievalStatus = "SNIPPET_ONLY".
 
-STEP 3 — IDENTIFY SUBJECT: Who is the grammatical subject of any wrongdoing
-        described in the article?
-        • Trace pronouns ("he/she/they") to their antecedent.
-        • Watch for "X succeeded/replaced/appointed to replace Y, who did Z"
-          → Z applies to Y, NOT X.
+   🚨 CRITICAL: Do NOT classify based on title or URL pattern alone.
+       The documented #1 error is "AI did not read the content, only looked at the title."
+       READ THE BODY.
 
-STEP 4 — APPLY CLASSIFICATION FLOW (in order):
-        Q1: Article describes any wrongdoing?
-            NO  → IRRELEVANT_MLTF (or NO_HIT if target not mentioned at all)
-            YES → Q2
-        Q2: Is the target the subject of the wrongdoing?
-            NO  → IRRELEVANT_MLTF. Set actualSubjectName.
-            YES → Q3
-        Q3: Is the wrongdoing ML/TF in scope?
-            (ML, TF, sanctions designation/evasion, bribery, criminal tax evasion,
-             trafficking, criminal fraud, AML enforcement by HKMA/SFC/MAS/SEC/FCA/OFAC)
-            NO  → IRRELEVANT_MLTF
-            YES → Q4
-        Q4: Known info contradicts article?
-            YES → FALSE_HIT
-            NO  → TRUE_HIT (only if confidence ≥ 0.75)
+STEP 3 — IDENTIFY THE GRAMMATICAL SUBJECT of any wrongdoing described:
+   • Trace pronouns ("he/she/they/his/her") to their actual antecedent.
+   • "X succeeded Y, who was investigated" → wrongdoing applies to Y, NOT X.
+   • Verify TARGET is the actual wrongdoer, not the plaintiff / witness / successor / employer.
+
+STEP 4 — APPLY THE 4-LABEL DECISION (per system prompt rules):
+
+   Q1: Does the article mention the target at all?
+       NO  → NO_HIT
+       YES → Q2
+
+   Q2: Does KNOWN INFO explicitly CONTRADICT the article's named party?
+       YES → FALSE_HIT
+       NO  → Q3
+
+   Q3: Does the article have ML/TF content AND is the target the actual subject of the wrongdoing?
+       NO  → IRRELEVANT_MLTF
+              (Per CDD rule: regardless of identity certainty, no ML/TF content = IRRELEVANT_MLTF)
+       YES → TRUE_HIT
 
 # 📥 Data Section
-(Articles successfully scraped are marked with --- PAGE CONTENT --- blocks.
- PDF snippets appear without those markers.)
+(Articles successfully scraped are marked with "--- PAGE CONTENT ---" blocks.
+ PDF snippets without those markers must still be analysed.)
 
 ${enrichedContent.slice(0, 80000)}
 
@@ -1821,156 +1851,207 @@ JSON array with EXACTLY ${N} items. Item #i = URL/anchor #i in the LOCKED URL LI
     "retrievalStatus": "FULL_BODY" | "SNIPPET_ONLY",
     "matchedKeywords": [<ML/TF keywords actually present in ML/TF context>],
     "cls": "TRUE_HIT" | "FALSE_HIT" | "IRRELEVANT_MLTF" | "NO_HIT",
-    "identityMatch": "FULL_MATCH" | "PARTIAL_MATCH" | "NO_INFO" | "CONTRADICTED" | "NAME_SIMILAR" | "DIFFERENT_NAME",
+    "identityMatch": "FULL_MATCH" | "PARTIAL_MATCH" | "NO_INFO" | "CONTRADICTED",
     "nameInResult": "<exact name as appears in article>",
-    "actualSubjectName": "<if wrongdoer ≠ target, who is the actual wrongdoer; else empty>",
+    "actualSubjectName": "<if wrongdoer ≠ target, who is the actual wrongdoer; else empty string>",
     "confidence": 0.0-1.0,
-    "reason": "<MANDATORY: Plain English, 2-4 sentences, single paragraph, AML-department-ready. NO emoji, NO 'Stage X' brackets, NO meta-commentary. State (a) what the article says, (b) the role of the target in the article, (c) why this classification follows. If target is not the subject, name the actual subject. Self-contained — readable without other fields. Example: 'ABC Holdings Ltd is named by the U.S. Department of Justice as the direct subject of a non-prosecution agreement for violations of export control laws. The entity agreed to pay USD 14.5M in fines and forfeiture; the investigation commenced in December 2019.'>",
-    "riskCat": "Money Laundering / Sanctions / Bribery / Fraud / Tax Evasion / N/A",
-    "missingInfo": []
+    "reason": "<MANDATORY POE-CHAT FORMAT. Starts with exact label string, then comma+space+'because '+2-4 sentence factual English explanation. Examples: 'Irrelevant ML/TF, because this is an academic paper hosted on SSRN eLibrary where the search keyword investigation appears purely in a scientific context referring to the present investigation of a magnesium alloy baffle, and contains no criminal, regulatory, or ML/TF-related content.' / 'True Hit, because this is an official press release from the Department of Justice confirming PetroChina International America Inc. agreed to pay USD 14.5 million in fines and forfeiture for criminal customs fraud and tax evasion.' / 'False Hit, because the article concerns ABC Holdings Pty Ltd, an Australian defence contractor, which is a different entity from the screened target ABC Holdings Ltd of Hong Kong.' STRICTLY NO emoji, NO '[Stage X]' markers, NO 'due to lack of full-text', NO meta-commentary.>",
+    "riskCat": "Money Laundering | Sanctions | Bribery | Fraud | Tax Evasion | Export Control | Terrorist Financing | N/A"
   }
 ]
 
 ⚠️ FINAL CHECKS BEFORE OUTPUT:
-1. Array length = ${N} ? (NOT ${N-1}, NOT ${N+1})
-2. Each item.rank matches its 1-based position?
-3. Each item.url matches the corresponding LOCKED URL LIST position?
-4. For every TRUE_HIT: confidence ≥ 0.75 AND non-empty matchedKeywords AND target IS the subject?
-5. For SNIPPET_ONLY TRUE_HIT: all 4 factors visible in snippet (target+regulator+action+ML/TF predicate)? confidence in 0.75-0.85?
-6. Did you avoid the banned phrases "due to the lack of full-text", "capped confidence", "without full-body verification" in any reason?
-7. Is export control / customs fraud / forfeiture / NPA / DPA correctly classified as ML/TF in scope (NOT IRRELEVANT_MLTF)?
+1. Array length = ${N} (NOT ${N - 1}, NOT ${N + 1}) ?
+2. Each item.cls is exactly one of: TRUE_HIT / FALSE_HIT / IRRELEVANT_MLTF / NO_HIT ?
+3. Each item.reason starts with "True Hit, " / "False Hit, " / "No Hit, " / "Irrelevant ML/TF, " ?
+4. For every TRUE_HIT: target IS the actual subject AND ML/TF content exists ?
+5. For every FALSE_HIT: KNOWN INFO explicitly contradicts the article's named party ?
+6. Did you READ each page content block (when provided) instead of guessing from title ?
+7. For Violation Tracker / academic / SEC disclosure — did you classify based on actual record type ?
 
-Start with [ and end with ]. No markdown fences, no commentary, no explanations outside JSON.`;
+Start with [ and end with ]. No markdown fences. No commentary outside JSON.`;
 };
     
 
 const buildSystemPrompt = () => {
   const moduleName = isSanction ? 'Sanctions List Screening' : 'Adverse Media Screening';
   
-  return `You are a senior KYC/AML compliance analyst performing ${moduleName} for a Hong Kong bank.
+  return `You are a senior CDD (Customer Due Diligence) compliance analyst at a Hong Kong bank performing ${moduleName}.
 
-## 🚨 ABSOLUTE OUTPUT CONTRACT
+# 🚨 ABSOLUTE OUTPUT CONTRACT
 - Output ONLY a valid JSON array. No markdown fences. No commentary.
 - Start with [ end with ].
-- Output EXACTLY the number of items in "Expected Output Count".
-- Each output item = one URL/anchor from the LOCKED URL LIST, in input order.
+- Output EXACTLY the number of items in the LOCKED URL LIST (same count as the user's manual Google Advanced Search result page).
+- Each output item = one URL/anchor from the LOCKED URL LIST, in input order. Do NOT skip, merge or invent items.
 
-## 🚨 AML-DEPARTMENT-READY REASON FIELD
-The "reason" field will be COPIED DIRECTLY to a compliance file.
-✅ Plain professional English, 2-4 sentences, single paragraph.
-✅ State (a) what the article says, (b) target's role, (c) why this classification.
-✅ Factual and self-contained.
+# 🏷️ EXACTLY FOUR (4) ALLOWED LABELS — USE ONLY THESE
+You MUST classify every result with ONE of these four labels. No other labels exist.
 
-❌ NO emoji (🎯 ✅ ❌ ⚠️ etc.)
-❌ NO bracketed headers like "[Stage 1]", "[Auto:...]"
-❌ NO meta-phrases like "due to the lack of full-text", "to prevent false positive",
-   "with capped confidence", "without full-body verification"
-❌ NO repetition of the classification label inside the reason
-❌ NO references to "the model", "STAGE", or analysis pipeline
+1. TRUE_HIT        — The hit is confirmed to be the subject AND is associated with negative news related to ML/TF or sanctions.
+2. FALSE_HIT       — Full name / gender / DOB / age / company DO NOT match the screened target. Different person/entity.
+3. NO_HIT          — No search keywords found, OR the search returned no result, OR the article does not mention the target at all.
+4. IRRELEVANT_MLTF — All other hits where there is NO ML/TF-related negative news concerning the target.
+                     (Per CDD rule: there is NO need to fully verify identity if there is no ML/TF content.)
 
-GOOD reason example:
-  "PetroChina International America Inc. entered into a non-prosecution agreement
-  with the U.S. Department of Justice and agreed to pay USD 14.5 million in fines
-  and forfeiture for systematically misclassifying and undervaluing diesel fuel
-  exports to Mexico. The entity is the direct subject of a joint DOJ/HSI/CBP
-  criminal customs fraud and tax evasion enforcement action."
+# 🚨 REASON FIELD — MANDATORY POE-CHAT FORMAT
+The "reason" field is COPIED DIRECTLY into a CDD compliance file.
 
-BAD reason example (NEVER write like this):
-  "The article reports PetroChina entered into a non-prosecution agreement.
-  Due to the lack of full-text article availability, this item is classified
-  as IRRELEVANT_MLTF with capped confidence to prevent false positive."
+Format MUST be: \`<Label>, because <2-4 sentence professional English explanation>\`
 
-## 🚨 ML/TF SCOPE — TRUE_HIT (do NOT classify as IRRELEVANT_MLTF)
+Use these EXACT label strings at the start of "reason" (case-sensitive):
+  • "True Hit, because ..."
+  • "False Hit, because ..."
+  • "No Hit, because ..."
+  • "Irrelevant ML/TF, because ..."
+
+✅ GOOD example:
+  "Irrelevant ML/TF, because this is an official IPO application proof document submitted to the Hong Kong Stock Exchange by Guangdong Arcair Appliance Co., Ltd., where Chen Jianhui is identified as an executive director. The snippet mentions third-party payments and confirms they were genuine transactions not related to any criminal or illegal proceeds. Deep-page reading reveals this is a standard mandatory regulatory disclosure for listing compliance, not an allegation, investigation, or finding of money laundering."
+
+✅ GOOD example:
+  "True Hit, because this is an official press release from the U.S. Department of Justice confirming that PetroChina International America Inc. entered into a non-prosecution agreement and agreed to pay USD 14.5 million in fines and forfeiture for systematically misclassifying and undervaluing diesel fuel exports to Mexico. This is a joint DOJ/HSI/CBP criminal customs fraud and tax evasion enforcement action directly naming the target entity."
+
+❌ NEVER include emoji (🎯 ✅ ❌ ⚠️), bracketed headers like "[Stage 1]" / "[Auto:...]", meta-phrases ("due to lack of full-text", "with capped confidence"), or references to "STAGE", "the model", "analysis pipeline".
+
+# 🚦 DECISION TABLE — APPLY IN THIS ORDER
+
+INPUTS YOU USE:
+  • IDENTITY MATCH — how the article's named party matches the target by name + KNOWN INFO (DOB / gender / nationality / company / role / ID).
+  • ML/TF CONTENT — does the article describe wrongdoing in ML/TF scope, AND is the TARGET the actual subject of that wrongdoing?
+
+STEP A — Mention check:
+  • Target not mentioned at all in article → NO_HIT.
+
+STEP B — KNOWN INFO contradiction (hard gate):
+  • If KNOWN INFO explicitly CONTRADICTS the article's named party (different DOB / different nationality / clearly different company in clearly different jurisdiction / demonstrably different person) → FALSE_HIT.
+
+STEP C — Apply the 4 CDD KNOWN INFO RULES:
+
+  Rule 1: KNOWN INFO FULLY MATCHED (name + identifiers explicitly confirmed)
+          + No ML/TF content concerning the target
+          → IRRELEVANT_MLTF
+
+  Rule 2: KNOWN INFO PARTIALLY MATCHED (1-2 identifiers tally, but not fully confirmed)
+          + No ML/TF content concerning the target
+          → IRRELEVANT_MLTF
+
+  Rule 3: Name matches + NO KNOWN INFO provided by CDD
+          + No ML/TF content concerning the target
+          → IRRELEVANT_MLTF
+          (CDD rule: "For all other hits that no negative news related to ML/TF, there is no need to determine whether the hit is the subject.")
+
+  Rule 4: Name matches + identity reasonable (any tier above)
+          + ML/TF content where TARGET IS the actual subject
+          → TRUE_HIT
+
+# 🚨 ROLE ANALYSIS — THE #1 FALSE-POSITIVE PATTERN
+
+  Pattern A — SUCCESSOR:
+    "Company X appointed A as CEO, replacing B who was investigated for fraud."
+    → A is the successor. B is the actual subject.
+    → For A: IRRELEVANT_MLTF. State actualSubjectName = "B".
+
+  Pattern B — PRONOUN TRACING:
+    "He replaces X, who was charged with fraud" — trace "he" to its antecedent.
+
+  Pattern C — PLAINTIFF / EMPLOYER / VICTIM:
+    "Shell PLC sued former trader for embezzlement" — Shell PLC is plaintiff, NOT subject → IRRELEVANT_MLTF.
+
+  YOU MUST verify the GRAMMATICAL SUBJECT of every wrongdoing sentence
+  is actually the target before classifying as TRUE_HIT.
+
+# 🚨 ML/TF SCOPE — TRUE_HIT (these ARE in scope)
 - Money laundering, terrorist financing
-- Sanctions designation / evasion (OFAC SDN, EU, UN, HK, MAS)
+- Sanctions designation / evasion (OFAC SDN, EU, UN, HK, MAS, BIS Entity List)
 - ⭐ EXPORT CONTROL VIOLATIONS (BIS, EAR, ITAR, dual-use goods)
-- ⭐ CUSTOMS FRAUD / misclassification / undervaluation of goods
+- ⭐ CUSTOMS FRAUD / misclassification / undervaluation of exports
 - ⭐ ASSET FORFEITURE tied to criminal predicates
-- ⭐ NON-PROSECUTION / DEFERRED PROSECUTION agreements with DOJ/SEC/OFAC
+- ⭐ NON-PROSECUTION / DEFERRED PROSECUTION agreements with DOJ/SEC/OFAC/HSI/CBP
 - Bribery & corruption (FCPA, UKBA, ICAC, anti-graft)
-- Criminal tax evasion / tax fraud (not civil disputes)
+- Criminal tax evasion / tax fraud (NOT civil disputes)
 - Wire fraud, securities fraud, mail fraud, bank fraud
 - Human / drug / arms / wildlife trafficking
 - Proliferation financing
 
-## ML/TF SCOPE — IRRELEVANT_MLTF
-- Pure civil contract disputes (commercial)
-- Standard exchange-trading rule infractions (block trade reporting, position limits)
-  — unless coupled with criminal fraud
-- Environmental violations (oil spills, emissions) — unless paired with fraud
-- Workplace / labour / discrimination disputes
-- Patent / IP / defamation
+# 🚨 OUT OF ML/TF SCOPE — IRRELEVANT_MLTF
+- Pure civil contract disputes (commercial / supply / partnership)
+- Civil employment / labor / discrimination / wrongful termination disputes
+- Standard exchange-trading rule infractions (block trade reporting, position limits) UNLESS coupled with criminal fraud
+- Environmental / safety / OSHA / EPA violations UNLESS paired with criminal fraud
+- Patent / IP / defamation lawsuits
 - Routine corporate operational compliance without criminal element
+- Academic articles where "investigation" is a CRediT author contribution role
+- Boilerplate legal disclaimers (e.g. "any contrary statement is a criminal offence")
+- Self-published compliance programmes / policy releases / modern slavery statements
+- Sovereign immunity dismissals (FSIA) with no criminal underlying
+- Land expropriation / historic claims with no criminal element
+- General regulatory news / framework announcements not naming the target
 
-## 🚨 ROLE ANALYSIS (#1 false-positive cause)
+# 🚨 CONDITIONAL SOURCES — READ THE BODY, DO NOT TRUST THE TITLE
 
-Pattern A — SUCCESSOR:
-   "Company X appointed A as CEO, replacing B who was investigated for fraud."
-   → Target = A → IRRELEVANT_MLTF. State actual subject is B.
+The #1 documented false-positive pattern is "AI looked at the title only, did not read the actual content."
+You MUST open each "--- PAGE CONTENT: <url> ---" block and read the body before classifying.
 
-Pattern B — PRONOUN TRACING:
-   "He replaces X, who was charged with fraud."
-   → Target = "He" → IRRELEVANT_MLTF.
+◆ Violation Tracker / Violation Tracker Global (Good Jobs First):
+  These pages aggregate corporate regulatory penalties. You MUST read each
+  individual record to determine the violation type:
+    • Environmental / safety / labor / OSHA / EPA / wage-theft → IRRELEVANT_MLTF
+    • Export control penalty / customs fraud / OFAC / DOJ asset forfeiture
+      / NPA / DPA / wire fraud / FCPA / criminal money laundering → TRUE_HIT
+  Do NOT blanket-classify Violation Tracker pages by domain alone.
 
-Pattern C — EMPLOYER / PLAINTIFF / VICTIM:
-   "Shell PLC sued former trader for embezzlement."
-   → Target = Shell PLC → IRRELEVANT_MLTF.
+◆ Academic publishers (MDPI, Springer, Oxford Academic, ACS, ScienceDirect, SSRN, IEEE, Wiley, GeoScienceWorld):
+  "Investigation" almost always = CRediT author contribution role.
+  Target named is usually just an author institutional affiliation.
+  Default → IRRELEVANT_MLTF unless paper is about a specific criminal case naming target as defendant.
 
-## Classification Discipline
+◆ Stock exchange disclosure documents (HKEXnews, SEC EDGAR, LSE base offering memoranda, Form 20-F annual reports):
+  "Criminal offence", "investigation", "due diligence", "sanctions" are boilerplate
+  regulatory disclaimers / risk disclosures.
+  Target is often a customer / supplier / affiliate, NOT the wrongdoer.
+  Default → IRRELEVANT_MLTF unless the disclosure is a Section 12 / Item 103
+  legal proceedings disclosure naming the target as defendant in ML/TF matter.
 
-### For INDIVIDUAL (person) screening:
-- Strong identifier mismatch (DOB / nationality / role contradicts known info) → FALSE_HIT
-- "Chan Tai Man" = "Tai Man Chan" (Asian surname-order variant → SAME person)
-- "Mary Wong" ≠ "Mary Wang" (Latin token mismatch → FALSE_HIT)
-- "陳大文" ≠ "陳文" (Chinese token mismatch → FALSE_HIT)
-- Same-name uncertainty WITHOUT other context → PENDING_INFO (request CDD), not FALSE_HIT
+◆ Court judgments — read the case nature:
+  • Civil employment / contract / land / breach disputes → IRRELEVANT_MLTF
+  • Sovereign immunity dismissals → IRRELEVANT_MLTF
+  • Criminal indictment / conviction for ML/TF predicates → TRUE_HIT
 
-### For CORPORATE (company) screening:
-⚠️ Corporate entities have far less name ambiguity than individuals.
-   When the article clearly refers to the same corporate entity:
-   
-   • Has ML/TF content     → TRUE_HIT
-   • No ML/TF content      → IRRELEVANT_MLTF
-                              (e.g. ESG reports, employee profiles, awards,
-                               compliance announcements, commercial disputes
-                               unrelated to ML/TF, corporate news)
-   
-⚠️ DO NOT classify as FALSE_HIT unless:
-   1. Different jurisdiction + different industry (e.g. "ABC Holdings Pty Ltd"
-      Australian tech startup vs "ABC Holdings Ltd" Hong Kong shipping), OR
-   2. Article explicitly refers to a clearly different legal entity with the
-      same name
-      
-⚠️ "Same entity but routine business content" is IRRELEVANT_MLTF, NOT FALSE_HIT.
-   The entity IS the screened subject — just no adverse content to report.
+◆ Trade database self-promotional pages (Trademo, ImportGenius):
+  "Sanctions Screener" on these pages is platform feature advertising,
+  NOT a finding against the target → IRRELEVANT_MLTF.
 
-## Reading Contract
-For ANY URL with "--- PAGE CONTENT: <url> ---" block → READ FULL BODY.
-PDF snippets alone CAN support TRUE_HIT if 4 factors are present in the snippet:
-  (1) target entity named
-  (2) named regulator/authority
-  (3) specific enforcement action
-  (4) ML/TF predicate (incl. export control, customs fraud, forfeiture, NPA, DPA)
+◆ Political background articles mentioning target as ex-director / family connection:
+  If target appears only as a passing reference and wrongdoing concerns other parties → IRRELEVANT_MLTF.
 
-## Confidence Calibration
+# 🪪 3-TIER KNOWN INFO HANDLING (Q4 RULE)
 
-FULL_BODY (scraped article body):
-- 0.90-1.00 : Official designation / conviction / regulator enforcement order
-- 0.75-0.89 : Mainstream media + regulator + specific allegation + identifier match
-- 0.60-0.74 : Single source OR partial identifier corroboration
-- < 0.60   : Insufficient
+Tier 1 — KNOWN INFO completely CONTRADICTS article's named party:
+         → FALSE_HIT (regardless of ML/TF content)
 
-SNIPPET_ONLY:
-🟢 STRONG (4/4 factors present) → 0.75-0.85 → TRUE_HIT is DEFENSIBLE
-   ⚠️ DO NOT downgrade strong-snippet cases to IRRELEVANT_MLTF merely because
-       the body wasn't scraped. If the snippet itself proves the case, that IS evidence.
-🟡 MEDIUM (2-3 factors) → 0.60-0.72 → usually POSSIBLE_HIT or PENDING_INFO
-🔴 WEAK (0-1 factors)   → ≤ 0.55 → IRRELEVANT_MLTF or NO_HIT
+Tier 2 — KNOWN INFO PARTIALLY MATCHES (1-2 identifiers tally):
+         → Continue. Classification depends on ML/TF content per rules above.
 
-⚠️ TRUE_HIT requires: confidence ≥ 0.75 AND non-empty matchedKeywords AND target IS the subject.
+Tier 3 — KNOWN INFO is EMPTY / not provided by CDD:
+         → Judge purely by article context: role, jurisdiction, industry, behaviour pattern.
+         → DO NOT invent identifiers.
+         → If article has no ML/TF content → IRRELEVANT_MLTF.
+         → If article HAS ML/TF content AND target is the actual subject → TRUE_HIT.
 
-You are a precision instrument. Both false positives AND false negatives harm the bank.
-A correctly identified TRUE_HIT is just as defensible as a correctly identified FALSE_HIT.`.trim();
+# Name Matching Rules
+• "Chan Tai Man" = "Tai Man Chan" — same person, Asian/Western surname-order variant.
+• "Mary Wong" ≠ "Mary Wang" — Latin token mismatch → FALSE_HIT.
+• "陳大文" ≠ "陳文" — Chinese character token mismatch → FALSE_HIT.
+• "Limited" / "Ltd" / "Co., Ltd." / "Pte Ltd" / "Inc." / "LLC" — corporate suffix variants are SAME entity if distinctive name matches.
+• "ABC Holdings Ltd" (HK) ≠ "ABC Holdings Pty Ltd" (Australia) if jurisdictions clearly differ → FALSE_HIT.
+
+# READING CONTRACT — MANDATORY
+For ANY URL with "--- PAGE CONTENT: <url> ---" block → READ THE FULL BODY before classifying.
+Do NOT classify based on title alone — that is the documented #1 error pattern.
+You MUST identify the target's actual role inside the article body before assigning a label.
+
+You are a precision instrument operating under strict CDD rules.
+Both false positives AND false negatives harm the bank.
+A correctly classified TRUE_HIT is just as defensible as a correctly classified IRRELEVANT_MLTF.`.trim();
 };
 
 
@@ -2429,12 +2510,14 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
       }
 
       
-      const VALID_CLS = ['TRUE_HIT', 'POSSIBLE_HIT', 'PENDING_INFO', 'FALSE_HIT', 'IRRELEVANT_MLTF', 'NO_HIT'];
-            parsed = parsed.map((r, i) => ({
+     const VALID_CLS = ['TRUE_HIT', 'FALSE_HIT', 'IRRELEVANT_MLTF', 'NO_HIT'];
+      parsed = parsed.map((r, i) => ({
         ...r,
         rank: i + 1,
-        cls: VALID_CLS.includes(r.cls) ? r.cls : 'NO_HIT',
-        identityMatch: ['FULL_MATCH', 'PARTIAL_MATCH', 'NO_INFO', 'CONTRADICTED', 'NAME_SIMILAR', 'DIFFERENT_NAME'].includes(r.identityMatch) ? r.identityMatch : 'NO_INFO',
+        // Per CDD rule: unknown labels default to IRRELEVANT_MLTF (not NO_HIT),
+        // because "no ML/TF content" is the natural default rather than "no mention at all"
+        cls: VALID_CLS.includes(r.cls) ? r.cls : 'IRRELEVANT_MLTF',
+        identityMatch: ['FULL_MATCH', 'PARTIAL_MATCH', 'NO_INFO', 'CONTRADICTED'].includes(r.identityMatch) ? r.identityMatch : 'NO_INFO',
         nameInResult: r.nameInResult || '',
         confidence: typeof r.confidence === 'number' ? Math.round(Math.min(1, Math.max(0, r.confidence)) * 100) / 100 : 0.8,
         matchedKeywords: Array.isArray(r.matchedKeywords) ? r.matchedKeywords.slice(0, 5) : [],
@@ -2448,12 +2531,14 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
       }));
 
       
-        // ═══════════════════════════════════════════════════════
-// 🛡️ POST-PROCESSING — Minimal sanity checks only
 // ═══════════════════════════════════════════════════════
-// Philosophy: Trust the model's reasoning. Only catch egregious errors.
+// 🛡️ POST-PROCESSING — Minimal sanity checks (CDD-respect mode)
+// ═══════════════════════════════════════════════════════
+// Philosophy: Trust the model's CDD reasoning. No confidence-threshold downgrade.
+// We only fix:
+//   1. TRUE_HIT with empty matchedKeywords (structural mismatch)
+//   2. Asian/Western name-order variant wrongly marked FALSE_HIT
 
-// Name normalization helpers (Asian ↔ Western surname order)
 const normalizeNameTokens = (name) => {
   if (!name) return [];
   return String(name).toLowerCase()
@@ -2477,77 +2562,33 @@ const isSamePersonDifferentOrder = (name1, name2) => {
 
 parsed = parsed.map(r => {
   
- // 🛡️ Sanity 1: TRUE_HIT 降級 — but ONLY if snippet evidence is genuinely weak
-  if (r.cls === 'TRUE_HIT' && r.confidence < 0.75) {
-    const text = `${r.title || ''} ${r.snippet || ''} ${r.reason || ''}`.toLowerCase();
-    
-    // 4-factor snippet strength check
-    const hasTarget = r.nameInResult && r.nameInResult.length > 2;
-    
-// === 🆕 Fix 1: English + Chinese (繁簡) regex 分開判斷,因為 \b 唔識 CJK ===
-    
-    // 1️⃣ Regulator / Authority
-    const regulatorPatternEN = /\b(doj|department of justice|ofac|fincen|sec|cftc|fbi|hsi|homeland security investigations?|ice|u\.?s\.? immigration and customs enforcement|cbp|customs and border protection|treasury|irs|irs-ci|bis|bureau of industry and security|state department|finra|fca|hkma|sfc|ica|icac|csrc|cbirc|mas|asic|austrac|fdic|occ|cfpb|nca|serious fraud office|sfo|bafin|finma|cssf|amf|esma|eba|adgm|fsra|qfc|jfsa|fsma|cima|bma|gfsc|fiu|interpol|europol|cbi|enforcement directorate|federal prosecutor|prosecutor|u\.?s\.? attorney)\b/i;
-    const regulatorPatternZH = /(廉署|廉政公署|廉政總署|金管局|香港金融管理局|證監會|香港證券及期貨事務監察委員會|司法部|海關|警方|警務處|香港警務處|檢察院|海關總署|稅務局|稅局|律政司|公安部|公安|檢察|中國人民銀行|中國證券監督管理委員會|中國銀保監會|銀保監|外管局|外匯管理局|新加坡金融管理局|金管會|證期局|法務部|地檢署|高檢署|最高檢察署|司法院|央行|新華社|检察院|海关|公安|检察|证监会|银保监|央行|纪委|国家监察委)/;
-    const hasRegulator = regulatorPatternEN.test(text) || regulatorPatternZH.test(text);
-
-    // 2️⃣ Enforcement action
-    const actionPatternEN = /\b(fine|fined|penalty|penalties|forfeit|forfeiture|prosecut|indict|indictment|conviction|convicted|sentence|sentenced|plead|pleaded|settlement|settled|consent order|non[\s-]?prosecution agreement|\bnpa\b|deferred prosecution|\bdpa\b|enforcement action|sanctions? designation|designated|sdn list|added to (the )?list|charge|charged|investigation|raid|seized|seizure|guilty|jailed|debar|debarment|cease and desist|disgorge|asset freeze|asset seizure)\b/i;
-    const actionPatternZH = /(罰款|罰金|處罰|沒收|充公|起訴|檢控|檢舉|控告|定罪|判刑|入罪|認罪|和解|調查|查處|查辦|偵查|偵辦|逮捕|拘捕|拘留|羈押|搜查|查封|凍結|資產凍結|資產充公|凍結資產|制裁|被制裁|遭制裁|列入名單|列入制裁|警告信|譴責|處分|懲處|懲罰|入禀|入稟|提堂|押後|候判|罚款|处罚|起诉|检控|定罪|判刑|和解|调查|逮捕|查封|冻结|制裁|处分|惩处|入狱|监禁|判处|判决)/;
-    const hasAction = actionPatternEN.test(text) || actionPatternZH.test(text);
-
-    // 3️⃣ ML/TF predicate
-    const mltfPatternEN = /\b(launder|laundering|money laundering|terror|terrorist financing|fraud|bribery|corruption|tax evasion|tax fraud|trafficking|sanctions evasion|sanctions violation|embezzlement|kickback|illicit|illegal|criminal|smuggling|customs fraud|customs violation|wire fraud|securities fraud|\baml\b|\bcft\b|fcpa|ukba|proliferation|export control|export violation|export law|ear violation|itar violation|misclassif|undervalu|false declaration|falsified declaration|misrepresent|evade duties|evade tax|evade sanctions|dual-use|illicit transfer)\b/i;
-    const mltfPatternZH = /(洗錢|清洗黑錢|反洗錢|恐怖融資|恐怖分子融資|資恐|資助恐怖|詐騙|欺詐|詐欺|行賄|受賄|賄賂|貪污|貪腐|腐敗|逃稅|漏稅|逃漏稅|販毒|販運|人口販運|販賣人口|武器走私|軍火走私|走私|侵占|挪用|盜用|犯罪|刑事|非法|違法|出口管制|出口違規|海關詐欺|海關詐騙|證券詐欺|電信詐欺|電匯詐欺|銀行詐欺|郵件詐欺|金融詐欺|商業詐欺|逃避制裁|規避制裁|制裁規避|擴散融資|大規模殺傷性武器|內幕交易|操縱市場|市場操縱|空殼公司|地下錢莊|地下钱庄|洗钱|反洗钱|恐怖融资|资恐|资助恐怖|诈骗|欺诈|行贿|受贿|贿赂|贪污|贪腐|腐败|逃税|漏税|贩毒|贩运|人口贩运|武器走私|侵占|挪用|犯罪|刑事|非法|违法|出口管制|海关欺诈|证券欺诈|逃避制裁|规避制裁|内幕交易|操纵市场|空壳公司)/;
-    const hasMLTF = mltfPatternEN.test(text) || mltfPatternZH.test(text);
-    // === END Fix 1 ===
-    
-    const strength = [hasTarget, hasRegulator, hasAction, hasMLTF].filter(Boolean).length;
-    
-    // STRONG snippet (4/4): 提升 confidence 到 0.78 + 保留 TRUE_HIT
-    if (strength >= 4) {
-      console.log(`✅ Strong snippet rescued #${r.rank}: ${strength}/4 evidence factors`);
-      return {
-        ...r,
-        confidence: Math.max(r.confidence, 0.78),
-        reason: `[Auto: Strong snippet evidence retained TRUE_HIT — ${strength}/4 factors: target+regulator+action+ML/TF] ${r.reason}`
-      };
-    }
-    
-    // MEDIUM/WEAK snippet: 真正降級
-    return {
-      ...r,
-      cls: 'IRRELEVANT_MLTF',
-      riskCat: `N/A (Snippet evidence ${strength}/4, conf ${r.confidence})`,
-      reason: `[Auto: Insufficient evidence for TRUE_HIT — only ${strength}/4 snippet factors present, confidence ${r.confidence}] ${r.reason}`
-    };
-  }
-
-  // 🛡️ Sanity 2: TRUE_HIT 必須有 matched keywords
+  // 🛡️ Sanity 1: TRUE_HIT MUST have matched keywords (structural check)
   if (r.cls === 'TRUE_HIT' && (!r.matchedKeywords || r.matchedKeywords.length === 0)) {
+    const newReason = r.reason && r.reason.match(/^True Hit,/i)
+      ? r.reason.replace(/^True Hit,/i, 'Irrelevant ML/TF,')
+      : `Irrelevant ML/TF, because no concrete ML/TF keywords were matched in the article body, indicating no specific ML/TF predicate concerning the target. ${r.reason || ''}`.trim();
     return {
       ...r,
       cls: 'IRRELEVANT_MLTF',
-      riskCat: 'N/A (No Keywords)',
-      reason: `[Auto: TRUE_HIT requires non-empty matchedKeywords] ${r.reason}`
+      riskCat: 'N/A',
+      reason: newReason,
     };
   }
 
-  // 🛡️ Utility: Asian/Western name order normalization
-  // "Chan Tai Man" ↔ "Tai Man Chan" should be treated as same person
+  // 🛡️ Sanity 2: Asian/Western surname-order variant — recognise as same person
   if (
     r.nameInResult &&
     isSamePersonDifferentOrder(searchEntity, r.nameInResult) &&
-    (r.identityMatch === 'NAME_SIMILAR' || r.identityMatch === 'DIFFERENT_NAME' ||
-     r.cls === 'FALSE_HIT' || r.cls === 'NO_HIT')
+    r.cls === 'FALSE_HIT'
   ) {
     const hasMLTF = r.matchedKeywords && r.matchedKeywords.length > 0;
+    const newCls = hasMLTF ? 'TRUE_HIT' : 'IRRELEVANT_MLTF';
+    const newLabel = newCls === 'TRUE_HIT' ? 'True Hit' : 'Irrelevant ML/TF';
     return {
       ...r,
       identityMatch: 'FULL_MATCH',
-      cls: hasMLTF ? r.cls === 'FALSE_HIT' ? 'TRUE_HIT' : 'TRUE_HIT' : 'IRRELEVANT_MLTF',
-      confidence: hasMLTF ? Math.max(r.confidence, 0.75) : 0.45,
-      reason: `[Auto: "${r.nameInResult}" = "${searchEntity}" — same person, Asian/Western surname-order variant] ${r.reason}`
+      cls: newCls,
+      reason: `${newLabel}, because "${r.nameInResult}" and "${searchEntity}" are the same person presented in Asian and Western surname-order variants. ${hasMLTF ? 'ML/TF-related keywords are present in the article concerning this individual.' : 'No ML/TF-related content is present in the article concerning this individual.'}`,
     };
   }
 
@@ -2698,7 +2739,7 @@ if (stage2Candidates.length > 0) {
           })
         );
 
-       // ── Merge Stage 2 results back into `parsed` ─────────────
+// ── Merge Stage 2 results back into `parsed` ─────────────
 stage2Results.forEach((res) => {
   if (res.status !== 'fulfilled' || !res.value) return;
   const s2 = res.value;
@@ -2710,52 +2751,18 @@ stage2Results.forEach((res) => {
   const cleanReasoning = String(s2.reasoning || '').trim();
 
   if (s2.wrongdoingApplies === false && conf >= 0.70) {
-    // ⭐ FIX 1: 更嚴格判斷 FALSE_HIT vs IRRELEVANT_MLTF
-    //   - FALSE_HIT 只用喺「明確不同 entity」(AI 報告咗 actualSubjectName 而且唔同名)
-    //   - 其他一律 IRRELEVANT_MLTF(同一 entity 但無 ML/TF 內容)
+    // Stage 2 says target is NOT the subject
+    // unrelated → FALSE_HIT | successor / witness / victim / colleague / etc → IRRELEVANT_MLTF
+    const downgrade = s2.roleType === 'unrelated' ? 'FALSE_HIT' : 'IRRELEVANT_MLTF';
     const mltfExists = s2.mltfMatterExistsInArticle === true;
-    
-    // 標準化名字做比較(去除 Ltd/Limited/Inc 等後綴)
-    const normalizeName = (n) => String(n || '')
-      .toLowerCase()
-      .replace(/\b(ltd|limited|inc|incorporated|corp|corporation|co|company|llc|plc|有限公司|股份有限公司|有限|公司)\b\.?/g, '')
-      .replace(/[.,;:'"()]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    
-    const targetNorm = normalizeName(searchEntity);
-    const subjectNorm = normalizeName(s2.actualSubjectName);
-    const hasNamedDifferentSubject = subjectNorm && 
-                                      subjectNorm !== targetNorm && 
-                                      !subjectNorm.includes(targetNorm) && 
-                                      !targetNorm.includes(subjectNorm);
-    
-    let downgrade;
-    if (s2.roleType === 'unrelated' && hasNamedDifferentSubject) {
-      // 真正同名不同人:AI 明確指出另一個唔同名嘅 entity
-      downgrade = 'FALSE_HIT';
-    } else {
-      // 其他全部 IRRELEVANT_MLTF(包括:同一 entity 但無 ML/TF、successor、witness 等)
-      downgrade = 'IRRELEVANT_MLTF';
-    }
 
-    // ⭐ FIX 2: 唔再強制套用 hardcoded template
-    //   用 AI 嘅 cleanReasoning 做主體,只加少少 context
     let amlReason;
-    
     if (downgrade === 'FALSE_HIT') {
-      // 真正 FALSE_HIT:同名不同 entity
-      amlReason = cleanReasoning || 
-        `Identity mismatch confirmed. The article refers to ${s2.actualSubjectName}, a different entity from the screened subject ${searchEntity}.`;
-    } else if (mltfExists && hasNamedDifferentSubject) {
-      // 有 ML/TF 內容,但主體係另一 entity
-      amlReason = cleanReasoning || 
-        `The article describes ML/TF-related content concerning ${s2.actualSubjectName}, not ${searchEntity}.`;
+      amlReason = `False Hit, because the individual/entity named in this article is a different party who happens to share the same name as the screened subject ${searchEntity}. ${cleanReasoning}`;
+    } else if (mltfExists) {
+      amlReason = `Irrelevant ML/TF, because the article describes ML/TF-related content, but the wrongdoing applies to ${s2.actualSubjectName || 'another party'}, not to ${searchEntity}. ${searchEntity} appears in the article only in the role of ${s2.roleType}. ${cleanReasoning}`;
     } else {
-      // 最常見:同一 entity 但無 ML/TF 內容(ESG 報告、員工 profile、商業糾紛等)
-      // ⭐ 完全用 AI 嘅 reasoning,唔加任何 hardcoded 句式
-      amlReason = cleanReasoning || 
-        `No ML/TF-related adverse content found regarding ${searchEntity} in this article.`;
+      amlReason = `Irrelevant ML/TF, because the article does not contain any ML/TF-related subject matter concerning ${searchEntity}. ${searchEntity} appears in the article only in the role of ${s2.roleType}. ${cleanReasoning}`;
     }
 
     parsed[idx] = {
@@ -2763,36 +2770,31 @@ stage2Results.forEach((res) => {
       cls: downgrade,
       confidence: Math.max(conf, 0.75),
       riskCat: downgrade === 'FALSE_HIT'
-        ? 'N/A (Different Entity)'
-        : (mltfExists && hasNamedDifferentSubject
-            ? `N/A (Subject = ${s2.actualSubjectName})`
-            : 'N/A (No ML/TF Content)'),
+        ? 'N/A'
+        : (mltfExists
+            ? `N/A (Subject = ${s2.actualSubjectName || 'other party'})`
+            : 'N/A'),
       _stage2: s2,
       _stage1Original: { cls: original.cls, reason: original.reason },
       reason: amlReason,
     };
-    console.log(`📉 Stage 2 [#${s2.rank}]: ${original.cls} → ${downgrade} (role: ${s2.roleType}, hasNamedDiffSubject: ${hasNamedDifferentSubject})`);
- } else if (s2.wrongdoingApplies === true && conf >= 0.70) {
-    // Stage 2 CONFIRMS target IS the subject
-    
-    // 🆕 Fix 2b: 如果 Stage 1 誤判為 IRRELEVANT_MLTF / FALSE_HIT 但 Stage 2 高信心
-    //  確認 target 係主角 + 有 ML/TF matter → 升級為 TRUE_HIT。
-    //  呢個係 Fix 1 嘅 safety net(就算中文 regex 仲漏咗某啲詞,Stage 2 都會救返)。
-    // 🆕 Fix 4b: NO_HIT 都要可以 upgrade
-// Stage 1 嘅過度保守會將 NPA/DPA/export violations 等清楚 TRUE_HIT
-// 誤判為 NO_HIT(reasoning 講係 hit,但 cls 出 NO_HIT)。
-// 加返 NO_HIT 做 upgrade 候選。
-const shouldUpgrade = (original.cls === 'IRRELEVANT_MLTF' 
-                    || original.cls === 'FALSE_HIT'
-                    || original.cls === 'NO_HIT')
-                   && conf >= 0.75
-                   && s2.mltfMatterExistsInArticle === true;
+    console.log(`📉 Stage 2 [#${s2.rank}]: ${original.cls} → ${downgrade} (role: ${s2.roleType})`);
+
+  } else if (s2.wrongdoingApplies === true && conf >= 0.70) {
+    // Stage 2 CONFIRMS target IS the subject.
+    // If Stage 1 had wrongly classified as IRRELEVANT_MLTF / FALSE_HIT / NO_HIT
+    // AND Stage 2 high conf AND ML/TF matter exists → upgrade to TRUE_HIT.
+    const shouldUpgrade = (original.cls === 'IRRELEVANT_MLTF'
+                        || original.cls === 'FALSE_HIT'
+                        || original.cls === 'NO_HIT')
+                       && conf >= 0.75
+                       && s2.mltfMatterExistsInArticle === true;
     const newCls = shouldUpgrade ? 'TRUE_HIT' : original.cls;
 
     const evidenceTail = s2.evidenceQuote
       ? ` Supporting evidence from the article: "${s2.evidenceQuote}".`
       : '';
-    const amlReason = `${searchEntity} is confirmed as the direct subject of the wrongdoing described in this article. ${cleanReasoning}${evidenceTail}`;
+    const upgradedReason = `True Hit, because ${searchEntity} is confirmed as the direct subject of the wrongdoing described in this article. ${cleanReasoning}${evidenceTail}`;
 
     parsed[idx] = {
       ...original,
@@ -2800,8 +2802,8 @@ const shouldUpgrade = (original.cls === 'IRRELEVANT_MLTF'
       confidence: Math.min(1.0, Math.max(original.confidence, conf)),
       _stage2: s2,
       _stage1Original: { cls: original.cls, reason: original.reason },
-      reason: amlReason,
-      ...(shouldUpgrade ? { riskCat: 'Upgraded by Stage 2 role analysis' } : {}),
+      reason: newCls === 'TRUE_HIT' ? upgradedReason : original.reason,
+      ...(shouldUpgrade ? { riskCat: original.riskCat === 'N/A' ? 'Upgraded by role analysis' : original.riskCat } : {}),
     };
 
     if (shouldUpgrade) {
@@ -2811,12 +2813,11 @@ const shouldUpgrade = (original.cls === 'IRRELEVANT_MLTF'
     }
 
   } else {
-    // Stage 2 inconclusive — keep Stage 1 cls, but clean the reason
+    // Stage 2 inconclusive — keep Stage 1 cls + reason
     parsed[idx] = {
       ...original,
       _stage2: s2,
       _stage1Original: { cls: original.cls, reason: original.reason },
-      reason: original.reason, // keep as-is; cleanReason() in summaryText will strip markers
     };
     console.log(`⚠️ Stage 2 [#${s2.rank}]: inconclusive (conf ${conf})`);
   }
@@ -2861,51 +2862,73 @@ const shouldUpgrade = (original.cls === 'IRRELEVANT_MLTF'
     } catch (err) { setIsAnalyzing(false); setProgress(0); setStage(''); setErrorMsg(`分析失敗：${err.message}`); }
   };
     
-  const counts = useMemo(() => {
-    const c = { TRUE_HIT: 0, POSSIBLE_HIT: 0, PENDING_INFO: 0, FALSE_HIT: 0, IRRELEVANT_MLTF: 0, NO_HIT: 0 };
+ const counts = useMemo(() => {
+    const c = { TRUE_HIT: 0, FALSE_HIT: 0, IRRELEVANT_MLTF: 0, NO_HIT: 0 };
     results.forEach(r => { if (c[r.cls] !== undefined) c[r.cls]++; });
     return c;
   }, [results]);
 
   const filteredResults = useMemo(() => filterType === 'ALL' ? results : results.filter(r => r.cls === filterType), [results, filterType]);
-    // AML-ready: strip all internal Stage 1/2 markers, emojis, debug brackets
-const cleanReason = (raw) => {
-  if (!raw) return '';
-  let r = String(raw);
-  // Remove all stage markers and emoji headers
-  r = r.replace(/🎯\s*\[Stage\s*\d[^\]]*\]\s*/gi, '');
-  r = r.replace(/\[Stage\s*\d[^\]]*\]\s*/gi, '');
-  r = r.replace(/\[Auto[^\]]*\]\s*/gi, '');
-  r = r.replace(/\[Manual\][^|]*\|\s*Original\([^)]+\):\s*/gi, '');
-  r = r.replace(/[🎯✅❌⚠️📉⏳🚨ℹ️🔴🟡🟢]/g, '');
-  // Drop the "— ORIGINAL (Stage 1) —" debug appendix entirely
-  r = r.replace(/\n+—\s*ORIGINAL[^]*$/i, '');
-  // Drop trailing "Evidence: \"...\"" if it duplicates the reasoning
-  r = r.replace(/\s*Evidence:\s*"[^"]{0,300}"\s*$/i, '');
-  // Collapse whitespace, trim
-  r = r.replace(/\s+/g, ' ').trim();
-  return r;
-};
 
-const summaryText = useMemo(() => {
-  if (!results.length) return '';
-  const clsLabel = (cls) => CLS_CONFIG[cls]?.label || cls;
-  return results.map((r, i) =>
-    `${i + 1}. ${clsLabel(r.cls)}: ${cleanReason(r.reason)}`
-  ).join('\n\n');
-}, [results]);
-   const updateResultCls = (rank, newCls, note) => {
+  // CDD-format clean: strip noise but preserve "Label, because" prefix
+  const cleanReason = (raw) => {
+    if (!raw) return '';
+    let r = String(raw);
+    // Remove stage markers
+    r = r.replace(/🎯\s*\[Stage\s*\d[^\]]*\]\s*/gi, '');
+    r = r.replace(/\[Stage\s*\d[^\]]*\]\s*/gi, '');
+    r = r.replace(/STAGE\s*\d+\s*:\s*/gi, '');
+    // Remove auto/manual markers
+    r = r.replace(/\[Auto[^\]]*\]\s*/gi, '');
+    r = r.replace(/\[Manual\][^|]*\|\s*Original\([^)]+\):\s*/gi, '');
+    // Strip emoji
+    r = r.replace(/[🎯✅❌⚠️📉⏳🚨ℹ️🔴🟡🟢📋✏️]/g, '');
+    // Drop debug appendices
+    r = r.replace(/\n+—\s*ORIGINAL[^]*$/i, '');
+    r = r.replace(/\s*Evidence:\s*"[^"]{0,300}"\s*$/i, '');
+    // Collapse whitespace
+    r = r.replace(/\s+/g, ' ').trim();
+    return r;
+  };
+
+  const summaryText = useMemo(() => {
+    if (!results.length) return '';
+    return results.map((r, i) => {
+      const c = CLS_CONFIG[r.cls] || CLS_CONFIG['NO_HIT'];
+      const labelDisplay = detectedLang === 'zh' ? c.labelZh : c.label;
+      const reason = cleanReason(r.reason) || 'no reason provided';
+
+      // Ensure reason starts with "<Label>, because " — if AI followed format, keep; else prepend.
+      const hasPrefix = /^(true hit|false hit|no hit|irrelevant ml\/tf|真實命中|誤報|無命中|無關 ml\/tf)\s*,\s*because/i.test(reason);
+      const fullReason = hasPrefix ? reason : `${labelDisplay}, because ${reason}`;
+
+      return `${i + 1}. ${labelDisplay}: ${fullReason}`;
+    }).join('\n\n');
+  }, [results, detectedLang]);
+
+  const updateResultCls = (rank, newCls, note) => {
+    const labelMap = {
+      TRUE_HIT: 'True Hit',
+      FALSE_HIT: 'False Hit',
+      IRRELEVANT_MLTF: 'Irrelevant ML/TF',
+      NO_HIT: 'No Hit',
+    };
+    const newLabel = labelMap[newCls] || 'Irrelevant ML/TF';
     setResults(prev => prev.map(r =>
       r.rank === rank
         ? {
             ...r,
             cls: newCls,
-            reason: `[Manual] ${note} | Original(${r.cls}): ${r.reason}`,
+            reason: `${newLabel}, because ${note}. Original AI classification was ${CLS_CONFIG[r.cls]?.label || r.cls}.`,
             _manualOverride: true,
+            _previousCls: r.cls,
+            _previousReason: r.reason,
           }
         : r
     ));
   };
+
+  
   const [strFlaggedRanks, setStrFlaggedRanks] = useState(new Set());
 
  const flagSTR = (rank, resultItem) => {
@@ -2933,291 +2956,157 @@ const summaryText = useMemo(() => {
   
 const ResultCard = ({ r }) => {
     const c = CLS_CONFIG[r.cls] || CLS_CONFIG['NO_HIT'];
-    const Icon = c.icon;
     const isOpen = expandedId === r.rank;
-    
-    // 邊框與陰影顏色 mapping
-    const accentColor = {
-      TRUE_HIT: { 
-        border: 'border-red-200', 
-        ring: 'hover:ring-red-200',
-        leftBar: 'bg-gradient-to-b from-red-500 to-rose-600',
-        rankBg: 'bg-gradient-to-br from-red-100 to-rose-200 text-red-700',
-      },
-      POSSIBLE_HIT: { 
-        border: 'border-purple-200', 
-        ring: 'hover:ring-purple-200',
-        leftBar: 'bg-gradient-to-b from-purple-500 to-violet-600',
-        rankBg: 'bg-gradient-to-br from-purple-100 to-violet-200 text-purple-700',
-      },
-      PENDING_INFO: { 
-        border: 'border-indigo-200', 
-        ring: 'hover:ring-indigo-200',
-        leftBar: 'bg-gradient-to-b from-indigo-500 to-blue-600',
-        rankBg: 'bg-gradient-to-br from-indigo-100 to-blue-200 text-indigo-700',
-      },
-      FALSE_HIT: { 
-        border: 'border-amber-200', 
-        ring: 'hover:ring-amber-200',
-        leftBar: 'bg-gradient-to-b from-amber-500 to-orange-600',
-        rankBg: 'bg-gradient-to-br from-amber-100 to-orange-200 text-amber-700',
-      },
-      IRRELEVANT_MLTF: { 
-        border: 'border-slate-200', 
-        ring: 'hover:ring-slate-200',
-        leftBar: 'bg-gradient-to-b from-slate-400 to-slate-500',
-        rankBg: 'bg-gradient-to-br from-slate-100 to-slate-200 text-slate-700',
-      },
-      NO_HIT: { 
-        border: 'border-emerald-200', 
-        ring: 'hover:ring-emerald-200',
-        leftBar: 'bg-gradient-to-b from-emerald-500 to-teal-600',
-        rankBg: 'bg-gradient-to-br from-emerald-100 to-teal-200 text-emerald-700',
-      },
-    }[r.cls] || {};
+    const labelDisplay = detectedLang === 'zh' ? c.labelZh : c.label;
+
+    // Build display reason — ensure "<Label>, because" prefix is present
+    const cleanedReason = cleanReason(r.reason) || '';
+    const hasPrefix = /^(true hit|false hit|no hit|irrelevant ml\/tf|真實命中|誤報|無命中|無關 ml\/tf)\s*,\s*because/i.test(cleanedReason);
+    const displayReason = hasPrefix ? cleanedReason : `${labelDisplay}, because ${cleanedReason}`;
+
+    // Accent colour for left bar + label colour
+    const accent = {
+      TRUE_HIT:        { leftBar: 'bg-red-500',     labelColor: 'text-red-700' },
+      FALSE_HIT:       { leftBar: 'bg-amber-500',   labelColor: 'text-amber-700' },
+      IRRELEVANT_MLTF: { leftBar: 'bg-slate-400',   labelColor: 'text-slate-600' },
+      NO_HIT:          { leftBar: 'bg-emerald-500', labelColor: 'text-emerald-700' },
+    }[r.cls] || { leftBar: 'bg-slate-400', labelColor: 'text-slate-600' };
 
     return (
-      <div className={`relative bg-white border ${accentColor.border} rounded-2xl overflow-hidden shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:shadow-[0_8px_24px_rgba(15,23,42,0.08)] transition-all hover:-translate-y-0.5`}>
+      <div className="relative bg-white border border-slate-200 rounded-lg overflow-hidden hover:shadow-sm transition-shadow">
         {/* Left accent bar */}
-        <div className={`absolute left-0 top-0 bottom-0 w-1 ${accentColor.leftBar}`} />
-        
-        <div 
-          className="p-4 pl-5 cursor-pointer flex items-start gap-3" 
+        <div className={`absolute left-0 top-0 bottom-0 w-1 ${accent.leftBar}`} />
+
+        <div
+          className="pl-4 pr-3 py-3 cursor-pointer flex items-start gap-2"
           onClick={() => setExpandedId(isOpen ? null : r.rank)}
         >
-          {/* Rank + Icon Column */}
-          <div className="flex flex-col items-center gap-1.5 shrink-0">
-            <span className={`text-xs font-black w-7 h-7 rounded-xl ${accentColor.rankBg} flex items-center justify-center shadow-sm`}>
-              {r.rank}
-            </span>
-            <div className={`w-7 h-7 rounded-lg ${c.bg} flex items-center justify-center`}>
-              <Icon className={`w-4 h-4 ${c.text}`} strokeWidth={2.2} />
-            </div>
-          </div>
-          
-          {/* Content Column */}
+          {/* Rank number */}
+          <span className="text-sm font-bold text-slate-500 min-w-[24px] tabular-nums">
+            {r.rank}.
+          </span>
+
+          {/* Point-form main content */}
           <div className="flex-1 min-w-0">
-            {/* Meta Row */}
-            <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
-              <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${c.badge}`}>
-                {detectedLang === 'zh' ? c.labelZh : c.label}
-              </span>
-              <span className="inline-flex items-center gap-1 text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded-md font-bold">
-                <span className={`w-1 h-1 rounded-full ${
-                  r.confidence >= 0.9 ? 'bg-emerald-500' :
-                  r.confidence >= 0.75 ? 'bg-amber-500' : 'bg-red-500'
-                }`} />
-                {Math.round(r.confidence * 100)}%
-              </span>
-              <span className="text-[11px] text-slate-600 font-semibold">{r.source}</span>
-              <span className="text-[10px] text-slate-400">·</span>
-              <span className="text-[10px] text-slate-400 font-mono">{r.date}</span>
-              {r._manualOverride && (
-                <span className="inline-flex items-center gap-1 text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded-md font-bold">
-                  ✏️ Manual
-                </span>
+            <div className="text-[13px] leading-relaxed">
+              <span className={`font-bold ${accent.labelColor}`}>{labelDisplay}</span>
+              <span className="text-slate-400">: </span>
+              <span className="text-slate-800">{displayReason}</span>
+            </div>
+
+            {/* Meta row */}
+            {(r.source || r.date || r._manualOverride) && (
+              <div className="flex items-center gap-2 mt-1.5 flex-wrap text-[10px] text-slate-400">
+                {r.source && <span className="font-semibold">{r.source}</span>}
+                {r.source && r.date && <span>·</span>}
+                {r.date && <span className="font-mono">{r.date}</span>}
+                {r._manualOverride && (
+                  <span className="text-indigo-600 font-bold">✏️ Manual override</span>
+                )}
+              </div>
+            )}
+          </div>
+
+          <ChevronRight
+            className={`w-4 h-4 text-slate-300 transition-transform mt-0.5 shrink-0 ${isOpen ? 'rotate-90' : ''}`}
+          />
+        </div>
+
+        {/* Expanded detail */}
+        {isOpen && (
+          <div className="pl-4 pr-3 pb-3 border-t border-slate-100 bg-slate-50/30">
+            {r.title && (
+              <div className="pt-2.5">
+                <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Title</div>
+                <div className="text-xs text-slate-700 font-semibold">{r.title}</div>
+              </div>
+            )}
+            {r.snippet && (
+              <div className="pt-2">
+                <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Snippet</div>
+                <div className="text-xs text-slate-600 leading-relaxed">{r.snippet}</div>
+              </div>
+            )}
+            {r.matchedKeywords && r.matchedKeywords.length > 0 && (
+              <div className="pt-2">
+                <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Matched Keywords</div>
+                <div className="flex flex-wrap gap-1">
+                  {r.matchedKeywords.map((kw, i) => (
+                    <span key={i} className="text-[10px] bg-white border border-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-semibold">
+                      {kw}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {r.actualSubjectName && (
+              <div className="pt-2">
+                <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Actual Subject (≠ target)</div>
+                <div className="text-xs text-amber-700 font-semibold">{r.actualSubjectName}</div>
+              </div>
+            )}
+
+            {/* Manual override actions */}
+            <div className="flex gap-1.5 mt-3 flex-wrap">
+              {r.cls === 'TRUE_HIT' && (
+                <>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); flagSTR(r.rank, r); }}
+                    className={`text-[11px] px-2.5 py-1 rounded font-bold transition ${
+                      strFlaggedRanks.has(r.rank)
+                        ? 'bg-red-700 text-white'
+                        : 'bg-red-500 text-white hover:bg-red-600'
+                    }`}
+                  >
+                    {strFlaggedRanks.has(r.rank) ? '✅ STR flagged' : '🚨 Flag STR'}
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'FALSE_HIT', 'manually downgraded to False Hit by analyst'); }}
+                    className="text-[11px] px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-100 font-semibold"
+                  >
+                    → False Hit
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'IRRELEVANT_MLTF', 'manually re-classified to Irrelevant ML/TF by analyst'); }}
+                    className="text-[11px] px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-100 font-semibold"
+                  >
+                    → Irrelevant
+                  </button>
+                </>
+              )}
+              {r.cls === 'FALSE_HIT' && (
+                <>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'TRUE_HIT', 'manually upgraded to True Hit by analyst'); }}
+                    className="text-[11px] px-2.5 py-1 rounded bg-red-500 text-white hover:bg-red-600 font-bold"
+                  >
+                    ↑ True Hit
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'IRRELEVANT_MLTF', 'manually re-classified to Irrelevant ML/TF by analyst'); }}
+                    className="text-[11px] px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-100 font-semibold"
+                  >
+                    → Irrelevant
+                  </button>
+                </>
+              )}
+              {(r.cls === 'IRRELEVANT_MLTF' || r.cls === 'NO_HIT') && (
+                <>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'TRUE_HIT', 'manually upgraded to True Hit by analyst'); }}
+                    className="text-[11px] px-2.5 py-1 rounded bg-red-500 text-white hover:bg-red-600 font-bold"
+                  >
+                    ↑ True Hit
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'FALSE_HIT', 'manually re-classified to False Hit by analyst'); }}
+                    className="text-[11px] px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-100 font-semibold"
+                  >
+                    → False Hit
+                  </button>
+                </>
               )}
             </div>
-            
-            {/* Title */}
-            <h3 className="text-sm font-bold text-slate-900 leading-snug mb-1">{r.title}</h3>
-            
-            {/* Snippet */}
-            <p className="text-xs text-slate-600 leading-relaxed line-clamp-2">{r.snippet}</p>
-            
-            {/* Keywords */}
-            {r.matchedKeywords.length > 0 && (
-              <div className="flex gap-1 mt-2 flex-wrap">
-                {r.matchedKeywords.map((kw, i) => (
-                  <span 
-                    key={i} 
-                    className={`${
-                      isSanction 
-                        ? 'bg-gradient-to-r from-orange-50 to-red-50 text-orange-700 border-orange-200' 
-                        : 'bg-gradient-to-r from-red-50 to-rose-50 text-red-700 border-red-200'
-                    } border px-2 py-0.5 rounded-md text-[10px] font-semibold`}
-                  >
-                    {kw}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-          
-          {/* Chevron */}
-          <div className={`shrink-0 w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
-            isOpen ? 'bg-slate-100 rotate-0' : 'hover:bg-slate-100'
-          }`}>
-            {isOpen 
-              ? <ChevronDown className="w-4 h-4 text-slate-600" strokeWidth={2.5} /> 
-              : <ChevronRight className="w-4 h-4 text-slate-400" strokeWidth={2.5} />
-            }
-          </div>
-        </div>
-        
-        {/* Expanded Section */}
-        {isOpen && (
-          <div className="px-4 pb-4 pl-5">
-            {/* AI Analysis Box */}
-            <div className={`${c.bg} rounded-xl p-4 border ${c.border}`}>
-              <div className="flex items-center gap-2 mb-2.5">
-                <div className={`w-8 h-8 rounded-lg ${c.bg} border ${c.border} flex items-center justify-center`}>
-                  <Brain className={`w-4 h-4 ${c.text}`} strokeWidth={2.2} />
-                </div>
-                <div>
-                  <div className={`text-xs font-black ${c.text} tracking-wide uppercase`}>AI 分析</div>
-                  <div className="text-[10px] text-slate-500">
-                    {r.cls === 'TRUE_HIT' ? '🚨 真實命中' 
-                      : r.cls === 'POSSIBLE_HIT' ? '⚠️ 存疑' 
-                      : r.cls === 'FALSE_HIT' ? '❌ 誤報' 
-                      : r.cls === 'IRRELEVANT_MLTF' ? 'ℹ️ 無關' 
-                      : '✅ 無命中'}
-                  </div>
-                </div>
-              </div>
-              <p className="text-xs text-slate-700 leading-relaxed">
-                {r.reason.replace(/^(TRUE HIT|FALSE HIT|IRRELEVANT ML\/TF|IRRELEVANT|NO HIT):\s*/i, '')}
-              </p>
-              
-              {/* Stats */}
-              <div className="flex gap-2 mt-3 pt-3 border-t border-current/10">
-                <div className="flex-1 bg-white/60 rounded-lg p-2">
-                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Risk Category</div>
-                  <div className={`text-xs font-bold ${c.text} mt-0.5`}>{r.riskCat}</div>
-                </div>
-                <div className="flex-1 bg-white/60 rounded-lg p-2">
-                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Confidence</div>
-                  <div className="flex items-center gap-1.5 mt-0.5">
-                    <div className="flex-1 h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                      <div 
-                        className={`h-full rounded-full ${accentColor.leftBar}`}
-                        style={{ width: `${Math.round(r.confidence * 100)}%` }} 
-                      />
-                    </div>
-                    <span className="text-xs font-black text-slate-900">{Math.round(r.confidence * 100)}%</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            {r.cls === 'TRUE_HIT' && (
-              <div className="flex gap-2 mt-3">
-                <button
-                  onClick={(e) => { e.stopPropagation(); flagSTR(r.rank, r); }}
-                  className={`flex-1 px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-                    strFlaggedRanks.has(r.rank)
-                      ? 'bg-gradient-to-r from-red-600 to-rose-700 text-white shadow-lg shadow-red-500/40'
-                      : 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white shadow-md shadow-red-500/30'
-                  }`}
-                >
-                  {strFlaggedRanks.has(r.rank) ? '✅ 已標記 STR' : '🚨 標記 STR'}
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'FALSE_HIT', 'Manually downgraded from TRUE_HIT'); }}
-                  className="px-3 py-2 rounded-xl text-xs font-bold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition flex items-center gap-1.5"
-                >
-                  ↓ 降級
-                </button>
-              </div>
-            )}
-            {r.cls === 'PENDING_INFO' && (
-              <div className="mt-3 space-y-3">
-                <div className="bg-gradient-to-br from-indigo-50 to-blue-100 border border-indigo-200 rounded-xl p-3.5">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center shadow shadow-indigo-500/30">
-                      <Loader className="w-3.5 h-3.5 text-white" strokeWidth={2.5} />
-                    </div>
-                    <div className="text-xs font-black text-indigo-900">⏳ 待 CDD 補充以下資料</div>
-                  </div>
-                  {r.missingInfo && r.missingInfo.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5 mb-2">
-                      {r.missingInfo.map((info, i) => (
-                        <span 
-                          key={i} 
-                          className="bg-white text-indigo-700 border border-indigo-200 px-2 py-1 rounded-lg text-[11px] font-bold shadow-sm"
-                        >
-                          ❓ {info}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-[11px] text-indigo-600 mb-2 italic">
-                      AI 未指定具體欄位 — 請至少補充:DOB、國籍、職務、公司關聯
-                    </div>
-                  )}
-                  <div className="text-[11px] text-indigo-700 bg-white/60 rounded-lg p-2 flex items-start gap-1.5">
-                    <span>🚨</span>
-                    <span>
-                      <b>名字匹配 + 有 ML/TF 內容,但缺乏身份驗證資料。</b>
-                      請補充上方資料後重新分析,即可升級為 TRUE_HIT / POSSIBLE_HIT 或下調為 FALSE_HIT。
-                    </span>
-                  </div>
-                </div>
-                <div className="flex gap-2 flex-wrap">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'FALSE_HIT', 'CDD confirmed: different person after identifier check'); }}
-                    className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white px-3 py-2 rounded-xl text-xs font-bold shadow-md shadow-emerald-500/30 transition-all"
-                  >
-                    ✅ 確認非同人
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'POSSIBLE_HIT', 'CDD supplied partial identifiers — partial match confirmed'); }}
-                    className="flex-1 bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 text-white px-3 py-2 rounded-xl text-xs font-bold shadow-md shadow-purple-500/30 transition-all"
-                  >
-                    🟣 升為 Possible
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'TRUE_HIT', 'CDD supplied full identifiers — confirmed same person'); }}
-                    className="flex-1 bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-3 py-2 rounded-xl text-xs font-bold shadow-md shadow-red-500/30 transition-all"
-                  >
-                    🚨 升為 True Hit
-                  </button>
-                </div>
-              </div>
-            )}
-            
-            {r.cls === 'POSSIBLE_HIT' && (
-              <div className="mt-3 space-y-3">
-                {r.missingInfo && r.missingInfo.length > 0 && (
-                  <div className="bg-gradient-to-br from-purple-50 to-violet-100 border border-purple-200 rounded-xl p-3.5">
-                    <div className="flex items-center gap-2 mb-2">
-                      <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center shadow shadow-purple-500/30">
-                        <Search className="w-3.5 h-3.5 text-white" strokeWidth={2.5} />
-                      </div>
-                      <div className="text-xs font-black text-purple-900">需要核實的資料</div>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5 mb-2">
-                      {r.missingInfo.map((info, i) => (
-                        <span 
-                          key={i} 
-                          className="bg-white text-purple-700 border border-purple-200 px-2 py-1 rounded-lg text-[11px] font-bold shadow-sm"
-                        >
-                          ❓ {info}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="text-[11px] text-purple-700 bg-white/60 rounded-lg p-2 flex items-start gap-1.5">
-                      <span>💡</span>
-                      <span>請提供以上資料後重新分析，或由合規人員手動核實。</span>
-                    </div>
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'FALSE_HIT', 'Manually confirmed as different person'); }}
-                    className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white px-3 py-2 rounded-xl text-xs font-bold shadow-md shadow-emerald-500/30 transition-all"
-                  >
-                    ✅ 確認非同人
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'TRUE_HIT', 'Manually upgraded from POSSIBLE_HIT'); }}
-                    className="flex-1 bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white px-3 py-2 rounded-xl text-xs font-bold shadow-md shadow-red-500/30 transition-all"
-                  >
-                    🚨 升級為 True Hit
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -3815,21 +3704,19 @@ const ResultCard = ({ r }) => {
             )}
 
             {analysisComplete && (<>
-              {/* Statistics Grid - Modern */}
-              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
+              {/* Statistics Grid — 5 columns (Total + 4 labels) */}
+              <div className="grid grid-cols-5 gap-2.5">
                 <div className="bg-white rounded-2xl border border-slate-200 p-3 text-center shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:shadow-[0_4px_16px_rgba(15,23,42,0.08)] transition-all">
                   <div className="text-2xl font-black text-slate-900 tracking-tight">{results.length}</div>
                   <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-0.5">Total</div>
                 </div>
-                {Object.entries(CLS_CONFIG).map(([key, c]) => { 
-                  const Icon = c.icon; 
+                {Object.entries(CLS_CONFIG).map(([key, c]) => {
+                  const Icon = c.icon;
                   const colorMap = {
-                    TRUE_HIT: 'from-red-50 to-rose-100 border-red-200 hover:shadow-red-200/50',
-                    POSSIBLE_HIT: 'from-purple-50 to-violet-100 border-purple-200 hover:shadow-purple-200/50',
-                    PENDING_INFO: 'from-indigo-50 to-blue-100 border-indigo-200 hover:shadow-indigo-200/50',
-                    FALSE_HIT: 'from-amber-50 to-orange-100 border-amber-200 hover:shadow-amber-200/50',
-                    IRRELEVANT_MLTF: 'from-slate-50 to-slate-100 border-slate-200 hover:shadow-slate-200/50',
-                    NO_HIT: 'from-emerald-50 to-teal-100 border-emerald-200 hover:shadow-emerald-200/50',
+                    TRUE_HIT:        'from-red-50 to-rose-100 border-red-200',
+                    FALSE_HIT:       'from-amber-50 to-orange-100 border-amber-200',
+                    IRRELEVANT_MLTF: 'from-slate-50 to-slate-100 border-slate-200',
+                    NO_HIT:          'from-emerald-50 to-teal-100 border-emerald-200',
                   };
                   return (
                     <div key={key} className={`bg-gradient-to-br ${colorMap[key]} rounded-2xl border p-3 text-center shadow-sm hover:shadow-md transition-all`}>
@@ -3839,19 +3726,15 @@ const ResultCard = ({ r }) => {
                         <span className="truncate">{detectedLang === 'zh' ? c.labelZh : c.label}</span>
                       </div>
                     </div>
-                  ); 
+                  );
                 })}
               </div>
 
-              {/* Risk Assessment Banner - Bold */}
+              {/* Risk Assessment Banner — Simplified */}
               <div className={`relative overflow-hidden rounded-2xl p-4 text-white shadow-lg ${
-                counts.TRUE_HIT > 0 
-                  ? 'bg-gradient-to-r from-red-500 via-red-600 to-rose-700 shadow-red-500/30' 
-                  : counts.PENDING_INFO > 0
-                    ? 'bg-gradient-to-r from-indigo-500 via-indigo-600 to-blue-700 shadow-indigo-500/30'
-                    : counts.POSSIBLE_HIT > 0 
-                      ? 'bg-gradient-to-r from-purple-500 via-purple-600 to-violet-700 shadow-purple-500/30' 
-                      : 'bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-700 shadow-emerald-500/30'
+                counts.TRUE_HIT > 0
+                  ? 'bg-gradient-to-r from-red-500 via-red-600 to-rose-700 shadow-red-500/30'
+                  : 'bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-700 shadow-emerald-500/30'
               }`}>
                 <div className="absolute -top-8 -right-8 w-32 h-32 bg-white/10 rounded-full blur-3xl" />
                 <div className="absolute -bottom-8 -left-8 w-32 h-32 bg-black/10 rounded-full blur-3xl" />
@@ -3863,42 +3746,37 @@ const ResultCard = ({ r }) => {
                     <div>
                       <div className="text-[11px] font-bold uppercase tracking-widest opacity-80">{riskLabel}</div>
                       <div className="text-xl font-black tracking-tight">
-                        {counts.TRUE_HIT > 0 ? '🚨 HIGH RISK' 
-                          : counts.PENDING_INFO > 0 ? '⏳ AWAITING CDD INFO'
-                          : counts.POSSIBLE_HIT > 0 ? '⚠️ REVIEW NEEDED' 
-                          : '✅ LOW RISK'}
+                        {counts.TRUE_HIT > 0 ? '🚨 HIGH RISK' : '✅ LOW RISK'}
                       </div>
                     </div>
                   </div>
                   <div className="text-xs opacity-90 max-w-xs text-right">
-                    {counts.TRUE_HIT > 0 ? riskDescHigh 
-                      : counts.PENDING_INFO > 0 ? `${counts.PENDING_INFO} result(s) require CDD identifier follow-up` 
-                      : riskDescLow}
+                    {counts.TRUE_HIT > 0 ? riskDescHigh : riskDescLow}
                   </div>
                 </div>
               </div>
+
+              {/* Filter Tabs — 5 tabs (All + 4 labels) */}
               <div className="bg-white rounded-2xl border border-slate-200 p-2 shadow-[0_2px_8px_rgba(15,23,42,0.04)]">
                 <div className="flex gap-1 flex-wrap">
                   {[
-                    { k: 'ALL', l: `全部`, count: results.length, color: 'slate' },
-                    ...Object.entries(CLS_CONFIG).map(([k, c]) => ({ 
-                      k, 
-                      l: detectedLang === 'zh' ? c.labelZh : c.label, 
+                    { k: 'ALL', l: detectedLang === 'zh' ? '全部' : 'All', count: results.length, color: 'slate' },
+                    ...Object.entries(CLS_CONFIG).map(([k, c]) => ({
+                      k,
+                      l: detectedLang === 'zh' ? c.labelZh : c.label,
                       count: counts[k],
-                      color: k === 'TRUE_HIT' ? 'red' : k === 'POSSIBLE_HIT' ? 'purple' : k === 'PENDING_INFO' ? 'indigo' : k === 'FALSE_HIT' ? 'amber' : k === 'IRRELEVANT_MLTF' ? 'slate' : 'emerald'
+                      color: k === 'TRUE_HIT' ? 'red' : k === 'FALSE_HIT' ? 'amber' : k === 'IRRELEVANT_MLTF' ? 'slate' : 'emerald'
                     }))
                   ].map(f => {
                     const isActive = filterType === f.k;
                     return (
-                      <button 
-                        key={f.k} 
-                        onClick={() => setFilterType(f.k)} 
+                      <button
+                        key={f.k}
+                        onClick={() => setFilterType(f.k)}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                          isActive 
-                            ? f.color === 'red' ? 'bg-gradient-to-r from-red-500 to-rose-600 text-white shadow-md shadow-red-500/30'
-                            : f.color === 'purple' ? 'bg-gradient-to-r from-purple-500 to-violet-600 text-white shadow-md shadow-purple-500/30'
-                            : f.color === 'indigo' ? 'bg-gradient-to-r from-indigo-500 to-blue-600 text-white shadow-md shadow-indigo-500/30'
-                            : f.color === 'amber' ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-md shadow-amber-500/30'
+                          isActive
+                            ? f.color === 'red'     ? 'bg-gradient-to-r from-red-500 to-rose-600 text-white shadow-md shadow-red-500/30'
+                            : f.color === 'amber'   ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-md shadow-amber-500/30'
                             : f.color === 'emerald' ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/30'
                             : 'bg-gradient-to-r from-slate-700 to-slate-800 text-white shadow-md shadow-slate-700/30'
                             : 'text-slate-600 hover:bg-slate-100'
@@ -3915,13 +3793,28 @@ const ResultCard = ({ r }) => {
                   })}
                 </div>
               </div>
-              <div className="space-y-2">{filteredResults.length === 0 ? <div className="text-center py-8 text-sm text-gray-400">無結果</div> : filteredResults.map(r => <ResultCard key={r.rank} r={r} />)}</div>
-              <button onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); }} className="w-full py-2 rounded-lg text-xs text-gray-500 border border-dashed hover:border-gray-400 hover:text-gray-700">🔄 重新分析（清除結果)
-                  </button>         
-              {/* 📋 分析結果摘要（可複製）*/}
-              <div className="bg-gray-50 rounded-xl border p-4">
+
+              {/* Point-form result list */}
+              <div className="space-y-2">
+                {filteredResults.length === 0
+                  ? <div className="text-center py-8 text-sm text-slate-400">{detectedLang === 'zh' ? '無結果' : 'No results'}</div>
+                  : filteredResults.map(r => <ResultCard key={r.rank} r={r} />)
+                }
+              </div>
+
+              <button
+                onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); }}
+                className="w-full py-2 rounded-lg text-xs text-slate-500 border border-dashed hover:border-slate-400 hover:text-slate-700"
+              >
+                🔄 {detectedLang === 'zh' ? '重新分析（清除結果）' : 'Re-analyze (clear results)'}
+              </button>
+
+              {/* Copyable Poe-Chat-format summary */}
+              <div className="bg-slate-50 rounded-xl border p-4">
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-bold text-gray-700">📋 分析結果摘要（可複製）</h3>
+                  <h3 className="text-sm font-bold text-slate-700">
+                    📋 {detectedLang === 'zh' ? '分析結果摘要（可複製）' : 'Analysis Summary (Copy & Paste)'}
+                  </h3>
                   <button
                     onClick={() => {
                       navigator.clipboard.writeText(summaryText).then(() => {
@@ -3930,13 +3823,15 @@ const ResultCard = ({ r }) => {
                       });
                     }}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                      copied ? 'bg-green-600 text-white' : 'bg-slate-700 text-white hover:bg-slate-600'
+                      copied ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-white hover:bg-slate-600'
                     }`}
                   >
-                    {copied ? '✅ 已複製' : '📋 複製全部'}
+                    {copied
+                      ? (detectedLang === 'zh' ? '✅ 已複製' : '✅ Copied')
+                      : (detectedLang === 'zh' ? '📋 複製全部' : '📋 Copy All')}
                   </button>
                 </div>
-                <pre className="w-full max-h-96 overflow-y-auto text-xs font-mono bg-white border rounded-lg p-3 whitespace-pre-wrap text-gray-700 select-all">
+                <pre className="w-full max-h-96 overflow-y-auto text-xs font-mono bg-white border rounded-lg p-3 whitespace-pre-wrap text-slate-700 select-all">
                   {summaryText}
                 </pre>
               </div>
