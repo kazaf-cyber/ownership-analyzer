@@ -2746,11 +2746,23 @@ stage2Results.forEach((res) => {
   const conf = typeof s2.confidence === 'number' ? s2.confidence : 0;
   const cleanReasoning = String(s2.reasoning || '').trim();
 
-  if (s2.wrongdoingApplies === false && conf >= 0.70) {
-    // Stage 2 says target is NOT the subject
-    // unrelated → FALSE_HIT | successor / witness / victim / colleague / etc → IRRELEVANT_MLTF
-    const downgrade = s2.roleType === 'unrelated' ? 'FALSE_HIT' : 'IRRELEVANT_MLTF';
+if (s2.wrongdoingApplies === false && conf >= 0.70) {
     const mltfExists = s2.mltfMatterExistsInArticle === true;
+
+    // 🎯 CDD Rule fix: no ML/TF content → ALWAYS IRRELEVANT_MLTF
+    //    (per CDD: "no need to verify identity if there is no ML/TF content")
+    // Only mark FALSE_HIT when ML/TF content EXISTS but target is a different person
+    let downgrade;
+    if (!mltfExists) {
+      // No ML/TF in article at all → IRRELEVANT_MLTF regardless of roleType
+      downgrade = 'IRRELEVANT_MLTF';
+    } else if (s2.roleType === 'unrelated') {
+      // ML/TF exists + target is clearly a different person → FALSE_HIT
+      downgrade = 'FALSE_HIT';
+    } else {
+      // ML/TF exists but target is successor/witness/victim/colleague → IRRELEVANT_MLTF
+      downgrade = 'IRRELEVANT_MLTF';
+    }
 
     let amlReason;
     if (downgrade === 'FALSE_HIT') {
