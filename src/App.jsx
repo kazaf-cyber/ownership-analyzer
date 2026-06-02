@@ -2830,7 +2830,7 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
     } else if (mltfExists) {
       amlReason = `Irrelevant ML/TF, because the article describes ML/TF-related content, but the wrongdoing applies to ${s2.actualSubjectName || 'another party'}, not to ${searchEntity}. ${searchEntity} appears in the article only in the role of ${s2.roleType}. ${cleanReasoning}`;
     } else {
-      amlReason = `Irrelevant ML/TF, because the article does not contain any ML/TF-related subject matter concerning ${searchEntity}. ${searchEntity} appears in the article only in the role of ${s2.roleType}. ${cleanReasoning}`;
+      amlReason = `Irrelevant ML/TF, because the article does not contain any ML/TF-related subject matter concerning ${searchEntity}, who appears in the article only in the role of ${s2.roleType}. ${cleanReasoning}`;
     }
 
     parsed[idx] = {
