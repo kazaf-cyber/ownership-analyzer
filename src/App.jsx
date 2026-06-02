@@ -2106,6 +2106,7 @@ A correctly classified TRUE_HIT is just as defensible as a correctly classified 
 pdfText = cleanGooglePdfText(pdfText);
 
 /* ★ 修正 2.5:Pre-extract result anchors (URLs + breadcrumbs) as ground truth */
+/* ★ 修正 2.5:Pre-extract result anchors (URLs + breadcrumbs) as ground truth */
 const extractResultAnchors = (text) => {
   const skipPatterns = [
     'google.com/search', 'googleapis.com', 'gstatic.com',
@@ -2117,71 +2118,89 @@ const extractResultAnchors = (text) => {
     return skipPatterns.some(p => lower.includes(p));
   };
 
-  // Dedup signature: domain + first significant path/breadcrumb segment
+  /**
+   * 🔧 Robust signature: extract domain from ANYWHERE in the input + first significant
+   *    path/breadcrumb segment. Critically, this works on breadcrumb lines that DO NOT
+   *    start with the domain (e.g. publisher prefix in Chinese):
+   *
+   *      "https://upload.wikimedia.org/wikipedia/commons"
+   *          → "upload.wikimedia.org/wikipedia"
+   *      "Wikimedia Commons · https://upload.wikimedia.org › wikipedia › commons"
+   *          → "upload.wikimedia.org/wikipedia"           ← previously broken!
+   *      "ptt.cc › drawing › M.1209566327.A.B97.html"
+   *          → "ptt.cc/drawing"
+   *      "每日頭條 · https://kknews.cc › 財經"
+   *          → "kknews.cc/財經"                            ← previously broken!
+   *      "每日頭條 · https://kknews.cc › 旅遊"
+   *          → "kknews.cc/旅遊"                            ← previously broken!
+   *
+   *    Same article → same sig, regardless of which pass picks it up.
+   */
   const sigOf = (s) => {
-    const cleaned = s.toLowerCase()
-      .replace(/^https?:\/\//, '')
-      .replace(/^www\./, '')
-      .replace(/\.{2,}/g, '');
-    const m = cleaned.match(/^([a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+)/);
-    if (!m) return cleaned.slice(0, 40);
-    const domain = m[1];
-    const rest = cleaned.slice(domain.length).replace(/[›\/]+/g, ' ').trim();
-    const seg = rest.split(/\s+/).filter(t => t.length >= 3 && !t.includes('http'))[0] || '';
+    const lower = s.toLowerCase().replace(/\.{2,}/g, '');
+    // Search anywhere (no ^ anchor) so we find the domain even when the line
+    // starts with a publisher name like "Wikimedia Commons" or "每日頭條".
+    const dm = lower.match(/(?:https?:\/\/)?(?:www\.)?([a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+)/);
+    if (!dm) return lower.slice(0, 40);
+    const domain = dm[1];
+    const afterDomainIdx = lower.indexOf(dm[0]) + dm[0].length;
+    const rest = lower.slice(afterDomainIdx).replace(/[›\/]+/g, ' ').trim();
+    const seg = rest.split(/\s+/).filter(t => {
+      if (t.includes('http')) return false;
+      if (/^[a-z0-9-]+\.[a-z]{2,}/i.test(t)) return false;  // skip domain-like tokens
+      if (/^[\d.]+$/.test(t)) return false;                 // skip pure numeric tokens
+      // Chinese category words are usually 2 chars; Latin path words are usually ≥3.
+      const hasChinese = /[\u4e00-\u9fa5]/.test(t);
+      return hasChinese ? t.length >= 2 : t.length >= 3;
+    })[0] || '';
     return seg ? `${domain}/${seg}` : domain;
   };
 
-  const sigMap = new Map(); // signature → first occurrence text
+  const sigMap = new Map();
 
-  // 🥇 PASS 1 (priority): Breadcrumb anchors — most reliable per-result marker
-  //    Google PDF 中每個 result 必有一行包含 › 字符
+  // 🥇 PASS 1: Breadcrumb anchors — most reliable per-result marker.
+  //    Google PDF format: every search result has a line containing `›` separator.
   text.split('\n').forEach(line => {
     const trimmed = line.trim();
     if (trimmed.length < 8 || trimmed.length > 220) return;
     if (!trimmed.includes('›')) return;
     if (shouldSkip(trimmed)) return;
-    // Must look like a domain (e.g. "example.com")
     if (!/[a-z0-9][a-z0-9-]*\.[a-z]{2,}/i.test(trimmed)) return;
     const sig = sigOf(trimmed);
     if (!sigMap.has(sig)) sigMap.set(sig, trimmed);
   });
 
-  // Track domains already covered by breadcrumbs (for Pass 2 dedup)
+  // Domains already covered by breadcrumbs (used by Pass 2 dedup).
+  // ✅ With the fixed sigOf, this set now contains REAL domains:
+  //    {upload.wikimedia.org, ptt.cc, kknews.cc}
   const breadcrumbDomains = new Set();
   [...sigMap.keys()].forEach(s => {
-    const d = s.split('/')[0];
-    breadcrumbDomains.add(d);
+    breadcrumbDomains.add(s.split('/')[0]);
   });
 
-  // 🥈 PASS 2: Full URLs (only add if NOT already covered by a breadcrumb)
+  // 🥈 PASS 2: Full URLs — skip if domain already covered by a breadcrumb.
+  //    Rationale: in Google PDF, each result is rendered twice — once as breadcrumb,
+  //    once as inline URL header. Pass 1 already captured it. Don't double-count.
   const fullUrlPattern = /https?:\/\/[^\s)>\]"'›\n]+/g;
   (text.match(fullUrlPattern) || []).forEach(raw => {
     const cleaned = raw.replace(/[.,;:!?)\]>'"]+$/, '');
     if (cleaned.length <= 15 || shouldSkip(cleaned)) return;
 
-    // Extract domain from full URL
     const m = cleaned.toLowerCase()
       .replace(/^https?:\/\//, '')
       .replace(/^www\./, '')
       .match(/^([a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+)/);
     const domain = m ? m[1] : '';
 
-    // If full URL has NO meaningful path AND domain is covered by breadcrumb → skip
-    // (e.g. "https://scmp.com" alone is just the head of "scmp.com › news › ...")
-    const hasPath = /https?:\/\/[^\s\/]+\/[^\s]/.test(cleaned);
-    if (breadcrumbDomains.has(domain) && !hasPath) return;
+    // 🔧 FIX: If domain already covered by a breadcrumb, this URL is redundant — skip.
+    // (Removed the old `&& !hasPath` clause that let through "https://kknews.cc" etc.)
+    if (breadcrumbDomains.has(domain)) return;
 
     const sig = sigOf(cleaned);
     if (!sigMap.has(sig)) sigMap.set(sig, cleaned);
   });
 
-  // 🥉 PASS 3: Anchor-less results (social media / forum / community posts)
-  //    Some Google results have NO URL and NO breadcrumb — only a platform marker.
-  //    Examples:
-  //      • "Facebook · WE ARE CHINA"  (the missing 10th result!)
-  //      • "YouTube · ChannelName"
-  //      • "TikTok · @username"
-  //      • "Reddit · r/Subreddit"
+  // 🥉 PASS 3: Anchor-less results (social media markers like "Facebook · WE ARE CHINA")
   const socialPlatforms = [
     'Facebook', 'Twitter', 'YouTube', 'TikTok', 'Instagram',
     'LinkedIn', 'Reddit', 'Threads', 'Quora', 'Medium',
@@ -2194,13 +2213,10 @@ const extractResultAnchors = (text) => {
   text.split('\n').forEach(line => {
     const trimmed = line.trim();
     if (trimmed.length < 8 || trimmed.length > 250) return;
-    // Skip lines already covered by Pass 1/2 (URL or breadcrumb present)
     if (/https?:\/\//.test(trimmed) || trimmed.includes('›')) return;
     if (shouldSkip(trimmed)) return;
-
     const matches = trimmed.match(socialRegex);
     if (!matches) return;
-
     for (const m of matches) {
       const normalized = m.replace(/\s+/g, ' ').trim();
       const sig = 'social:' + normalized.toLowerCase().slice(0, 80);
