@@ -1686,31 +1686,53 @@ Constraints:
  * We can ask the Worker to resolve this to the real article URL via search.
  */
 const reconstructUrlsFromAnchors = (resultUrls) => {
+  // ⭐ Same helper as in extractResultAnchors (keeps publisher prefix out of resolve query)
+  const stripPublisherPrefix = (line) => {
+    if (!line) return '';
+    const s = String(line).trim();
+    const urlIdx = s.search(/https?:\/\//);
+    if (urlIdx > 0) return s.slice(urlIdx).trim();
+    if (urlIdx === 0) return s;
+    const domMatch = s.match(/\b([a-z0-9][a-z0-9-]*\.[a-z][a-z0-9.-]*[a-z0-9])\b/i);
+    if (domMatch) {
+      const idx = s.indexOf(domMatch[0]);
+      return s.slice(idx).trim();
+    }
+    return s;
+  };
+
   const reconstructed = [];
-  
+
   for (const anchor of resultUrls) {
-    // Case 1: It's already a real URL with path
-    if (anchor.startsWith('http')) {
+    const cleaned = stripPublisherPrefix(anchor);   // ⭐ 第一步:去掉 "每日頭條 · " 之類前綴
+
+    // Case 1: 已經係真實 URL with path
+    if (cleaned.startsWith('http')) {
       try {
-        const parsed = new URL(anchor);
+        const urlPart = cleaned.split(/\s/)[0];     // ⭐ 取 URL,唔包之後嘅 breadcrumb
+        const parsed = new URL(urlPart);
         const path = parsed.pathname.replace(/^\/+|\/+$/g, '');
         if (path.length >= 3) {
-          reconstructed.push({ kind: 'full_url', url: anchor });
+          reconstructed.push({
+            kind: 'full_url',
+            url: parsed.toString(),
+            original: anchor,
+          });
           continue;
         }
       } catch {}
     }
-    
-    // Case 2: Breadcrumb format "domain.com › segment1 › segment2..."
-    if (anchor.includes('›')) {
-      const parts = anchor.split(/\s*›\s*/).map(p => p.trim()).filter(Boolean);
+
+    // Case 2: Breadcrumb format
+    if (cleaned.includes('›')) {
+      const parts = cleaned.split(/\s*›\s*/).map(p => p.trim()).filter(Boolean);
       if (parts.length >= 2) {
-        const domain = parts[0].replace(/^https?:\/\//, '').replace(/^www\./, '');
-        // Path hint = remaining segments (may have "..." truncation)
+        const domain = parts[0]
+          .replace(/^https?:\/\//, '')     // ⭐ 而家會 work,因為 cleaned 已去 publisher
+          .replace(/^www\./, '');
         const pathHint = parts.slice(1)
           .map(p => p.replace(/\.{2,}/g, '').trim())
           .filter(p => p.length > 0);
-        
         reconstructed.push({
           kind: 'breadcrumb',
           domain,
@@ -1720,16 +1742,15 @@ const reconstructUrlsFromAnchors = (resultUrls) => {
         continue;
       }
     }
-    
+
     // Case 3: Social platform marker (Facebook · Page Name)
     if (anchor.includes('·')) {
       reconstructed.push({ kind: 'social', original: anchor });
     }
   }
-  
+
   return reconstructed;
 };
-
   
 const testWorkerConnection = async () => {
   setWorkerStatus('');
@@ -2105,7 +2126,7 @@ A correctly classified TRUE_HIT is just as defensible as a correctly classified 
       /* ★ 修正 2:清理 Google PDF 噪音(AI 概覽、UI 元素、引號搜尋等) */
 pdfText = cleanGooglePdfText(pdfText);
 
-/* ★ 修正 2.5:Pre-extract result anchors (URLs + breadcrumbs) as ground truth */
+
 /* ★ 修正 2.5:Pre-extract result anchors (URLs + breadcrumbs) as ground truth */
 const extractResultAnchors = (text) => {
   const skipPatterns = [
@@ -2118,48 +2139,59 @@ const extractResultAnchors = (text) => {
     return skipPatterns.some(p => lower.includes(p));
   };
 
-  /**
-   * 🔧 Robust signature: extract domain from ANYWHERE in the input + first significant
-   *    path/breadcrumb segment. Critically, this works on breadcrumb lines that DO NOT
-   *    start with the domain (e.g. publisher prefix in Chinese):
-   *
-   *      "https://upload.wikimedia.org/wikipedia/commons"
-   *          → "upload.wikimedia.org/wikipedia"
-   *      "Wikimedia Commons · https://upload.wikimedia.org › wikipedia › commons"
-   *          → "upload.wikimedia.org/wikipedia"           ← previously broken!
-   *      "ptt.cc › drawing › M.1209566327.A.B97.html"
-   *          → "ptt.cc/drawing"
-   *      "每日頭條 · https://kknews.cc › 財經"
-   *          → "kknews.cc/財經"                            ← previously broken!
-   *      "每日頭條 · https://kknews.cc › 旅遊"
-   *          → "kknews.cc/旅遊"                            ← previously broken!
-   *
-   *    Same article → same sig, regardless of which pass picks it up.
-   */
-  const sigOf = (s) => {
-    const lower = s.toLowerCase().replace(/\.{2,}/g, '');
-    // Search anywhere (no ^ anchor) so we find the domain even when the line
-    // starts with a publisher name like "Wikimedia Commons" or "每日頭條".
-    const dm = lower.match(/(?:https?:\/\/)?(?:www\.)?([a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+)/);
-    if (!dm) return lower.slice(0, 40);
-    const domain = dm[1];
-    const afterDomainIdx = lower.indexOf(dm[0]) + dm[0].length;
-    const rest = lower.slice(afterDomainIdx).replace(/[›\/]+/g, ' ').trim();
-    const seg = rest.split(/\s+/).filter(t => {
-      if (t.includes('http')) return false;
-      if (/^[a-z0-9-]+\.[a-z]{2,}/i.test(t)) return false;  // skip domain-like tokens
-      if (/^[\d.]+$/.test(t)) return false;                 // skip pure numeric tokens
-      // Chinese category words are usually 2 chars; Latin path words are usually ≥3.
-      const hasChinese = /[\u4e00-\u9fa5]/.test(t);
-      return hasChinese ? t.length >= 2 : t.length >= 3;
-    })[0] || '';
-    return seg ? `${domain}/${seg}` : domain;
+  // ⭐ NEW: Strip "Publisher · " 前綴,例如:
+  //   "每日頭條 · https://kknews.cc › 旅遊" → "https://kknews.cc › 旅遊"
+  //   "Wikimedia Commons · https://upload.wikimedia.org › ..." → "https://upload.wikimedia.org › ..."
+  const stripPublisherPrefix = (line) => {
+    if (!line) return '';
+    const s = String(line).trim();
+    // Strategy A: 搵到 http(s):// 就由果度切走前面所有嘢
+    const urlIdx = s.search(/https?:\/\//);
+    if (urlIdx > 0) return s.slice(urlIdx).trim();
+    if (urlIdx === 0) return s;
+    // Strategy B: 冇 http,搵第一個 domain pattern (e.g. "kknews.cc")
+    const domMatch = s.match(/\b([a-z0-9][a-z0-9-]*\.[a-z][a-z0-9.-]*[a-z0-9])\b/i);
+    if (domMatch) {
+      const idx = s.indexOf(domMatch[0]);
+      return s.slice(idx).trim();
+    }
+    return s;
+  };
+
+  // ⭐ NEW sigOf:用 "domain|articleKey" 做 sig
+  //   kknews.cc + 財經 → "kknews.cc|財經"
+  //   kknews.cc + 旅遊 → "kknews.cc|旅遊"   ← 兩條唔再撞 key
+  const sigOf = (line) => {
+    const stripped = stripPublisherPrefix(line);
+    const lc = stripped.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '');
+    const dm = lc.match(/^([a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+)/);
+    const domain = dm ? dm[1] : '';
+
+    let articleKey = '';
+    if (stripped.includes('›')) {
+      const segs = stripped.split(/\s*›\s*/).map(s => s.trim()).filter(Boolean);
+      if (segs.length >= 2) {
+        // 全部 breadcrumb segments join 埋,確保「財經」vs「旅遊」分得開
+        articleKey = segs.slice(1).join('/').slice(0, 60);
+      }
+    } else {
+      const urlMatch = stripped.match(/https?:\/\/[^\s]+/);
+      if (urlMatch) {
+        try {
+          const u = new URL(urlMatch[0]);
+          articleKey = u.pathname.replace(/^\/+|\/+$/g, '').slice(0, 60);
+        } catch {}
+      }
+    }
+
+    if (domain && articleKey) return `${domain}|${articleKey}`;
+    if (domain) return domain;
+    return stripped.slice(0, 50).toLowerCase();
   };
 
   const sigMap = new Map();
 
-  // 🥇 PASS 1: Breadcrumb anchors — most reliable per-result marker.
-  //    Google PDF format: every search result has a line containing `›` separator.
+  // 🥇 PASS 1a: Line-based breadcrumb detection
   text.split('\n').forEach(line => {
     const trimmed = line.trim();
     if (trimmed.length < 8 || trimmed.length > 220) return;
@@ -2170,37 +2202,49 @@ const extractResultAnchors = (text) => {
     if (!sigMap.has(sig)) sigMap.set(sig, trimmed);
   });
 
-  // Domains already covered by breadcrumbs (used by Pass 2 dedup).
-  // ✅ With the fixed sigOf, this set now contains REAL domains:
-  //    {upload.wikimedia.org, ptt.cc, kknews.cc}
+  // 🥇 PASS 1b ⭐ NEW: Regex-based scan that crosses line boundaries
+  // 當 PDF.js 將同一條 visual line 拆成多個 text items(y-coord 太接近)
+  // 呢個 pass 用 regex 直接從 compact text 搵 "Publisher · domain › path" pattern
+  const breadcrumbPatternRegex = /([^·\n]{1,40}?)\s*[·•]\s*((?:https?:\/\/)?(?:www\.)?[a-z0-9][a-z0-9-]*(?:\.[a-z][a-z0-9-]*){1,3})((?:\s*›\s*[^›\n]{1,60}){1,5})/gi;
+  const compactText = text.replace(/[ \t]+/g, ' ');
+  let bcMatch;
+  while ((bcMatch = breadcrumbPatternRegex.exec(compactText)) !== null) {
+    const fullMatch = bcMatch[0].replace(/\s+/g, ' ').trim();
+    if (fullMatch.length < 8 || fullMatch.length > 250) continue;
+    if (shouldSkip(fullMatch)) continue;
+    const sig = sigOf(fullMatch);
+    if (!sigMap.has(sig)) {
+      sigMap.set(sig, fullMatch);
+      console.log(`🔍 Regex-pass caught (was missed by line-pass): ${fullMatch}`);
+    }
+  }
+
+  // Track domains 俾 Pass 2 用(用 | 而唔係 /)
   const breadcrumbDomains = new Set();
-  [...sigMap.keys()].forEach(s => {
-    breadcrumbDomains.add(s.split('/')[0]);
+  [...sigMap.keys()].forEach(sig => {
+    const d = sig.split('|')[0];
+    if (/^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$/i.test(d)) {
+      breadcrumbDomains.add(d);
+    }
   });
 
-  // 🥈 PASS 2: Full URLs — skip if domain already covered by a breadcrumb.
-  //    Rationale: in Google PDF, each result is rendered twice — once as breadcrumb,
-  //    once as inline URL header. Pass 1 already captured it. Don't double-count.
+  // 🥈 PASS 2: Full URLs (跳過已被 breadcrumb cover 嘅 bare domain)
   const fullUrlPattern = /https?:\/\/[^\s)>\]"'›\n]+/g;
   (text.match(fullUrlPattern) || []).forEach(raw => {
     const cleaned = raw.replace(/[.,;:!?)\]>'"]+$/, '');
     if (cleaned.length <= 15 || shouldSkip(cleaned)) return;
-
     const m = cleaned.toLowerCase()
       .replace(/^https?:\/\//, '')
       .replace(/^www\./, '')
       .match(/^([a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+)/);
     const domain = m ? m[1] : '';
-
-    // 🔧 FIX: If domain already covered by a breadcrumb, this URL is redundant — skip.
-    // (Removed the old `&& !hasPath` clause that let through "https://kknews.cc" etc.)
-    if (breadcrumbDomains.has(domain)) return;
-
+    const hasPath = /https?:\/\/[^\s\/]+\/[^\s]/.test(cleaned);
+    if (breadcrumbDomains.has(domain) && !hasPath) return;
     const sig = sigOf(cleaned);
     if (!sigMap.has(sig)) sigMap.set(sig, cleaned);
   });
 
-  // 🥉 PASS 3: Anchor-less results (social media markers like "Facebook · WE ARE CHINA")
+  // 🥉 PASS 3: Social platforms (Facebook · WE ARE CHINA 之類)
   const socialPlatforms = [
     'Facebook', 'Twitter', 'YouTube', 'TikTok', 'Instagram',
     'LinkedIn', 'Reddit', 'Threads', 'Quora', 'Medium',
