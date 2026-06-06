@@ -1965,21 +1965,50 @@ STEP A — Mention check:
 STEP B — KNOWN INFO contradiction (hard gate):
   • If KNOWN INFO explicitly CONTRADICTS the article's named party (different DOB / different nationality / clearly different company in clearly different jurisdiction / demonstrably different person) → FALSE_HIT.
 
-STEP B.4 — NO IDENTIFIABLE SUBJECT (hard gate):
-  If the article is a generic regulatory framework / register tool / 
-  search landing page / disclaimer-only page / aggregate listing
-  AND does NOT name any specific individual or entity as the wrongdoing subject:
+STEP B.4 — NO IDENTIFIABLE SUBJECT (hard gate, EXTREMELY NARROW):
+  This rule ONLY applies when ALL of the following are true:
+    (a) The article is a generic regulatory framework / search landing page /
+        disclaimer-only page / aggregate index with NO specific entity named;
+    (b) The TARGET name does NOT literally appear in the article body, title,
+        snippet, or breadcrumb;
+    (c) The article does NOT name any specific individual or entity as
+        the wrongdoing subject.
+
+  When ALL three hold:
     → FALSE_HIT (no name match can be established).
     → Set actualSubjectName = "" (empty).
     → Do NOT import names from other search results in the same SERP.
 
-  Examples that hit this rule:
+  Examples that DO hit this rule:
     • Bar Standards Board "Barristers' Register" generic page listing
-      AML/CTF rules, sanctions categories, transparency rules — no
-      specific barrister named.
-    • SEC EDGAR full-text search landing page.
-    • FATF country watchlist page with no specific party named.
-    • Company-house bulk register without a specific subject.
+      AML/CTF rules with NO specific barrister named AND target not present.
+    • SEC EDGAR full-text search landing page with no query result.
+    • FATF country watchlist page listing rule categories only.
+
+  🚨 EXAMPLES THAT DO ❌ NOT HIT THIS RULE (must continue to STEP C):
+    • Regulator's entity registry page confirming the target IS regulated
+      (e.g. GFSC entity page showing target's "GFSC Reference: NNNNNN")
+      → target name IS present → name match → IRRELEVANT_MLTF (regulation
+        confirmation, not wrongdoing).
+    • Industry ranking / Top-N list naming the target as a ranked entry
+      (e.g. Citywealth Top 75 Trustees listing target)
+      → target name IS present → IRRELEVANT_MLTF unless the ranking itself
+        discloses ML/TF wrongdoing.
+    • LinkedIn / SignalHire / professional directory profiles where the
+      profiled person works AT the target company
+      → target name IS present as employer → IRRELEVANT_MLTF (employee
+        is not the wrongdoer).
+    • Target's own corporate website / Privacy Policy / Terms of Service /
+      press release / About page
+      → target name IS present (it owns the page) → IRRELEVANT_MLTF
+        (self-published, not wrongdoing).
+    • Aggregate listing pages where the target IS one of the listed entries
+      (even alongside many others) → name match → continue to STEP C.
+
+  GOLDEN RULE: If the target name appears ANYWHERE in the entry — as the
+  registered entity, as an employer, as a ranked item, as the page owner,
+  or as a listed entry — STEP B.4 CANNOT FIRE. You MUST proceed to STEP C
+  and classify based on ML/TF content concerning the target.
   
 STEP B.5 — TOKEN-COUNT MISMATCH (hard gate, before identity tier check):
   If article party has additional name tokens beyond the target
@@ -3452,11 +3481,20 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
 
           // ── Check 1: actualSubjectName hallucination ──────────
           if (mutated.actualSubjectName && mutated.actualSubjectName.trim().length >= 4) {
-            const subjectStr = mutated.actualSubjectName.trim();
-            const subjectLc = subjectStr.toLowerCase();
-            const isPlaceholder = /^(unknown|other|another|a\s+different|the\s+wrongdoer|another\s+party|the\s+actual|n\/a)/i.test(subjectLc);
+  const subjectStr = mutated.actualSubjectName.trim();
+  const subjectLc = subjectStr.toLowerCase();
+  const isPlaceholder = /^(unknown|other|another|a\s+different|the\s+wrongdoer|another\s+party|the\s+actual|n\/a)/i.test(subjectLc);
 
-            if (!isPlaceholder && !entryTextLc.includes(subjectLc)) {
+  // 🆕 NEW: 如果 actualSubjectName 就係 target 本身(或 superset/subset 變體),唔好 redact
+  const targetLcCheck = String(searchEntity).toLowerCase().trim();
+  const isTargetItself =
+    subjectLc === targetLcCheck ||
+    subjectLc.includes(targetLcCheck) ||
+    targetLcCheck.includes(subjectLc);
+
+  if (isTargetItself) {
+    console.log(`✅ Patch #8b [#${r.rank}]: actualSubjectName "${subjectStr}" IS target — skip redaction`);
+  } else if (!isPlaceholder && !entryTextLc.includes(subjectLc)) {
               // Fuzzy check: 至少 2 個連續 token 出現喺 snippet
               const subjectTokens = subjectLc.split(/\s+/).filter(t => t.length >= 3);
               const fuzzyMatch = subjectTokens.length >= 2 &&
@@ -3571,6 +3609,70 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
         });
       }
 
+      _fraudAlertVictimC: true,
+            _previousCls: r._previousCls || r.cls,
+          };
+        });
+      }
+
+      // ═══════════════════════════════════════════════════════
+      // 🆕 PATCH #9 — FINAL TARGET-IN-SNIPPET HARD GUARD
+      // 解決 SERP 全部結果明確 name 咗 target,但仍然標 FALSE_HIT
+      // + "unspecified party" 嘅 case (e.g. GFSC 監管登記、LinkedIn
+      // 員工 profile、Citywealth ranking、Privacy Policy 等)。
+      //
+      // Trigger: target 名 literally 出現 + cls === FALSE_HIT
+      //          + identityMatch !== CONTRADICTED
+      // Action:  改為 IRRELEVANT_MLTF (or TRUE_HIT if has ML/TF kw)
+      // ═══════════════════════════════════════════════════════
+      {
+        const targetLc9 = String(searchEntity).toLowerCase().trim();
+        const targetTokens9 = targetLc9.split(/\s+/).filter(tok => tok.length >= 3);
+
+        parsed = parsed.map(r => {
+          if (r._manualOverride) return r;
+          if (r.cls !== 'FALSE_HIT') return r;
+          if (r.identityMatch === 'CONTRADICTED') return r;  // KNOWN INFO 明確抵觸 → 真 FALSE_HIT
+
+          const entryText = `${r.title || ''} ${r.snippet || ''} ${r.nameInResult || ''}`.toLowerCase();
+
+          // Strict: 完整 target 字串出現
+          const fullMatch = entryText.includes(targetLc9);
+
+          // Lenient: 2+ 連續 token 出現(處理 "STGL" / "Summit Trust Guernsey" 等變體)
+          const tokenSeqMatch = targetTokens9.length >= 2 &&
+            targetTokens9.slice(0, -1).some((tok, i) =>
+              entryText.includes(`${tok} ${targetTokens9[i + 1]}`)
+            );
+
+          if (!fullMatch && !tokenSeqMatch) return r;
+
+          // Target 明明喺 snippet 入面 → FALSE_HIT 係錯
+          const hasMLTFKeywords = r.matchedKeywords && r.matchedKeywords.length > 0;
+          const newCls = hasMLTFKeywords ? 'TRUE_HIT' : 'IRRELEVANT_MLTF';
+          const newLabel = newCls === 'TRUE_HIT' ? 'True Hit' : 'Irrelevant ML/TF';
+
+          const newReason = hasMLTFKeywords
+            ? `${newLabel}, because "${searchEntity}" is explicitly named in this result and ML/TF-related keywords are present in the article concerning this entity.`
+            : `${newLabel}, because "${searchEntity}" is explicitly named in this result but no ML/TF-related content concerning the target is present.`;
+
+          console.log(`🔒 Patch #9 [#${r.rank}]: FALSE_HIT → ${newCls} (target literally in snippet, no contradiction)`);
+
+          return {
+            ...r,
+            cls: newCls,
+            identityMatch: r.identityMatch === 'NO_INFO' ? 'PARTIAL_MATCH' : r.identityMatch,
+            actualSubjectName: '',
+            riskCat: hasMLTFKeywords ? r.riskCat : 'N/A',
+            reason: newReason,
+            _targetInSnippetForced: true,
+            _previousCls: r._previousCls || r.cls,
+          };
+        });
+      }
+
+      // ═══════════════════════════════════════════════════════
+      // 🆕 CENTRAL SUFFIX PASS — 所有 IRRELEVANT_MLTF reason 末尾強制加
       
       // ═══════════════════════════════════════════════════════
       // 🆕 CENTRAL SUFFIX PASS — 所有 IRRELEVANT_MLTF reason 末尾強制加
