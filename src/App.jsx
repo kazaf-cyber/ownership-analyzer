@@ -2206,16 +2206,46 @@ const extractResultAnchors = (text) => {
 
   const sigMap = new Map();
 
-  // 🥇 PASS 1a: Line-based breadcrumb detection
-  text.split('\n').forEach(line => {
-    const trimmed = line.trim();
-    if (trimmed.length < 8 || trimmed.length > 220) return;
-    if (!trimmed.includes('›')) return;
-    if (shouldSkip(trimmed)) return;
-    if (!/[a-z0-9][a-z0-9-]*\.[a-z]{2,}/i.test(trimmed)) return;
-    const sig = sigOf(trimmed);
-    if (!sigMap.has(sig)) sigMap.set(sig, trimmed);
-  });
+ // 🥇 PASS 1a: Line-based breadcrumb detection
+  // ⭐ FIX: 同 publisher + 同 breadcrumb path 但唔同 article → 要分開
+  //   例:worldvision.org.hk › 01_About_Us 出現 3 次,係 3 篇唔同 article
+  //   解決:向前望 title hint 加入 sig 區分;真重複時加 occurrence counter。
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (trimmed.length < 8 || trimmed.length > 220) continue;
+    if (!trimmed.includes('›')) continue;
+    if (shouldSkip(trimmed)) continue;
+    if (!/[a-z0-9][a-z0-9-]*\.[a-z]{2,}/i.test(trimmed)) continue;
+
+    // ⭐ 向前望最多 5 行搵 title hint(Google PDF 嘅 title 通常喺 breadcrumb 之前)
+    let titleHint = '';
+    for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
+      const prev = lines[j].trim();
+      if (!prev) continue;
+      if (prev.includes('›')) break;                // 撞到上一條 breadcrumb 即停
+      if (/^https?:\/\//i.test(prev)) continue;     // skip URL 行
+      if (/^\d+\s*[頁页]$/.test(prev)) continue;     // skip 「11 頁」「146 頁」之類
+      if (/^PDF$/i.test(prev)) continue;            // skip 「PDF」單字行
+      if (/^\d{4}年\d+月\d+日\s*—/.test(prev)) continue; // skip 日期前綴行
+      if (prev.length >= 5 && prev.length <= 200) {
+        titleHint = prev.slice(0, 80).toLowerCase();
+        break;
+      }
+    }
+
+    const baseSig = sigOf(trimmed);
+    const candidateSig = titleHint ? `${baseSig}#${titleHint}` : baseSig;
+
+    // ⭐ 即使 title 完全一樣,Google 都當佢係兩條獨立搜尋結果 → 用 occurrence counter 保住
+    let finalSig = candidateSig;
+    let occ = 1;
+    while (sigMap.has(finalSig)) {
+      occ++;
+      finalSig = `${candidateSig}#occ${occ}`;
+    }
+    sigMap.set(finalSig, trimmed);
+  }
 
   // 🥇 PASS 1b ⭐ NEW: Regex-based scan that crosses line boundaries
   // 當 PDF.js 將同一條 visual line 拆成多個 text items(y-coord 太接近)
