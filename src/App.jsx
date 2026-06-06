@@ -703,13 +703,13 @@ function detectLanguage(text) {
 const CLS_CONFIG = {
   'TRUE_HIT': {
     label: 'True Hit',
-    desc: 'The search itself returned no result (system-level fallback)',
+    desc: 'The hit is confirmed to be the subject and is associated with negative news related to ML/TF or sanctions',
     icon: AlertTriangle,
     bg: 'bg-red-50',
     border: 'border-red-300',
     text: 'text-red-700',
     badge: 'bg-red-100 text-red-800 border-red-200'
-  },
+},
   'FALSE_HIT': {
     label: 'False Hit',
     desc: 'The article does NOT mention the target, OR the named party is a different person/entity',
@@ -3012,7 +3012,7 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
     }).join('\n\n');
   }, [results]);
 
-  cconst updateResultCls = (rank, newCls, note) => {
+  const updateResultCls = (rank, newCls, note) => {
     const labelMap = {
       TRUE_HIT: 'True Hit',
       FALSE_HIT: 'False Hit',
