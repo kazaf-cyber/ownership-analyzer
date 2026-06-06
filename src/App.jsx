@@ -2966,7 +2966,7 @@ if (stage2Candidates.length > 0) {
                     { role: 'user', content: prompt }
                   ],
                   temperature: 0.05,
-                  max_tokens: 800
+                  max_tokens: 1500
                 })
               });
               if (!res.ok) return null;
@@ -2984,6 +2984,18 @@ if (stage2Candidates.length > 0) {
           })
         );
 
+// 🛡️ Truncation guard: detect mid-sentence cut-offs from max_tokens
+const isReasoningTruncated = (text) => {
+  if (!text || typeof text !== 'string') return true;
+  const trimmed = text.trim();
+  if (trimmed.length < 30) return true;
+  // Ends without terminal punctuation
+  if (!/[.!?'"]$/.test(trimmed)) return true;
+  // Ends with article / preposition / linking verb (typical truncation pattern)
+  if (/\b(a|an|the|is|was|are|were|of|to|for|with|by|on|in|at|from|that|which|and|or|but)\s*$/i.test(trimmed)) return true;
+  return false;
+};
+  
 // ── Merge Stage 2 results back into `parsed` ─────────────
 stage2Results.forEach((res) => {
   if (res.status !== 'fulfilled' || !res.value) return;
@@ -2993,7 +3005,11 @@ stage2Results.forEach((res) => {
 
   const original = parsed[idx];
   const conf = typeof s2.confidence === 'number' ? s2.confidence : 0;
-  const cleanReasoning = String(s2.reasoning || '').trim();
+  const rawReasoning = String(s2.reasoning || '').trim();
+const cleanReasoning = isReasoningTruncated(rawReasoning) ? '' : rawReasoning;
+if (rawReasoning && !cleanReasoning) {
+  console.warn(`⚠️ Stage 2 [#${s2.rank}]: reasoning truncated by max_tokens, dropping: "${rawReasoning.slice(-60)}"`);
+}
 
 if (s2.wrongdoingApplies === false && conf >= 0.70) {
     const mltfExists = s2.mltfMatterExistsInArticle === true;
