@@ -1964,6 +1964,22 @@ STEP A — Mention check:
 
 STEP B — KNOWN INFO contradiction (hard gate):
   • If KNOWN INFO explicitly CONTRADICTS the article's named party (different DOB / different nationality / clearly different company in clearly different jurisdiction / demonstrably different person) → FALSE_HIT.
+
+STEP B.4 — NO IDENTIFIABLE SUBJECT (hard gate):
+  If the article is a generic regulatory framework / register tool / 
+  search landing page / disclaimer-only page / aggregate listing
+  AND does NOT name any specific individual or entity as the wrongdoing subject:
+    → FALSE_HIT (no name match can be established).
+    → Set actualSubjectName = "" (empty).
+    → Do NOT import names from other search results in the same SERP.
+
+  Examples that hit this rule:
+    • Bar Standards Board "Barristers' Register" generic page listing
+      AML/CTF rules, sanctions categories, transparency rules — no
+      specific barrister named.
+    • SEC EDGAR full-text search landing page.
+    • FATF country watchlist page with no specific party named.
+    • Company-house bulk register without a specific subject.
   
 STEP B.5 — TOKEN-COUNT MISMATCH (hard gate, before identity tier check):
   If article party has additional name tokens beyond the target
@@ -2099,6 +2115,29 @@ Tier 3 — KNOWN INFO is EMPTY / not provided by CDD:
          → DO NOT invent identifiers.
          → If article has no ML/TF content → IRRELEVANT_MLTF.
          → If article HAS ML/TF content AND target is the actual subject → TRUE_HIT.
+
+# 🚨 CONSISTENCY CHECK — MANDATORY SELF-AUDIT BEFORE OUTPUT
+
+Before you finalise each item, run this 3-step audit:
+
+  ✗ AUDIT 1: If your "reason" field identifies a DIFFERENT person/entity
+            as the actual subject (e.g. "the wrongdoing applies to X, not
+            to the target"), your "cls" MUST be FALSE_HIT — never
+            IRRELEVANT_MLTF. Same-name-different-person = FALSE_HIT.
+
+  ✗ AUDIT 2: If your "reason" says "no specific individual is identified"
+            or "the article does not name a specific subject", your "cls"
+            MUST be FALSE_HIT — not IRRELEVANT_MLTF. No name match means
+            FALSE_HIT.
+
+  ✗ AUDIT 3: If your "reason" mentions a name that does NOT appear in the
+            <ARTICLE_BODY> for THIS specific article (i.e. you imported it
+            from another search result), REMOVE that name reference from
+            "reason" before output. Each item's reasoning must be 
+            self-contained to its own article body.
+
+Failure to comply with these audits is a critical error.
+         
 
 # Name Matching Rules
 • "Chan Tai Man" = "Tai Man Chan" — same person, Asian/Western surname-order variant.
@@ -3044,6 +3083,143 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
         setStage('Stage 2 完成,正在整理結果...');
       }
 
+     // ═══════════════════════════════════════════════════════
+      // 🧼 PATCH #6 — CONDITIONAL REASONING SANITISER
+      // Drops sentences that reference OTHER candidates' names IF
+      // those names do not actually appear in THIS article's body.
+      // Preserves legitimate cross-references (e.g. SERP aggregate pages).
+      // ═══════════════════════════════════════════════════════
+      {
+        // Build per-candidate article-text corpus from scraped pages
+        const pageContentMap = new Map();
+        const pageRe = /--- PAGE CONTENT: ([^\s)]+)[^-]*---\n([\s\S]*?)\n--- END ---/g;
+        let pm;
+        while ((pm = pageRe.exec(enrichedContent)) !== null) {
+          pageContentMap.set(pm[1], pm[2]);
+        }
+
+        parsed = parsed.map((r, idx) => {
+          if (!r.reason || typeof r.reason !== 'string') return r;
+
+          // Locate this candidate's own article body
+          let ownArticleText = (r.title || '') + ' ' + (r.snippet || '');
+          // Try to attach scraped body via URL match
+          if (r.url && pageContentMap.has(r.url)) {
+            ownArticleText += ' ' + pageContentMap.get(r.url);
+          } else {
+            // Fallback: match by title/source within any scraped page
+            for (const [, content] of pageContentMap) {
+              const lc = content.toLowerCase();
+              if (
+                (r.title && lc.includes(r.title.slice(0, 30).toLowerCase())) ||
+                (r.source && lc.includes(r.source.toLowerCase()))
+              ) {
+                ownArticleText += ' ' + content;
+                break;
+              }
+            }
+          }
+          ownArticleText = ownArticleText.toLowerCase();
+
+          // Collect names of all OTHER candidates in this batch
+          const ownSubject = (r.actualSubjectName || r.nameInResult || '').trim().toLowerCase();
+          const otherNames = parsed
+            .map((other, i) => {
+              if (i === idx) return null;
+              const n = (other.actualSubjectName || other.nameInResult || '').trim();
+              return (n && n.toLowerCase() !== ownSubject && n.length > 3) ? n : null;
+            })
+            .filter(Boolean);
+
+          if (otherNames.length === 0) return r;
+
+          // Sentence-level filter
+          const sentences = r.reason.split(/(?<=[.!?])\s+/);
+          let droppedCount = 0;
+
+          const kept = sentences.filter(sentence => {
+            const isBleed = otherNames.some(otherName => {
+              const escaped = otherName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const re = new RegExp(`\\b${escaped}\\b`, 'i');
+              const inSentence = re.test(sentence);
+              const inArticle  = re.test(ownArticleText);
+              return inSentence && !inArticle;
+            });
+            if (isBleed) {
+              droppedCount++;
+              console.log(
+                `🧼 [#${r.rank}] Cross-article bleed dropped: ` +
+                `"${sentence.substring(0, 90)}${sentence.length > 90 ? '…' : ''}"`
+              );
+            }
+            return !isBleed;
+          });
+
+          const newReason = kept.join(' ').trim();
+
+          // Fallback: if sanitiser emptied everything, keep original
+          if (newReason.length === 0) {
+            console.warn(`⚠️ [#${r.rank}] Sanitiser emptied reasoning — keeping original.`);
+            return r;
+          }
+
+          if (droppedCount > 0) {
+            return {
+              ...r,
+              reason: newReason,
+              _reasoningSanitised: true,
+              _droppedSentences: droppedCount,
+            };
+          }
+          return r;
+        });
+
+        const totalSanitised = parsed.filter(r => r._reasoningSanitised).length;
+        if (totalSanitised > 0) {
+          console.log(`🧼 Patch #6: sanitised reasoning on ${totalSanitised} item(s)`);
+        }
+      }
+
+      // ═══════════════════════════════════════════════════════
+      // 🆕 PATCH #7c — LABEL/REASON CONSISTENCY ENFORCER
+      // Catches LLM output that violates the self-audit rules.
+      // ═══════════════════════════════════════════════════════
+      parsed = parsed.map(r => {
+        if (r._manualOverride) return r;
+        const reasonLc = String(r.reason || '').toLowerCase();
+
+        // Audit trigger 1: reasoning identifies different subject but label is IRRELEVANT_MLTF
+        const mentionsDifferentSubject =
+          /\bapplies to\s+[A-Z]/i.test(r.reason || '') ||
+          /wrongdoing applies to/i.test(reasonLc) ||
+          (r.actualSubjectName && r.actualSubjectName.trim() && 
+           r.actualSubjectName.trim().toLowerCase() !== (r.nameInResult || '').trim().toLowerCase());
+
+        // Audit trigger 2: reasoning says no specific subject identified
+        const noSubjectIdentified =
+          /no specific (individual|subject|entity|person) (is )?(identified|named|mentioned)/i.test(reasonLc) ||
+          /does not (identify|name|mention) any specific/i.test(reasonLc) ||
+          /generic regulatory framework/i.test(reasonLc) ||
+          /register tool|landing page|disclaimer-only/i.test(reasonLc);
+
+        if (r.cls === 'IRRELEVANT_MLTF' && (mentionsDifferentSubject || noSubjectIdentified)) {
+          const newReason = (r.reason || '').replace(/^Irrelevant ML\/TF,?\s*/i, 'False Hit, ');
+          console.log(`📉 Patch #7c [#${r.rank}]: IRRELEVANT_MLTF → FALSE_HIT (reasoning indicates different/no subject)`);
+          return {
+            ...r,
+            cls: 'FALSE_HIT',
+            reason: newReason.match(/^False Hit,/i) ? newReason : `False Hit, ${newReason}`,
+            riskCat: 'N/A',
+            _consistencyFixed: true,
+            _previousCls: r.cls,
+          };
+        }
+        return r;
+      });
+
+
+
+      
       // ═══════════════════════════════════════════════════════
       // 🆕 CENTRAL SUFFIX PASS — 所有 IRRELEVANT_MLTF reason 末尾強制加
       //    " There is no ML/TF negative news." (來源:AI / Stage 2 / Sanity 通通捕到)
