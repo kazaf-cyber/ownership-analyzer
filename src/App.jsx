@@ -2142,7 +2142,6 @@ A correctly classified TRUE_HIT is just as defensible as a correctly classified 
 pdfText = cleanGooglePdfText(pdfText);
 
 
-/* ★ 修正 2.5:Pre-extract result anchors (URLs + breadcrumbs) as ground truth */
 const extractResultAnchors = (text) => {
   const skipPatterns = [
     'google.com/search', 'googleapis.com', 'gstatic.com',
@@ -2154,17 +2153,12 @@ const extractResultAnchors = (text) => {
     return skipPatterns.some(p => lower.includes(p));
   };
 
-  // ⭐ NEW: Strip "Publisher · " 前綴,例如:
-  //   "每日頭條 · https://kknews.cc › 旅遊" → "https://kknews.cc › 旅遊"
-  //   "Wikimedia Commons · https://upload.wikimedia.org › ..." → "https://upload.wikimedia.org › ..."
   const stripPublisherPrefix = (line) => {
     if (!line) return '';
     const s = String(line).trim();
-    // Strategy A: 搵到 http(s):// 就由果度切走前面所有嘢
     const urlIdx = s.search(/https?:\/\//);
     if (urlIdx > 0) return s.slice(urlIdx).trim();
     if (urlIdx === 0) return s;
-    // Strategy B: 冇 http,搵第一個 domain pattern (e.g. "kknews.cc")
     const domMatch = s.match(/\b([a-z0-9][a-z0-9-]*\.[a-z][a-z0-9.-]*[a-z0-9])\b/i);
     if (domMatch) {
       const idx = s.indexOf(domMatch[0]);
@@ -2173,9 +2167,6 @@ const extractResultAnchors = (text) => {
     return s;
   };
 
-  // ⭐ NEW sigOf:用 "domain|articleKey" 做 sig
-  //   kknews.cc + 財經 → "kknews.cc|財經"
-  //   kknews.cc + 旅遊 → "kknews.cc|旅遊"   ← 兩條唔再撞 key
   const sigOf = (line) => {
     const stripped = stripPublisherPrefix(line);
     const lc = stripped.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '');
@@ -2185,10 +2176,7 @@ const extractResultAnchors = (text) => {
     let articleKey = '';
     if (stripped.includes('›')) {
       const segs = stripped.split(/\s*›\s*/).map(s => s.trim()).filter(Boolean);
-      if (segs.length >= 2) {
-        // 全部 breadcrumb segments join 埋,確保「財經」vs「旅遊」分得開
-        articleKey = segs.slice(1).join('/').slice(0, 60);
-      }
+      if (segs.length >= 2) articleKey = segs.slice(1).join('/').slice(0, 60);
     } else {
       const urlMatch = stripped.match(/https?:\/\/[^\s]+/);
       if (urlMatch) {
@@ -2204,12 +2192,12 @@ const extractResultAnchors = (text) => {
     return stripped.slice(0, 50).toLowerCase();
   };
 
+  // ⭐ FIX (NEW): sigMap value 由 string → { text, lineIdx } 用嚟保留 PDF 原始順序
   const sigMap = new Map();
 
- // 🥇 PASS 1a: Line-based breadcrumb detection
-  // ⭐ FIX: 同 publisher + 同 breadcrumb path 但唔同 article → 要分開
-  //   例:worldvision.org.hk › 01_About_Us 出現 3 次,係 3 篇唔同 article
-  //   解決:向前望 title hint 加入 sig 區分;真重複時加 occurrence counter。
+  // ═══════════════════════════════════════════════════════
+  // 🥇 PASS 1a: Line-based breadcrumb detection
+  // ═══════════════════════════════════════════════════════
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
@@ -2218,16 +2206,15 @@ const extractResultAnchors = (text) => {
     if (shouldSkip(trimmed)) continue;
     if (!/[a-z0-9][a-z0-9-]*\.[a-z]{2,}/i.test(trimmed)) continue;
 
-    // ⭐ 向前望最多 5 行搵 title hint(Google PDF 嘅 title 通常喺 breadcrumb 之前)
     let titleHint = '';
     for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
       const prev = lines[j].trim();
       if (!prev) continue;
-      if (prev.includes('›')) break;                // 撞到上一條 breadcrumb 即停
-      if (/^https?:\/\//i.test(prev)) continue;     // skip URL 行
-      if (/^\d+\s*[頁页]$/.test(prev)) continue;     // skip 「11 頁」「146 頁」之類
-      if (/^PDF$/i.test(prev)) continue;            // skip 「PDF」單字行
-      if (/^\d{4}年\d+月\d+日\s*—/.test(prev)) continue; // skip 日期前綴行
+      if (prev.includes('›')) break;
+      if (/^https?:\/\//i.test(prev)) continue;
+      if (/^\d+\s*[頁页]$/.test(prev)) continue;
+      if (/^PDF$/i.test(prev)) continue;
+      if (/^\d{4}年\d+月\d+日\s*—/.test(prev)) continue;
       if (prev.length >= 5 && prev.length <= 200) {
         titleHint = prev.slice(0, 80).toLowerCase();
         break;
@@ -2237,19 +2224,19 @@ const extractResultAnchors = (text) => {
     const baseSig = sigOf(trimmed);
     const candidateSig = titleHint ? `${baseSig}#${titleHint}` : baseSig;
 
-    // ⭐ 即使 title 完全一樣,Google 都當佢係兩條獨立搜尋結果 → 用 occurrence counter 保住
     let finalSig = candidateSig;
     let occ = 1;
     while (sigMap.has(finalSig)) {
       occ++;
       finalSig = `${candidateSig}#occ${occ}`;
     }
-    sigMap.set(finalSig, trimmed);
+    // ⭐ FIX: 加 lineIdx
+    sigMap.set(finalSig, { text: trimmed, lineIdx: i });
   }
 
-  // 🥇 PASS 1b ⭐ NEW: Regex-based scan that crosses line boundaries
-  // 當 PDF.js 將同一條 visual line 拆成多個 text items(y-coord 太接近)
-  // 呢個 pass 用 regex 直接從 compact text 搵 "Publisher · domain › path" pattern
+  // ═══════════════════════════════════════════════════════
+  // 🥇 PASS 1b: Regex-based scan
+  // ═══════════════════════════════════════════════════════
   const breadcrumbPatternRegex = /([^·\n]{1,40}?)\s*[·•]\s*((?:https?:\/\/)?(?:www\.)?[a-z0-9][a-z0-9-]*(?:\.[a-z][a-z0-9-]*){1,3})((?:\s*›\s*[^›\n]{1,60}){1,5})/gi;
   const compactText = text.replace(/[ \t]+/g, ' ');
   let bcMatch;
@@ -2259,12 +2246,14 @@ const extractResultAnchors = (text) => {
     if (shouldSkip(fullMatch)) continue;
     const sig = sigOf(fullMatch);
     if (!sigMap.has(sig)) {
-      sigMap.set(sig, fullMatch);
+      // ⭐ FIX: 由 char offset 反推 lineIdx(compactText 同 text 行結構保持一致)
+      const lineIdx = compactText.slice(0, bcMatch.index).split('\n').length - 1;
+      sigMap.set(sig, { text: fullMatch, lineIdx });
       console.log(`🔍 Regex-pass caught (was missed by line-pass): ${fullMatch}`);
     }
   }
 
-  // Track domains 俾 Pass 2 用(用 | 而唔係 /)
+  // Track domains 俾 Pass 2 用
   const breadcrumbDomains = new Set();
   [...sigMap.keys()].forEach(sig => {
     const d = sig.split('|')[0];
@@ -2273,29 +2262,33 @@ const extractResultAnchors = (text) => {
     }
   });
 
-  // 🥈 PASS 2: Full URLs (跳過已被 breadcrumb cover 嘅 bare domain)
+  // ═══════════════════════════════════════════════════════
+  // 🥈 PASS 2: Full URLs
+  // ═══════════════════════════════════════════════════════
+  // ⭐ FIX: 由 .match() 改為 .exec() loop,先攞到每個 match 嘅 char offset
   const fullUrlPattern = /https?:\/\/[^\s)>\]"'›\n]+/g;
-  (text.match(fullUrlPattern) || []).forEach(raw => {
+  let urlMatch;
+  while ((urlMatch = fullUrlPattern.exec(text)) !== null) {
+    const raw = urlMatch[0];
     const cleaned = raw.replace(/[.,;:!?)\]>'"]+$/, '');
-    if (cleaned.length <= 15 || shouldSkip(cleaned)) return;
+    if (cleaned.length <= 15 || shouldSkip(cleaned)) continue;
     const m = cleaned.toLowerCase()
       .replace(/^https?:\/\//, '')
       .replace(/^www\./, '')
       .match(/^([a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+)/);
     const domain = m ? m[1] : '';
     const hasPath = /https?:\/\/[^\s\/]+\/[^\s]/.test(cleaned);
-    if (breadcrumbDomains.has(domain) && !hasPath) return;
+    if (breadcrumbDomains.has(domain) && !hasPath) continue;
     const sig = sigOf(cleaned);
-    if (!sigMap.has(sig)) sigMap.set(sig, cleaned);
-  });
+    if (!sigMap.has(sig)) {
+      const lineIdx = text.slice(0, urlMatch.index).split('\n').length - 1;
+      sigMap.set(sig, { text: cleaned, lineIdx });
+    }
+  }
 
-  // 🥉 PASS 3: Social platforms (Facebook · WE ARE CHINA / LinkedIn · Richard Booth 之類)
-  // ⭐ FIX: 同一個 publisher (例:LinkedIn · Richard Booth) 可以對應多篇 article
-  //   方案:
-  //     A. 優先用「同一行 social marker 之前嘅文字」做 titleHint
-  //        (Google PDF 經常將 title + social marker 拍埋同一行)
-  //     B. Fallback:向後望最多 6 行搵 title
-  //     C. 真重複(title 都一樣)→ occurrence counter 保住
+  // ═══════════════════════════════════════════════════════
+  // 🥉 PASS 3: Social platforms
+  // ═══════════════════════════════════════════════════════
   const socialPlatforms = [
     'Facebook', 'Twitter', 'YouTube', 'TikTok', 'Instagram',
     'LinkedIn', 'Reddit', 'Threads', 'Quora', 'Medium',
@@ -2318,16 +2311,12 @@ const extractResultAnchors = (text) => {
       const normalized = m.replace(/\s+/g, ' ').trim();
       const baseSig = 'social:' + normalized.toLowerCase().slice(0, 80);
 
-      // ⭐ Strategy A: 同一行 social marker 之前嘅文字當 title
-      //   例:"Airport Drop Off Zone Penalty Dispute Resolved LinkedIn · Richard Booth"
-      //        ↑↑↑↑↑↑ titleHint ↑↑↑↑↑↑                       ↑↑ social marker ↑↑
       let titleHint = '';
       const matchIdx = trimmed.indexOf(m);
       if (matchIdx > 5) {
         titleHint = trimmed.slice(0, matchIdx).trim().toLowerCase().slice(0, 80);
       }
 
-      // ⭐ Strategy B: 如果同行冇 title,向後望最多 6 行
       if (!titleHint) {
         for (let j = i + 1; j < Math.min(socialLines.length, i + 7); j++) {
           const next = socialLines[j].trim();
@@ -2348,18 +2337,22 @@ const extractResultAnchors = (text) => {
 
       const candidateSig = titleHint ? `${baseSig}#${titleHint}` : baseSig;
 
-      // ⭐ Strategy C: 真重複 → occ counter
       let finalSig = candidateSig;
       let occ = 1;
       while (sigMap.has(finalSig)) {
         occ++;
         finalSig = `${candidateSig}#occ${occ}`;
       }
-      sigMap.set(finalSig, normalized);
+      // ⭐ FIX: 加 lineIdx(用 socialLines 嘅 i,行號同 text.split('\n') 一致)
+      sigMap.set(finalSig, { text: normalized, lineIdx: i });
     }
   }
 
-  return [...sigMap.values()];
+  // ═══════════════════════════════════════════════════════
+  // ⭐ FIX (NEW): 最後按 PDF 原始行號 sort,確保順序同 PDF 一致
+  // ═══════════════════════════════════════════════════════
+  const sorted = [...sigMap.values()].sort((a, b) => a.lineIdx - b.lineIdx);
+  return sorted.map(o => o.text);
 };
 
 const resultUrls = extractResultAnchors(pdfText);
