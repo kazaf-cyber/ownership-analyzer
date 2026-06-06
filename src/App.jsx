@@ -3609,11 +3609,6 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
         });
       }
 
-      _fraudAlertVictimC: true,
-            _previousCls: r._previousCls || r.cls,
-          };
-        });
-      }
 
       // ═══════════════════════════════════════════════════════
       // 🆕 PATCH #9 — FINAL TARGET-IN-SNIPPET HARD GUARD
