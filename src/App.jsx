@@ -2230,9 +2230,9 @@ if (sigMap.has(candidateSig)) {
   continue;
 }
 
-sigMap.set(candidateSig, trimmed);
-baseSigsSeen.add(baseSig);                          // ⭐ FIX B: 記低 baseSig 俾 PASS 1b 用嚟 dedup
-  }
+sigMap.set(candidateSig, { text: trimmed, lineIdx: i });
+baseSigsSeen.add(baseSig); 
+ }
 
   // ═══════════════════════════════════════════════════════
   // 🥇 PASS 1b: Regex-based scan
@@ -2254,7 +2254,8 @@ if (baseSigsSeen.has(sig)) {
   continue;
 }
 
-sigMap.set(sig, fullMatch);
+const lineIdx = compactText.slice(0, bcMatch.index).split('\n').length - 1;
+sigMap.set(sig, { text: fullMatch, lineIdx });
 baseSigsSeen.add(sig);
 console.log(`🔍 Regex-pass caught (genuinely new): ${fullMatch}`);
   }
@@ -2351,12 +2352,9 @@ if (sigMap.has(candidateSig)) {
   continue;
 }
 
-sigMap.set(candidateSig, normalized);
-baseSigsSeen.add(baseSig);   // ⭐ 都要記入 baseSigsSeen,免得 social anchor 喺 PASS 2/其他地方再 dup
+sigMap.set(candidateSig, { text: normalized, lineIdx: i });
+      baseSigsSeen.add(baseSig);  
       }
-      // ⭐ FIX: 加 lineIdx(用 socialLines 嘅 i,行號同 text.split('\n') 一致)
-      sigMap.set(finalSig, { text: normalized, lineIdx: i });
-    }
   }
 
   // ═══════════════════════════════════════════════════════
