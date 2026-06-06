@@ -3217,6 +3217,9 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
       // context 入面只係劇情元素或角色名 (修 #2)
       // ═══════════════════════════════════════════════════════
       {
+        const academicDomainRegex = /\b(pubmed\.ncbi\.nlm\.nih\.gov|ncbi\.nlm\.nih\.gov|nih\.gov|arxiv\.org|sciencedirect|springer|nature\.com|sciencemag|cell\.com|wiley\.com|tandfonline|sage(pub|journals)|jstor|researchgate|academia\.edu|semanticscholar|biorxiv|medrxiv|pnas\.org|plos|bmj\.com|thelancet|nejm\.org|ieee\.org|acm\.org|ssrn|hindawi|frontiersin|mdpi)/i;
+        const isAcademic = academicDomainRegex.test(`${r.url || ''} ${r.source || ''}`);
+        if (isAcademic) return r;  // ← 學術網域永遠唔 trigger fiction reclassification
         const mediaDomainRegex = /\b(amazon\.[a-z]{2,3}(\/|\.|\s|›)|goodreads|barnesandnoble|imdb\.com|netflix\.com|wattpad|fanfiction|archiveofourown|spotify|open\.spotify|music\.apple|youtube\.com\/watch|steampowered|store\.steam|comixology|smashwords|kobo\.com|audible\.com|booktopia)/i;
         const strongFictionMarkers = /\b(novel|fiction|fictional|paperback|hardcover|kindle edition|audiobook|chapter\s+\d|protagonist|detective\s+[a-z]+\s+(investigates|solves|uncovers|tracks|hunts|probes)|nightclub promoter['']?s?\s+murder|fictional character|book series|sequel|prequel|book\s+\d+\s+of|murder mystery|crime thriller)\b/i;
         const songMarkers = /\b(song and lyrics|song lyrics|track\s+by|album by|featured artist|spotify|apple music|playlist)\b/i;
@@ -3264,9 +3267,11 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
 
         // ── 7c-1: Fraud-Alert impersonation context ─────────
         const isFraudAlertVictim =
-          /fraud alert[^.]{0,80}(scammers? may impersonate|beware of|warning|fake|impersonat)/i.test(snippetLc) ||
-          /(impersonat\w+|spoof\w+|cloned?)\s+(our|the company|us|the brand|the firm|the bank|m&g|[A-Z])/i.test(snippetLc);
-        if (isFraudAlertVictim && (mutated.cls === 'TRUE_HIT' || mutated.cls === 'POTENTIAL_HIT')) {
+  /fraud alert[\s\S]{0,200}(scammers?|beware|warning|fake|impersonat|spoof|cloned?|phishing|fraudulent)/i.test(snippetLc) ||
+  /scammers? (may )?(impersonat|spoof|clone|pretend|pose)/i.test(snippetLc) ||
+  /(impersonat\w+|spoof\w+|cloned?|fake|fraudulent)\s+(our|the company|us|the brand|the firm|the bank|the (organi[sz]ation|fund|manager|investment)|m&g|[A-Z])/i.test(snippetLc) ||
+  /(beware of|warning about|alert.*regarding)\s+(scams?|fraud|impersonation|fake (websites?|accounts?|profiles?))/i.test(snippetLc);
+        if (isFraudAlertVictim && (mutated.cls === 'TRUE_HIT' || mutated.cls === 'POTENTIAL_HIT' || mutated.cls === 'FALSE_HIT')) {
           console.log(`🛡️ Patch #7c-1 [#${r.rank}]: 'Fraud Alert' = impersonation warning, not subject wrongdoing → IRRELEVANT_MLTF`);
           mutated = {
             ...mutated,
