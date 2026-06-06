@@ -2193,7 +2193,7 @@ const extractResultAnchors = (text) => {
   };
 
   // ⭐ FIX (NEW): sigMap value 由 string → { text, lineIdx } 用嚟保留 PDF 原始順序
-  const sigMap = new Map();
+  const sigMap = new Map(); const baseSigsSeen = new Set();   // ⭐ NEW: 跨 PASS dedup,只記 baseSig(冇 titleHint)
 
   // ═══════════════════════════════════════════════════════
   // 🥇 PASS 1a: Line-based breadcrumb detection
@@ -2222,16 +2222,16 @@ const extractResultAnchors = (text) => {
     }
 
     const baseSig = sigOf(trimmed);
-    const candidateSig = titleHint ? `${baseSig}#${titleHint}` : baseSig;
+const candidateSig = titleHint ? `${baseSig}#${titleHint}` : baseSig;
 
-    let finalSig = candidateSig;
-    let occ = 1;
-    while (sigMap.has(finalSig)) {
-      occ++;
-      finalSig = `${candidateSig}#occ${occ}`;
-    }
-    // ⭐ FIX: 加 lineIdx
-    sigMap.set(finalSig, { text: trimmed, lineIdx: i });
+// ⭐ FIX A: 同 PASS 內真重複 → SKIP(取消 occ counter,因為 PDF OCR 同一行偶爾會被 PDF.js split 出 2 次)
+if (sigMap.has(candidateSig)) {
+  console.log(`⏭️ Skip exact duplicate (PASS 1a): ${trimmed.slice(0, 80)}`);
+  continue;
+}
+
+sigMap.set(candidateSig, trimmed);
+baseSigsSeen.add(baseSig);                          // ⭐ FIX B: 記低 baseSig 俾 PASS 1b 用嚟 dedup
   }
 
   // ═══════════════════════════════════════════════════════
@@ -2245,12 +2245,18 @@ const extractResultAnchors = (text) => {
     if (fullMatch.length < 8 || fullMatch.length > 250) continue;
     if (shouldSkip(fullMatch)) continue;
     const sig = sigOf(fullMatch);
-    if (!sigMap.has(sig)) {
-      // ⭐ FIX: 由 char offset 反推 lineIdx(compactText 同 text 行結構保持一致)
-      const lineIdx = compactText.slice(0, bcMatch.index).split('\n').length - 1;
-      sigMap.set(sig, { text: fullMatch, lineIdx });
-      console.log(`🔍 Regex-pass caught (was missed by line-pass): ${fullMatch}`);
-    }
+
+// ⭐ FIX C: 用 baseSigsSeen 而唔係 sigMap 嚟 check
+//    原因:PASS 1a 嘅 key 係 `baseSig#titleHint`,sigMap.has(baseSig) 永遠係 false,
+//          所以舊版 PASS 1b 會將 PASS 1a 已經抽過嘅 entry 再加一次。
+if (baseSigsSeen.has(sig)) {
+  console.log(`⏭️ Skip — already covered by PASS 1a: ${fullMatch.slice(0, 80)}`);
+  continue;
+}
+
+sigMap.set(sig, fullMatch);
+baseSigsSeen.add(sig);
+console.log(`🔍 Regex-pass caught (genuinely new): ${fullMatch}`);
   }
 
   // Track domains 俾 Pass 2 用
@@ -2280,10 +2286,12 @@ const extractResultAnchors = (text) => {
     const hasPath = /https?:\/\/[^\s\/]+\/[^\s]/.test(cleaned);
     if (breadcrumbDomains.has(domain) && !hasPath) continue;
     const sig = sigOf(cleaned);
-    if (!sigMap.has(sig)) {
-      const lineIdx = text.slice(0, urlMatch.index).split('\n').length - 1;
-      sigMap.set(sig, { text: cleaned, lineIdx });
-    }
+// ⭐ FIX 改動 4: 跨 PASS dedup,防止 PASS 1a 已抽嘅 entry 喺 PASS 2 再加一次
+if (baseSigsSeen.has(sig)) continue;     // ← while loop 用 continue
+if (sigMap.has(sig)) continue;
+const lineIdx = text.slice(0, urlMatch.index).split('\n').length - 1;
+sigMap.set(sig, { text: cleaned, lineIdx });
+baseSigsSeen.add(sig);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -2337,11 +2345,14 @@ const extractResultAnchors = (text) => {
 
       const candidateSig = titleHint ? `${baseSig}#${titleHint}` : baseSig;
 
-      let finalSig = candidateSig;
-      let occ = 1;
-      while (sigMap.has(finalSig)) {
-        occ++;
-        finalSig = `${candidateSig}#occ${occ}`;
+// ⭐ FIX: 同 PASS 1a 一致
+if (sigMap.has(candidateSig)) {
+  console.log(`⏭️ Skip duplicate social anchor: ${normalized.slice(0, 80)}`);
+  continue;
+}
+
+sigMap.set(candidateSig, normalized);
+baseSigsSeen.add(baseSig);   // ⭐ 都要記入 baseSigsSeen,免得 social anchor 喺 PASS 2/其他地方再 dup
       }
       // ⭐ FIX: 加 lineIdx(用 socialLines 嘅 i,行號同 text.split('\n') 一致)
       sigMap.set(finalSig, { text: normalized, lineIdx: i });
