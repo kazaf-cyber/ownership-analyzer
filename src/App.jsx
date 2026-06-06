@@ -3180,41 +3180,159 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
         }
       }
 
+     // ═══════════════════════════════════════════════════════
+      // 🆕 PATCH #7a — CROSS-ARTICLE META-BLEED PHRASE STRIPPER
+      // 移除 AI 將「成個 SERP 有多個同名人」嘅 meta-observation
+      // 錯誤套落單條 article reasoning 嘅情況 (修 #1, #4)
       // ═══════════════════════════════════════════════════════
-      // 🆕 PATCH #7c — LABEL/REASON CONSISTENCY ENFORCER
-      // Catches LLM output that violates the self-audit rules.
+      {
+        const bleedPhrasePatterns = [
+          /\bthe (text|article|page|source|snippet) is a (search results? page|compilation of search results?|aggregation|listing|collection) (containing|featuring|with|of|that lists?) multiple( distinct| different)?[^.!?]*[.!?]/gi,
+          /\b(this )?(is )?a (compilation|aggregation|collection|listing) of (multiple )?(search results?|individuals|entries|persons)[^.!?]*[.!?]/gi,
+          /\bsearch results? page (containing|featuring|with|listing) multiple[^.!?]*[.!?]/gi,
+          /\bthe (article|text|page) is a (compilation|aggregation) of (search results?|multiple)[^.!?]*[.!?]/gi,
+        ];
+        parsed = parsed.map(r => {
+          if (r._manualOverride || !r.reason) return r;
+          let cleaned = r.reason;
+          let dropped = false;
+          for (const pat of bleedPhrasePatterns) {
+            if (pat.test(cleaned)) {
+              cleaned = cleaned.replace(pat, '').replace(/\s{2,}/g, ' ').replace(/\s+([.!?])/g, '$1').trim();
+              dropped = true;
+            }
+          }
+          if (dropped && cleaned.length > 10) {
+            console.log(`🧼 Patch #7a [#${r.rank}]: stripped cross-article meta-bleed phrase`);
+            return { ...r, reason: cleaned, _bleedPhraseStripped: true };
+          }
+          return r;
+        });
+      }
+
+      // ═══════════════════════════════════════════════════════
+      // 🆕 PATCH #7b — FICTION / CREATIVE WORK DETECTOR
+      // 強制小說 / 電影 / 歌曲 / 遊戲 → IRRELEVANT_MLTF
+      // 因為 "corruption" / "investigation" / "murder" 喺呢類
+      // context 入面只係劇情元素或角色名 (修 #2)
+      // ═══════════════════════════════════════════════════════
+      {
+        const mediaDomainRegex = /\b(amazon\.[a-z]{2,3}(\/|\.|\s|›)|goodreads|barnesandnoble|imdb\.com|netflix\.com|wattpad|fanfiction|archiveofourown|spotify|open\.spotify|music\.apple|youtube\.com\/watch|steampowered|store\.steam|comixology|smashwords|kobo\.com|audible\.com|booktopia)/i;
+        const strongFictionMarkers = /\b(novel|fiction|fictional|paperback|hardcover|kindle edition|audiobook|chapter\s+\d|protagonist|detective\s+[a-z]+\s+(investigates|solves|uncovers|tracks|hunts|probes)|nightclub promoter['']?s?\s+murder|fictional character|book series|sequel|prequel|book\s+\d+\s+of|murder mystery|crime thriller)\b/i;
+        const songMarkers = /\b(song and lyrics|song lyrics|track\s+by|album by|featured artist|spotify|apple music|playlist)\b/i;
+
+        parsed = parsed.map(r => {
+          if (r._manualOverride) return r;
+          const combinedText = `${r.title || ''} ${r.snippet || ''}`;
+          const urlSourceText = `${r.url || ''} ${r.source || ''}`;
+          const isMediaDomain = mediaDomainRegex.test(urlSourceText);
+          const hasStrongFiction = strongFictionMarkers.test(combinedText);
+          const hasSongContext = songMarkers.test(combinedText);
+          const isFiction = (isMediaDomain && (hasStrongFiction || hasSongContext)) || hasStrongFiction;
+
+          if (!isFiction) return r;
+          if (r.cls === 'IRRELEVANT_MLTF' && /work of (creative|fiction)|fictional (plot|narrative|character)|plot element|劇情|虛構/i.test(r.reason || '')) return r;
+
+          const kind = hasSongContext ? 'song / music track' : isMediaDomain ? 'commercial listing for a book or media product' : 'fictional narrative';
+          const newReason = `Irrelevant ML/TF, because this is a ${kind}. Keywords such as "corruption", "investigation", "fraud", or "murder" appearing in the snippet refer to plot elements, song titles, or fictional character names — not real-world wrongdoing concerning the screened subject.`;
+
+          console.log(`📚 Patch #7b [#${r.rank}]: ${r.cls} → IRRELEVANT_MLTF (fiction/creative content detected)`);
+          return {
+            ...r,
+            cls: 'IRRELEVANT_MLTF',
+            riskCat: 'N/A',
+            reason: newReason,
+            _fictionDetected: true,
+            _previousCls: r._previousCls || r.cls,
+          };
+        });
+      }
+
+      // ═══════════════════════════════════════════════════════
+      // 🆕 PATCH #7c — LABEL/REASON CONSISTENCY ENFORCER (EXPANDED)
+      //   (1) Fraud-Alert 受害者語境 (修 #5)
+      //   (2) Internal contradiction:「不同人」+「就係 target」(修 #5)
+      //   (3) No-subject-identified → FALSE_HIT (extended regex 修 #9)
+      //   (4) Different subject explicitly named → FALSE_HIT
       // ═══════════════════════════════════════════════════════
       parsed = parsed.map(r => {
         if (r._manualOverride) return r;
-        const reasonLc = String(r.reason || '').toLowerCase();
+        const snippetLc = String(r.snippet || '').toLowerCase();
+        let mutated = { ...r };
+        let reasonRaw = String(mutated.reason || '');
+        let reasonLc = reasonRaw.toLowerCase();
 
-        // Audit trigger 1: reasoning identifies different subject but label is IRRELEVANT_MLTF
-        const mentionsDifferentSubject =
-          /\bapplies to\s+[A-Z]/i.test(r.reason || '') ||
-          /wrongdoing applies to/i.test(reasonLc) ||
-          (r.actualSubjectName && r.actualSubjectName.trim() && 
-           r.actualSubjectName.trim().toLowerCase() !== (r.nameInResult || '').trim().toLowerCase());
+        // ── 7c-1: Fraud-Alert impersonation context ─────────
+        const isFraudAlertVictim =
+          /fraud alert[^.]{0,80}(scammers? may impersonate|beware of|warning|fake|impersonat)/i.test(snippetLc) ||
+          /(impersonat\w+|spoof\w+|cloned?)\s+(our|the company|us|the brand|the firm|the bank|m&g|[A-Z])/i.test(snippetLc);
+        if (isFraudAlertVictim && (mutated.cls === 'TRUE_HIT' || mutated.cls === 'POTENTIAL_HIT')) {
+          console.log(`🛡️ Patch #7c-1 [#${r.rank}]: 'Fraud Alert' = impersonation warning, not subject wrongdoing → IRRELEVANT_MLTF`);
+          mutated = {
+            ...mutated,
+            cls: 'IRRELEVANT_MLTF',
+            riskCat: 'N/A',
+            reason: `Irrelevant ML/TF, because the "Fraud Alert" mentioned in this article is a warning issued by the organization about third-party scammers impersonating it, and is unrelated to any wrongdoing by the screened subject.`,
+            _fraudAlertVictim: true,
+            _previousCls: mutated._previousCls || r.cls,
+          };
+          reasonRaw = mutated.reason;
+          reasonLc = reasonRaw.toLowerCase();
+        }
 
-        // Audit trigger 2: reasoning says no specific subject identified
+        // ── 7c-2: Internal contradiction (different + same) ──
+        const claimsDifferentParty =
+          /different (party|individual|person|entity)/i.test(reasonLc) ||
+          /happens to share/i.test(reasonLc) ||
+          /not the (same|screened) (person|individual|target|entity)/i.test(reasonLc);
+        const claimsSameAsTarget =
+          /\bthe screened (target|subject|individual)\s+is\s+(a|an|the)\s+[\w\s&,'-]+?\s+(at|of|for|with)\s+[A-Z]/i.test(reasonRaw);
+        if (claimsDifferentParty && claimsSameAsTarget) {
+          console.warn(`⚠️ Patch #7c-2 [#${r.rank}]: contradiction — stripping the same-as-target sentence`);
+          let cleaned = reasonRaw.replace(/\.?\s*the screened (target|subject|individual)\s+is\s+[^.]+\./gi, '.');
+          cleaned = cleaned.replace(/\s{2,}/g, ' ').replace(/\s+([.!?])/g, '$1').replace(/\.+/g, '.').trim();
+          mutated = { ...mutated, reason: cleaned || mutated.reason, _contradictionFixed: true };
+          reasonRaw = mutated.reason;
+          reasonLc = reasonRaw.toLowerCase();
+        }
+
+        // ── 7c-3: No subject identified (EXTENDED regex set) ─
         const noSubjectIdentified =
           /no specific (individual|subject|entity|person) (is )?(identified|named|mentioned)/i.test(reasonLc) ||
           /does not (identify|name|mention) any specific/i.test(reasonLc) ||
           /generic regulatory framework/i.test(reasonLc) ||
-          /register tool|landing page|disclaimer-only/i.test(reasonLc);
+          /register tool|landing page|disclaimer-only/i.test(reasonLc) ||
+          /without (further |any |additional |sufficient )?identifying information/i.test(reasonLc) ||
+          /impossible to (determine|identify|verify|ascertain) which/i.test(reasonLc) ||
+          /which of (these|those|the) (individuals|persons|entities|parties|candidates|named)/i.test(reasonLc) ||
+          /(target |subject )?cannot be (definitively |reliably |clearly |positively )?(identified|determined|verified|confirmed|established)/i.test(reasonLc) ||
+          /no clear (subject|target|individual|named party|wrongdoer)/i.test(reasonLc) ||
+          /aggregate (page|listing|results|directory|index)/i.test(reasonLc) ||
+          /(index|directory|landing|register) page (containing|listing|with|of)/i.test(reasonLc) ||
+          /unable to (determine|identify|attribute|link)/i.test(reasonLc) ||
+          /cannot meaningfully (attribute|link|associate)/i.test(reasonLc);
 
-        if (r.cls === 'IRRELEVANT_MLTF' && (mentionsDifferentSubject || noSubjectIdentified)) {
-          const newReason = (r.reason || '').replace(/^Irrelevant ML\/TF,?\s*/i, 'False Hit, ');
-          console.log(`📉 Patch #7c [#${r.rank}]: IRRELEVANT_MLTF → FALSE_HIT (reasoning indicates different/no subject)`);
-          return {
-            ...r,
+        // ── 7c-4: Different subject explicitly named ─────────
+        const mentionsDifferentSubject =
+          /\bapplies to\s+[A-Z]/i.test(reasonRaw) ||
+          /wrongdoing applies to/i.test(reasonLc) ||
+          (mutated.actualSubjectName && mutated.actualSubjectName.trim() &&
+           mutated.actualSubjectName.trim().toLowerCase() !== (mutated.nameInResult || '').trim().toLowerCase());
+
+        if (mutated.cls === 'IRRELEVANT_MLTF' && (mentionsDifferentSubject || noSubjectIdentified)) {
+          const newReason = reasonRaw.replace(/^Irrelevant ML\/TF,?\s*/i, 'False Hit, ');
+          console.log(`📉 Patch #7c-3/4 [#${r.rank}]: IRRELEVANT_MLTF → FALSE_HIT (no subject / different subject identified)`);
+          mutated = {
+            ...mutated,
             cls: 'FALSE_HIT',
             reason: newReason.match(/^False Hit,/i) ? newReason : `False Hit, ${newReason}`,
             riskCat: 'N/A',
             _consistencyFixed: true,
-            _previousCls: r.cls,
+            _previousCls: mutated._previousCls || r.cls,
           };
         }
-        return r;
+
+        return mutated;
       });
 
 
