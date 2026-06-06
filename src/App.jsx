@@ -3360,7 +3360,216 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
         return mutated;
       });
 
+      // ═══════════════════════════════════════════════════════
+      // 🆕 PATCH #8a — FIX A: GENERIC REASONING REWRITER
+      // 偵測通用 plural template,從 entry snippet 抽 specific name
+      // 然後重寫 reasoning,強制 reference 真正內容。
+      // ═══════════════════════════════════════════════════════
+      {
+        const GENERIC_PLURAL_PHRASES = [
+          /\bthese\s+(?:distinct\s+|different\s+|various\s+|separate\s+)?individuals\b/i,
+          /\bseveral\s+different\s+(?:individuals|people|persons)\b/i,
+          /\bmultiple\s+(?:individuals|people|persons|entities|parties)\b/i,
+          /\bvarious\s+(?:individuals|people|persons|entities)\b/i,
+          /\bthese\s+(?:different|various|distinct|separate)\s+parties\b/i,
+        ];
 
+        const EXCLUDE_NAME_TOKENS = /^(The|This|That|These|Those|And|But|Or|For|With|From|Into|About|After|Before|During|Through|Under|Over|Above|Below|Limited|Holdings|Group|Company|Corporation|Inc|Ltd|Plc|Llc|United|States|Kingdom|Republic|Department|Office|Service|System|Report|Page|News|Information|Search|Results|Court|Bank|Center|Centre|January|February|March|April|May|June|July|August|September|October|November|December|Mr|Mrs|Ms|Dr|Sir|Prof)$/i;
+
+        parsed = parsed.map(r => {
+          if (r._manualOverride || !r.reason) return r;
+
+          const usesGenericPlural = GENERIC_PLURAL_PHRASES.some(p => p.test(r.reason));
+          if (!usesGenericPlural) return r;
+
+          // 抽取 THIS entry 嘅 specific names(只睇自己 title + snippet)
+          const fullText = `${r.title || ''} ${r.snippet || ''}`;
+          const romanizedMatches = (fullText.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}\b/g) || []);
+          const chineseMatches = (fullText.match(/[\u4e00-\u9fa5]{2,4}/g) || []);
+
+          const uniqueNames = [...new Set([...romanizedMatches, ...chineseMatches])]
+            .filter(n => !EXCLUDE_NAME_TOKENS.test(n))
+            .filter(n => n.length >= 3);
+
+          // 如果 entry 真係有 2+ 個人 → plural 合理,唔改
+          if (uniqueNames.length > 1) return r;
+
+          // Entry 只有 0 或 1 個 unique name → 確認係 template contamination
+          const specName = (r.actualSubjectName && r.actualSubjectName.trim()) || uniqueNames[0] || '';
+          if (!specName) {
+            // 連抽都抽唔到,至少改 plural → singular
+            let trimmedReason = r.reason
+              .replace(/\bthese\s+(?:distinct\s+|different\s+|various\s+|separate\s+)?individuals\b/gi, 'this individual')
+              .replace(/\bseveral\s+different\s+(?:individuals|people|persons)\b/gi, 'this individual')
+              .replace(/\bmultiple\s+(?:individuals|people|persons|parties)\b/gi, 'this individual')
+              .replace(/\bvarious\s+(?:individuals|people|persons)\b/gi, 'this individual')
+              .replace(/\bare\s+(?=distinct|different|separate|unrelated)/gi, 'is ');
+            console.log(`🔧 Patch #8a [#${r.rank}]: no specific name found → just fixed plural → singular`);
+            return { ...r, reason: trimmedReason.trim(), _pluralOnlyFixed: true };
+          }
+
+          // 重寫 reasoning 用 specific name
+          let newReason;
+          if (r.cls === 'FALSE_HIT') {
+            newReason = `False Hit, because the article specifically concerns "${specName}", whose name or other identifiers differ from the screened subject. This is a single different individual, not the screened target.`;
+          } else if (r.cls === 'IRRELEVANT_MLTF') {
+            newReason = `Irrelevant ML/TF, because the article specifically concerns "${specName}" and contains no ML/TF subject matter affecting the screened target.`;
+          } else {
+            // TRUE_HIT / NO_HIT — 唔好亂改 label,只係 strip plural
+            let trimmedReason = r.reason
+              .replace(/\bthese\s+(?:distinct\s+|different\s+|various\s+|separate\s+)?individuals\b/gi, `this individual ("${specName}")`)
+              .replace(/\bseveral\s+different\s+(?:individuals|people|persons)\b/gi, `this individual ("${specName}")`);
+            console.log(`🔧 Patch #8a [#${r.rank}]: kept ${r.cls}, replaced plural with "${specName}"`);
+            return { ...r, reason: trimmedReason.trim(), _genericRewritten: true, _originalGenericReason: r.reason };
+          }
+
+          console.log(`🔧 Patch #8a [#${r.rank}]: rewrote generic reasoning → specific name "${specName}"`);
+          return { ...r, reason: newReason, _genericRewritten: true, _originalGenericReason: r.reason };
+        });
+      }
+       // ═══════════════════════════════════════════════════════
+      // 🆕 PATCH #8b — FIX B: EVIDENCE + PLURAL VERIFICATION
+      // (1) actualSubjectName 必須喺 entry snippet 入面真正出現
+      //     否則 → 視為從其他 entry 借用,redact 之
+      // (2) 用 plural 嘅 reasoning 必須真係有 2+ 個人 喺 entry
+      // ═══════════════════════════════════════════════════════
+      {
+        const PLURAL_PATTERNS_B = [
+          /\bthese\s+(?:distinct\s+|different\s+)?individuals\b/i,
+          /\bseveral\s+different\s+(?:individuals|people|persons)\b/i,
+          /\bmultiple\s+(?:individuals|people|persons|entities)\b/i,
+          /\bvarious\s+(?:individuals|people|persons|entities)\b/i,
+        ];
+
+        const EXCLUDE_B = /^(The|This|These|Those|Limited|Holdings|Company|Corporation|Inc|Ltd|Plc|Llc|January|February|March|April|May|June|July|August|September|October|November|December|United|States|Kingdom|January|Mr|Mrs|Ms|Dr)$/i;
+
+        parsed = parsed.map(r => {
+          if (r._manualOverride || !r.reason) return r;
+
+          const entryText = `${r.title || ''} ${r.snippet || ''}`;
+          const entryTextLc = entryText.toLowerCase();
+          let mutated = { ...r };
+
+          // ── Check 1: actualSubjectName hallucination ──────────
+          if (mutated.actualSubjectName && mutated.actualSubjectName.trim().length >= 4) {
+            const subjectStr = mutated.actualSubjectName.trim();
+            const subjectLc = subjectStr.toLowerCase();
+            const isPlaceholder = /^(unknown|other|another|a\s+different|the\s+wrongdoer|another\s+party|the\s+actual|n\/a)/i.test(subjectLc);
+
+            if (!isPlaceholder && !entryTextLc.includes(subjectLc)) {
+              // Fuzzy check: 至少 2 個連續 token 出現喺 snippet
+              const subjectTokens = subjectLc.split(/\s+/).filter(t => t.length >= 3);
+              const fuzzyMatch = subjectTokens.length >= 2 &&
+                subjectTokens.slice(0, -1).some((t, i) => entryTextLc.includes(`${t} ${subjectTokens[i + 1]}`));
+
+              if (!fuzzyMatch) {
+                console.warn(`🚨 Patch #8b [#${r.rank}]: actualSubjectName "${subjectStr}" NOT in entry — hallucinated from other batch result`);
+
+                // Redact 個 hallucinated name 喺 reasoning
+                const escaped = subjectStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const redactedReason = mutated.reason
+                  .replace(new RegExp(`["']?\\b${escaped}\\b["']?`, 'gi'), 'an unspecified party')
+                  .replace(/\bapplies\s+to\s+an\s+unspecified\s+party\b/gi, 'applies to a party not identified in this article')
+                  .replace(/\s{2,}/g, ' ')
+                  .trim();
+
+                mutated = {
+                  ...mutated,
+                  actualSubjectName: '',
+                  reason: redactedReason,
+                  _hallucinatedSubject: true,
+                  _originalHallucinatedName: subjectStr,
+                };
+              }
+            }
+          }
+
+          // ── Check 2: Plural vs actual person count ───────────
+          const reasoningUsesPlural = PLURAL_PATTERNS_B.some(p => p.test(mutated.reason));
+          if (reasoningUsesPlural) {
+            const romanizedNames = entryText.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}\b/g) || [];
+            const chineseNames = entryText.match(/[\u4e00-\u9fa5]{2,4}/g) || [];
+            const uniqueNames = new Set(
+              [...romanizedNames, ...chineseNames]
+                .filter(n => !EXCLUDE_B.test(n) && n.length >= 3)
+            );
+
+            if (uniqueNames.size <= 1) {
+              console.warn(`🚨 Patch #8b [#${r.rank}]: PLURAL used but entry has ${uniqueNames.size} unique name — fixing to singular`);
+
+              const fixedReason = mutated.reason
+                .replace(/\bthese\s+(?:distinct\s+|different\s+)?individuals\b/gi, 'this individual')
+                .replace(/\bseveral\s+different\s+(?:individuals|people|persons)\b/gi, 'this individual')
+                .replace(/\bmultiple\s+(?:individuals|people|persons)\b/gi, 'this individual')
+                .replace(/\bmultiple\s+entities\b/gi, 'this entity')
+                .replace(/\bvarious\s+(?:individuals|people|persons)\b/gi, 'this individual')
+                .replace(/\bare\s+(?=distinct|different|separate|unrelated)/gi, 'is ')
+                .replace(/\s{2,}/g, ' ')
+                .trim();
+
+              mutated = { ...mutated, reason: fixedReason, _pluralFixedB: true };
+            }
+          }
+
+          return mutated;
+        });
+      }
+
+      // ═══════════════════════════════════════════════════════
+      // 🆕 PATCH #8c — FIX C: ENHANCED FRAUD-ALERT VICTIM DETECTOR
+      // 強化 title-level + 多 pattern 識別,確保 fraud alert 類
+      // page 被正確分類為 IRRELEVANT_MLTF。
+      // (補強現有 PATCH #7c-1)
+      // ═══════════════════════════════════════════════════════
+      {
+        parsed = parsed.map(r => {
+          if (r._manualOverride) return r;
+
+          const titleLc = String(r.title || '').toLowerCase();
+          const snippetLc = String(r.snippet || '').toLowerCase();
+          const combinedLc = titleLc + ' ' + snippetLc;
+
+          const isFraudAlertVictim =
+            // A. Title-level alert markers
+            /\b(fraud\s*alert|scam\s*alert|fraud\s*warning|impersonation\s*alert|customer\s*notice|safety\s*notice|investor\s*alert|fraud\s*notice|security\s*alert|phishing\s*alert)\b/i.test(titleLc) ||
+
+            // B. Scammers actively impersonating
+            /\bscammers?\s+(?:are\s+|may\s+|have\s+been\s+|continue\s+to\s+)?(?:impersonat|spoof|clon|pretend|pos|claim|misrepresent)/i.test(snippetLc) ||
+
+            // C. Organisation warning about fraudsters
+            /\b(?:we|our\s+(?:company|firm|bank|fund|organisation|organization))\s+(?:have\s+been|has\s+been|are|is)\s+(?:made\s+aware|informed|warned|alerted|notified)\s+(?:of|that|about)\s+(?:fraudsters?|scammers?|fraudulent|impersonator)/i.test(snippetLc) ||
+
+            // D. Beware of / warning about
+            /\b(?:beware\s+of|warning\s+about|alert\s+(?:regarding|about)|caution\s+against|notice\s+regarding)\s+(?:scams?|fraud|impersonation|fake|fraudulent)/i.test(combinedLc) ||
+
+            // E. Fake / cloned / fraudulent website / email / account
+            /\b(?:fraudulent|fake|cloned?|spoofed?|unauthorised|unauthorized|bogus)\s+(?:websites?|emails?|accounts?|profiles?|apps?|advertisements?|messages?|investments?|offers?|schemes?)/i.test(snippetLc) ||
+
+            // F. "purporting to be" / "claiming to be" us
+            /\b(?:purport\w*|claim\w*)\s+to\s+be\s+(?:us|our|the\s+(?:company|firm|bank|fund))/i.test(snippetLc);
+
+          if (!isFraudAlertVictim) return r;
+
+          // 已經正確分類 + reasoning 提到 victim/impersonation? skip
+          if (
+            r.cls === 'IRRELEVANT_MLTF' &&
+            /impersonat|fraud[-\s]?alert|warning\s+about|victim\s+of|fraudulent\s+website|scammer|fake\s+(?:website|account)|issued\s+by\s+the\s+(?:named|organisation)|purporting|claiming\s+to\s+be/i.test(r.reason || '')
+          ) {
+            return r;
+          }
+
+          console.log(`🛡️ Patch #8c [#${r.rank}]: Fraud Alert victim context detected → forcing IRRELEVANT_MLTF`);
+
+          return {
+            ...r,
+            cls: 'IRRELEVANT_MLTF',
+            riskCat: 'N/A',
+            reason: `Irrelevant ML/TF, because this article is a fraud-alert / warning notice issued BY the named organisation about third-party scammers impersonating it. The screened subject is the victim of impersonation, not the wrongdoer.`,
+            _fraudAlertVictimC: true,
+            _previousCls: r._previousCls || r.cls,
+          };
+        });
+      }
 
       
       // ═══════════════════════════════════════════════════════
