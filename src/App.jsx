@@ -1043,6 +1043,15 @@ const STAGE2_SYSTEM_PROMPT = `You are a senior CDD compliance analyst performing
 Your single task: determine whether the SCREENED TARGET is the SUBJECT of any wrongdoing in the article,
 OR plays a different role (successor, predecessor, witness, victim, plaintiff/employer, etc.).
 
+🚨 CONTEXT ISOLATION:
+  You are analysing ONE specific article identified by Title + Source above.
+  When you fill "actualSubjectName", it MUST refer to a person/entity named
+  IN THIS ARTICLE's passages — never copy a subject name from a different article
+  you analysed previously or from other URLs in the same screening batch.
+
+  If THIS article does not mention any wrongdoing subject by name (e.g. academic
+  paper, generic regulatory list, music platform), leave actualSubjectName = "".
+
 🚨 THE #1 FALSE-POSITIVE PATTERN IN SCREENING:
 
    "Company X appoints A as CEO, REPLACING B who was investigated for fraud."
@@ -1955,7 +1964,15 @@ STEP A — Mention check:
 
 STEP B — KNOWN INFO contradiction (hard gate):
   • If KNOWN INFO explicitly CONTRADICTS the article's named party (different DOB / different nationality / clearly different company in clearly different jurisdiction / demonstrably different person) → FALSE_HIT.
-
+  
+STEP B.5 — TOKEN-COUNT MISMATCH (hard gate, before identity tier check):
+  If article party has additional name tokens beyond the target
+  (not titles/honorifics) AND no KNOWN INFO confirms the longer name
+  belongs to the target:
+    → FALSE_HIT immediately.
+    → Set actualSubjectName = the full longer name as it appears in the article.
+    → Do NOT proceed to ML/TF content check (irrelevant — already different person).
+    
 STEP C — Apply the 4 CDD KNOWN INFO RULES:
 
   Rule 1: KNOWN INFO FULLY MATCHED (name + identifiers explicitly confirmed)
@@ -2055,6 +2072,20 @@ You MUST open each "--- PAGE CONTENT: <url> ---" block and read the body before 
 ◆ Political background articles mentioning target as ex-director / family connection:
   If target appears only as a passing reference and wrongdoing concerns other parties → IRRELEVANT_MLTF.
 
+  ◆ Entertainment / creative content (Amazon Books, Goodreads, IMDb, Spotify,
+  Apple Music, Netflix, YouTube fiction channels, Wattpad, fanfic sites,
+  Steam game pages, comic book databases):
+  Keywords like "corruption", "investigation", "fraud", "murder", "criminal"
+  appearing in these contexts are PLOT ELEMENTS / SONG TITLES / FICTIONAL
+  CHARACTER NAMES, not real-world wrongdoing.
+  Default → IRRELEVANT_MLTF unless the article explicitly states the target
+  is a REAL-WORLD party named in a non-fictional legal/regulatory matter
+  (e.g. lawsuit against the platform itself).
+
+  Example: Amazon listing for novel "The Perfect Alibi" by Steven Andrew Leach Jr.
+           describing a detective investigating corruption in a Miami nightclub
+           → IRRELEVANT_MLTF (fictional plot, not real ML/TF).
+
 # 🪪 3-TIER KNOWN INFO HANDLING (Q4 RULE)
 
 Tier 1 — KNOWN INFO completely CONTRADICTS article's named party:
@@ -2075,6 +2106,32 @@ Tier 3 — KNOWN INFO is EMPTY / not provided by CDD:
 • "陳大文" ≠ "陳文" — Chinese character token mismatch → FALSE_HIT.
 • "Limited" / "Ltd" / "Co., Ltd." / "Pte Ltd" / "Inc." / "LLC" — corporate suffix variants are SAME entity if distinctive name matches.
 • "ABC Holdings Ltd" (HK) ≠ "ABC Holdings Pty Ltd" (Australia) if jurisdictions clearly differ → FALSE_HIT.
+
+🚨 NEW — TOKEN COUNT / SUPERSET RULE (HIGHEST PRIORITY):
+  If the article's named party has STRICTLY MORE name tokens than the target
+  AND the extra tokens are NOT titles/honorifics (Mr/Ms/Dr/Sir/Prof/Hon),
+  treat them as DIFFERENT individuals → FALSE_HIT, unless:
+    (a) KNOWN INFO explicitly confirms the longer name belongs to the target
+        (e.g. KYC supplies "Full Name: Steven Andrew Ross"), OR
+    (b) The article itself explicitly states the longer name is an alias of the target.
+
+  Examples (target = "Steven Andrew", 2 tokens):
+    • Article: "Steven Andrew Ross"   (3 tokens, +Ross)   → FALSE_HIT
+    • Article: "Ion Steven Andrew"    (3 tokens, +Ion)    → FALSE_HIT
+    • Article: "Steven Andrew Soong"  (3 tokens, +Soong)  → FALSE_HIT
+    • Article: "Steven Andrew"        (2 tokens, exact)   → continue to ML/TF check
+    • Article: "Mr. Steven Andrew"    (title prefix only) → continue (title is ignorable)
+
+🚨 NEW — SHORT COMMON NAME + NO KYC CONTEXT RULE:
+  If TARGET has ≤2 name tokens AND no romanization variation AND NO KNOWN INFO provided
+  AND the article party EXACTLY matches the target by tokens
+  AND the article has ML/TF content involving that party:
+    → Default to IRRELEVANT_MLTF (NOT TRUE_HIT).
+    → Reason: When the bank-screened identifier is just "John Smith" / "Steven Andrew" / "李偉" 
+              with zero supplementary info, you cannot meaningfully attribute ML/TF
+              behaviour to the target. Per CDD rule, escalating to TRUE_HIT requires
+              identity confidence the system does not have.
+    → The CDD analyst will follow up out-of-band to confirm identity.
 
 # READING CONTRACT — MANDATORY
 For ANY URL with "--- PAGE CONTENT: <url> ---" block → READ THE FULL BODY before classifying.
