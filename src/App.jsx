@@ -2289,7 +2289,13 @@ const extractResultAnchors = (text) => {
     if (!sigMap.has(sig)) sigMap.set(sig, cleaned);
   });
 
-  // 🥉 PASS 3: Social platforms (Facebook · WE ARE CHINA 之類)
+  // 🥉 PASS 3: Social platforms (Facebook · WE ARE CHINA / LinkedIn · Richard Booth 之類)
+  // ⭐ FIX: 同一個 publisher (例:LinkedIn · Richard Booth) 可以對應多篇 article
+  //   方案:
+  //     A. 優先用「同一行 social marker 之前嘅文字」做 titleHint
+  //        (Google PDF 經常將 title + social marker 拍埋同一行)
+  //     B. Fallback:向後望最多 6 行搵 title
+  //     C. 真重複(title 都一樣)→ occurrence counter 保住
   const socialPlatforms = [
     'Facebook', 'Twitter', 'YouTube', 'TikTok', 'Instagram',
     'LinkedIn', 'Reddit', 'Threads', 'Quora', 'Medium',
@@ -2299,19 +2305,59 @@ const extractResultAnchors = (text) => {
     `\\b(${socialPlatforms.join('|')})\\s*·\\s*([^\\n·]{2,80})`,
     'gi'
   );
-  text.split('\n').forEach(line => {
-    const trimmed = line.trim();
-    if (trimmed.length < 8 || trimmed.length > 250) return;
-    if (/https?:\/\//.test(trimmed) || trimmed.includes('›')) return;
-    if (shouldSkip(trimmed)) return;
+  const socialLines = text.split('\n');
+  for (let i = 0; i < socialLines.length; i++) {
+    const trimmed = socialLines[i].trim();
+    if (trimmed.length < 8 || trimmed.length > 250) continue;
+    if (/https?:\/\//.test(trimmed) || trimmed.includes('›')) continue;
+    if (shouldSkip(trimmed)) continue;
     const matches = trimmed.match(socialRegex);
-    if (!matches) return;
+    if (!matches) continue;
+
     for (const m of matches) {
       const normalized = m.replace(/\s+/g, ' ').trim();
-      const sig = 'social:' + normalized.toLowerCase().slice(0, 80);
-      if (!sigMap.has(sig)) sigMap.set(sig, normalized);
+      const baseSig = 'social:' + normalized.toLowerCase().slice(0, 80);
+
+      // ⭐ Strategy A: 同一行 social marker 之前嘅文字當 title
+      //   例:"Airport Drop Off Zone Penalty Dispute Resolved LinkedIn · Richard Booth"
+      //        ↑↑↑↑↑↑ titleHint ↑↑↑↑↑↑                       ↑↑ social marker ↑↑
+      let titleHint = '';
+      const matchIdx = trimmed.indexOf(m);
+      if (matchIdx > 5) {
+        titleHint = trimmed.slice(0, matchIdx).trim().toLowerCase().slice(0, 80);
+      }
+
+      // ⭐ Strategy B: 如果同行冇 title,向後望最多 6 行
+      if (!titleHint) {
+        for (let j = i + 1; j < Math.min(socialLines.length, i + 7); j++) {
+          const next = socialLines[j].trim();
+          if (!next) continue;
+          if (next.includes('›') || /https?:\/\//.test(next)) break;
+          if (/^\d+\s*[頁页]$/.test(next)) continue;
+          if (/^PDF$/i.test(next)) continue;
+          if (/超過\s*\d+\s*個?回應/.test(next)) continue;
+          if (/^\d+\s*星期前/.test(next) || /^\d+\s*個?月前/.test(next)) continue;
+          if (/^\d{4}年\d+月\d+日\s*—/.test(next)) continue;
+          if (/^\.{2,}/.test(next)) continue;
+          if (next.length >= 5 && next.length <= 200) {
+            titleHint = next.slice(0, 80).toLowerCase();
+            break;
+          }
+        }
+      }
+
+      const candidateSig = titleHint ? `${baseSig}#${titleHint}` : baseSig;
+
+      // ⭐ Strategy C: 真重複 → occ counter
+      let finalSig = candidateSig;
+      let occ = 1;
+      while (sigMap.has(finalSig)) {
+        occ++;
+        finalSig = `${candidateSig}#occ${occ}`;
+      }
+      sigMap.set(finalSig, normalized);
     }
-  });
+  }
 
   return [...sigMap.values()];
 };
