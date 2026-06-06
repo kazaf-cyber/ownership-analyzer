@@ -703,7 +703,7 @@ function detectLanguage(text) {
 const CLS_CONFIG = {
   'TRUE_HIT': {
     label: 'True Hit',
-    desc: 'The hit is confirmed to be the subject and is associated with negative news related to ML/TF or sanctions',
+    desc: 'The search itself returned no result (system-level fallback)',
     icon: AlertTriangle,
     bg: 'bg-red-50',
     border: 'border-red-300',
@@ -712,7 +712,7 @@ const CLS_CONFIG = {
   },
   'FALSE_HIT': {
     label: 'False Hit',
-    desc: 'Full name / gender / DOB / age / company DO NOT match — different person/entity',
+    desc: 'The article does NOT mention the target, OR the named party is a different person/entity',
     icon: XCircle,
     bg: 'bg-amber-50',
     border: 'border-amber-300',
@@ -1834,8 +1834,8 @@ STEP 3 — IDENTIFY THE GRAMMATICAL SUBJECT of any wrongdoing described:
 
 STEP 4 — APPLY THE 4-LABEL DECISION (per system prompt rules):
 
-   Q1: Does the article mention the target at all?
-       NO  → NO_HIT
+  Q1: Does the article mention the target at all?
+       NO  → FALSE_HIT  (covers both "target not mentioned" and "different person/entity")
        YES → Q2
 
    Q2: Does KNOWN INFO explicitly CONTRADICT the article's named party?
@@ -1882,8 +1882,8 @@ JSON array with EXACTLY ${N} items. Item #i = URL/anchor #i in the LOCKED URL LI
 2. Each item.cls is exactly one of: TRUE_HIT / FALSE_HIT / IRRELEVANT_MLTF / NO_HIT ?
 3. Each item.reason starts with "True Hit, " / "False Hit, " / "No Hit, " / "Irrelevant ML/TF, " ?
 4. For every TRUE_HIT: target IS the actual subject AND ML/TF content exists ?
-5. For every FALSE_HIT: KNOWN INFO explicitly contradicts the article's named party ?
-6. Did you READ each page content block (when provided) instead of guessing from title ?
+5. For every FALSE_HIT: target not mentioned OR named party is different person OR KNOWN INFO contradicts ?
+6. For every IRRELEVANT_MLTF: does "reason" end with " There is no ML/TF negative news." ?
 7. For Violation Tracker / academic / SEC disclosure — did you classify based on actual record type ?
 
 Start with [ and end with ]. No markdown fences. No commentary outside JSON.`;
@@ -1905,9 +1905,12 @@ const buildSystemPrompt = () => {
 You MUST classify every result with ONE of these four labels. No other labels exist.
 
 1. TRUE_HIT        — The hit is confirmed to be the subject AND is associated with negative news related to ML/TF or sanctions.
-2. FALSE_HIT       — Full name / gender / DOB / age / company DO NOT match the screened target. Different person/entity.
-3. NO_HIT          — No search keywords found, OR the search returned no result, OR the article does not mention the target at all.
-4. IRRELEVANT_MLTF — All other hits where there is NO ML/TF-related negative news concerning the target.
+2. FALSE_HIT       — EITHER (a) the article does NOT mention the target at all,
+                     OR (b) full name / gender / DOB / age / company DO NOT match the screened target (different person/entity),
+                     OR (c) KNOWN INFO explicitly contradicts the article's named party.
+3. NO_HIT          — The search itself returned no result at all (system-level fallback; rarely used per-URL).
+4. IRRELEVANT_MLTF — Name matches the target BUT the article has no ML/TF content concerning the target,
+                     OR the target is not the actual subject of the wrongdoing.
                      (Per CDD rule: there is NO need to fully verify identity if there is no ML/TF content.)
 
 # 🚨 REASON FIELD — MANDATORY POE-CHAT FORMAT
@@ -1927,6 +1930,17 @@ Use these EXACT label strings at the start of "reason" (case-sensitive):
 ✅ GOOD example:
   "True Hit, because this is an official press release from the U.S. Department of Justice confirming that PetroChina International America Inc. entered into a non-prosecution agreement and agreed to pay USD 14.5 million in fines and forfeiture for systematically misclassifying and undervaluing diesel fuel exports to Mexico. This is a joint DOJ/HSI/CBP criminal customs fraud and tax evasion enforcement action directly naming the target entity."
 
+🚨 MANDATORY SUFFIX FOR IRRELEVANT_MLTF
+   Every "Irrelevant ML/TF, because ..." reason MUST end with the EXACT sentence:
+       " There is no ML/TF negative news."
+   (single space before "There", capital T, period at the end)
+
+   ✅ Example:
+   "Irrelevant ML/TF, because this is an academic paper on SSRN where the keyword
+    'investigation' appears purely as a CRediT author role and no criminal,
+    regulatory or ML/TF predicate concerning the target exists.
+    There is no ML/TF negative news."
+
 ❌ NEVER include emoji (🎯 ✅ ❌ ⚠️), bracketed headers like "[Stage 1]" / "[Auto:...]", meta-phrases ("due to lack of full-text", "with capped confidence"), or references to "STAGE", "the model", "analysis pipeline".
 
 # 🚦 DECISION TABLE — APPLY IN THIS ORDER
@@ -1936,7 +1950,8 @@ INPUTS YOU USE:
   • ML/TF CONTENT — does the article describe wrongdoing in ML/TF scope, AND is the TARGET the actual subject of that wrongdoing?
 
 STEP A — Mention check:
-  • Target not mentioned at all in article → NO_HIT.
+  • Target not mentioned at all in article → FALSE_HIT.
+    (NO_HIT is reserved for the case where the entire search returned no result.)
 
 STEP B — KNOWN INFO contradiction (hard gate):
   • If KNOWN INFO explicitly CONTRADICTS the article's named party (different DOB / different nationality / clearly different company in clearly different jurisdiction / demonstrably different person) → FALSE_HIT.
@@ -2895,6 +2910,22 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
       }
 
       // ═══════════════════════════════════════════════════════
+      // 🆕 CENTRAL SUFFIX PASS — 所有 IRRELEVANT_MLTF reason 末尾強制加
+      //    " There is no ML/TF negative news." (來源:AI / Stage 2 / Sanity 通通捕到)
+      //    Idempotent:重複跑唔會重複加。
+      // ═══════════════════════════════════════════════════════
+      const MLTF_SUFFIX = 'There is no ML/TF negative news.';
+      parsed = parsed.map(r => {
+        if (r.cls !== 'IRRELEVANT_MLTF') return r;
+        let reason = String(r.reason || '').trim();
+        if (/no\s+ML\/TF\s+negative\s+news/i.test(reason)) return r;   // 已經有 → skip
+        if (reason && !/[.!?]$/.test(reason)) reason += '.';            // 補返尾標點
+        reason = (reason ? reason + ' ' : '') + MLTF_SUFFIX;
+        return { ...r, reason };
+      });
+      console.log(`📝 Central suffix pass applied to ${parsed.filter(r => r.cls === 'IRRELEVANT_MLTF').length} IRRELEVANT_MLTF item(s)`);
+      
+      // ═══════════════════════════════════════════════════════
       // 🆕 F.3: COUNT VALIDATION — 警告 AI 是否漏掉結果
       // ═══════════════════════════════════════════════════════
       if (resultUrls.length > 0 && parsed.length < resultUrls.length) {
@@ -2981,7 +3012,7 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
     }).join('\n\n');
   }, [results]);
 
-  const updateResultCls = (rank, newCls, note) => {
+  cconst updateResultCls = (rank, newCls, note) => {
     const labelMap = {
       TRUE_HIT: 'True Hit',
       FALSE_HIT: 'False Hit',
@@ -2989,18 +3020,26 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
       NO_HIT: 'No Hit',
     };
     const newLabel = labelMap[newCls] || 'Irrelevant ML/TF';
-    setResults(prev => prev.map(r =>
-      r.rank === rank
-        ? {
-            ...r,
-            cls: newCls,
-            reason: `${newLabel}, because ${note}. Original AI classification was ${CLS_CONFIG[r.cls]?.label || r.cls}.`,
-            _manualOverride: true,
-            _previousCls: r.cls,
-            _previousReason: r.reason,
-          }
-        : r
-    ));
+
+    setResults(prev => prev.map(r => {
+      if (r.rank !== rank) return r;
+
+      let newReason = `${newLabel}, because ${note}. Original AI classification was ${CLS_CONFIG[r.cls]?.label || r.cls}.`;
+
+      // 🆕 IRRELEVANT_MLTF 手動 override 都要加 suffix
+      if (newCls === 'IRRELEVANT_MLTF' && !/no\s+ML\/TF\s+negative\s+news/i.test(newReason)) {
+        newReason = newReason.replace(/[.!?]?\s*$/, '.') + ' There is no ML/TF negative news.';
+      }
+
+      return {
+        ...r,
+        cls: newCls,
+        reason: newReason,
+        _manualOverride: true,
+        _previousCls: r.cls,
+        _previousReason: r.reason,
+      };
+    }));
   };
 
   
