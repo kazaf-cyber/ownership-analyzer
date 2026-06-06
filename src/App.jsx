@@ -3210,22 +3210,26 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
         });
       }
 
-      // ═══════════════════════════════════════════════════════
-      // 🆕 PATCH #7b — FICTION / CREATIVE WORK DETECTOR
+     // ═══════════════════════════════════════════════════════
+      // 🆕 PATCH #7b — FICTION / CREATIVE WORK DETECTOR (FIXED)
       // 強制小說 / 電影 / 歌曲 / 遊戲 → IRRELEVANT_MLTF
       // 因為 "corruption" / "investigation" / "murder" 喺呢類
       // context 入面只係劇情元素或角色名 (修 #2)
+      // 🛠 Fix: academic whitelist + isAcademic 必須喺 .map(r=>...) 入面
       // ═══════════════════════════════════════════════════════
       {
         const academicDomainRegex = /\b(pubmed\.ncbi\.nlm\.nih\.gov|ncbi\.nlm\.nih\.gov|nih\.gov|arxiv\.org|sciencedirect|springer|nature\.com|sciencemag|cell\.com|wiley\.com|tandfonline|sage(pub|journals)|jstor|researchgate|academia\.edu|semanticscholar|biorxiv|medrxiv|pnas\.org|plos|bmj\.com|thelancet|nejm\.org|ieee\.org|acm\.org|ssrn|hindawi|frontiersin|mdpi)/i;
-        const isAcademic = academicDomainRegex.test(`${r.url || ''} ${r.source || ''}`);
-        if (isAcademic) return r;  // ← 學術網域永遠唔 trigger fiction reclassification
         const mediaDomainRegex = /\b(amazon\.[a-z]{2,3}(\/|\.|\s|›)|goodreads|barnesandnoble|imdb\.com|netflix\.com|wattpad|fanfiction|archiveofourown|spotify|open\.spotify|music\.apple|youtube\.com\/watch|steampowered|store\.steam|comixology|smashwords|kobo\.com|audible\.com|booktopia)/i;
         const strongFictionMarkers = /\b(novel|fiction|fictional|paperback|hardcover|kindle edition|audiobook|chapter\s+\d|protagonist|detective\s+[a-z]+\s+(investigates|solves|uncovers|tracks|hunts|probes)|nightclub promoter['']?s?\s+murder|fictional character|book series|sequel|prequel|book\s+\d+\s+of|murder mystery|crime thriller)\b/i;
         const songMarkers = /\b(song and lyrics|song lyrics|track\s+by|album by|featured artist|spotify|apple music|playlist)\b/i;
 
         parsed = parsed.map(r => {
           if (r._manualOverride) return r;
+
+          // 🛡️ 學術網域永遠唔 trigger fiction reclassification
+          const isAcademic = academicDomainRegex.test(`${r.url || ''} ${r.source || ''}`);
+          if (isAcademic) return r;
+
           const combinedText = `${r.title || ''} ${r.snippet || ''}`;
           const urlSourceText = `${r.url || ''} ${r.source || ''}`;
           const isMediaDomain = mediaDomainRegex.test(urlSourceText);
