@@ -4321,10 +4321,10 @@ console.log(`📝 Suffix pass — "${IRRELEVANT_SUFFIX}" enforced on ${parsed.fi
   return r;
 };
   
- const summaryText = useMemo(() => {
+const summaryText = useMemo(() => {
     if (!results.length) return '';
     return results.map((r, i) => {
-      const c = CLS_CONFIG[r.cls] || CLS_CONFIG['NO_HIT'];
+      const c = clsConfig[r.cls] || clsConfig['NO_HIT'];
       const labelDisplay = c.label; // English only
       const reasonBody = stripLabelPrefix(cleanReason(r.reason)) || 'because no reason provided';
       return `${i + 1}. ${labelDisplay}: ${reasonBody}`;
@@ -4335,19 +4335,19 @@ console.log(`📝 Suffix pass — "${IRRELEVANT_SUFFIX}" enforced on ${parsed.fi
     const labelMap = {
       TRUE_HIT: 'True Hit',
       FALSE_HIT: 'False Hit',
-      IRRELEVANT_MLTF: 'Irrelevant ML/TF',
+      IRRELEVANT_MLTF: IRRELEVANT_LABEL,
       NO_HIT: 'No Hit',
     };
-    const newLabel = labelMap[newCls] || 'Irrelevant ML/TF';
+    const newLabel = labelMap[newCls] || IRRELEVANT_LABEL;
 
     setResults(prev => prev.map(r => {
       if (r.rank !== rank) return r;
 
-      let newReason = `${newLabel}, because ${note}. Original AI classification was ${CLS_CONFIG[r.cls]?.label || r.cls}.`;
+      let newReason = `${newLabel}, because ${note}. Original AI classification was ${clsConfig[r.cls]?.label || r.cls}.`;
 
-      // 🆕 IRRELEVANT_MLTF 手動 override 都要加 suffix
-      if (newCls === 'IRRELEVANT_MLTF' && !/no\s+ML\/TF\s+negative\s+news/i.test(newReason)) {
-        newReason = newReason.replace(/[.!?]?\s*$/, '.') + ' There is no ML/TF negative news.';
+      // 🆕 Mode-aware suffix:sanction → "sanctions violations" / adverse media → "ML/TF negative news"
+      if (newCls === 'IRRELEVANT_MLTF' && !IRRELEVANT_SUFFIX_REGEX.test(newReason)) {
+        newReason = newReason.replace(/[.!?]?\s*$/, '.') + ' ' + IRRELEVANT_SUFFIX;
       }
 
       return {
@@ -4388,7 +4388,7 @@ console.log(`📝 Suffix pass — "${IRRELEVANT_SUFFIX}" enforced on ${parsed.fi
   };
   
 const ResultCard = ({ r }) => {
-    const c = CLS_CONFIG[r.cls] || CLS_CONFIG['NO_HIT'];
+    const c = clsConfig[r.cls] || clsConfig['NO_HIT'];
     const isOpen = expandedId === r.rank;
     const labelDisplay = c.label; // English only
 
@@ -5141,7 +5141,7 @@ const ResultCard = ({ r }) => {
                   <div className="text-2xl font-black text-slate-900 tracking-tight">{results.length}</div>
                   <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-0.5">Total</div>
                 </div>
-                {Object.entries(CLS_CONFIG).map(([key, c]) => {
+                {Object.entries(clsConfig).map(([key, c]) => {
                   const Icon = c.icon;
                   const colorMap = {
                     TRUE_HIT:        'from-red-50 to-rose-100 border-red-200',
@@ -5192,7 +5192,7 @@ const ResultCard = ({ r }) => {
                 <div className="flex gap-1 flex-wrap">
                   {[
                     { k: 'ALL', l: 'All', count: results.length, color: 'slate' },
-                    ...Object.entries(CLS_CONFIG).map(([k, c]) => ({
+                    ...Object.entries(clsConfig).map(([k, c]) => ({
                       k,
                       l: c.label,
                       count: counts[k],
