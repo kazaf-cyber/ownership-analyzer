@@ -987,6 +987,67 @@ function cleanGooglePdfText(rawText) {
   return text.trim();
 }
 
+
+/**
+ * Fallback when /api/scrape fails: slice the PDF text around a URL's
+ * breadcrumb/anchor to give Pass 1 something to work with.
+ *
+ * Google SERP PDF 結構:每個 result 大約佔 200~500 chars,
+ * 由 publisher icon → title → URL/breadcrumb → snippet 組成。
+ * 用 URL/breadcrumb 嘅位置做錨點,前後切一塊出嚟。
+ */
+function findArticleContextInPdf(pdfText, url) {
+  if (!pdfText || !url) return '';
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\d*\./i, '').toLowerCase();
+    const path = u.pathname.replace(/^\/+|\/+$/g, '');
+    const parts = path.split('/').filter(p => p.length > 0);
+
+    // 由最 specific (last path segment) 到最 generic (host) 試 anchor
+    const probes = [];
+    const last = parts[parts.length - 1]?.replace(/\.[a-z0-9]+$/i, '');
+    if (last && last.length >= 5) probes.push(last);
+    parts.forEach(p => {
+      const clean = p.replace(/\.[a-z0-9]+$/i, '');
+      if (clean.length >= 5 && !probes.includes(clean)) probes.push(clean);
+    });
+    if (host) probes.push(host);
+
+    const pdfLc = pdfText.toLowerCase();
+    let hitIdx = -1;
+    for (const p of probes) {
+      const idx = pdfLc.indexOf(p.toLowerCase());
+      if (idx !== -1) { hitIdx = idx; break; }
+    }
+    if (hitIdx === -1) return '';
+
+    // 用「下一個 https://」做下邊界 = 下一個 result 嘅 breadcrumb
+    const nextRe = /https?:\/\//g;
+    nextRe.lastIndex = hitIdx + 10;
+    const nextMatch = nextRe.exec(pdfText);
+    const downBoundary = nextMatch ? nextMatch.index : Math.min(pdfText.length, hitIdx + 800);
+
+    // 上邊界 = 上一個 https://(即 previous result 嘅 breadcrumb)之後
+    let upBoundary = 0;
+    const before = pdfText.slice(0, hitIdx);
+    const prevs = [...before.matchAll(/https?:\/\//g)];
+    if (prevs.length > 0) {
+      const lastPrev = prevs[prevs.length - 1];
+      const eol = pdfText.indexOf('\n', lastPrev.index);
+      upBoundary = eol !== -1 ? eol : lastPrev.index;
+    }
+
+    return pdfText.slice(
+      Math.max(upBoundary, hitIdx - 600),
+      Math.min(downBoundary, hitIdx + 400)
+    ).trim();
+  } catch {
+    return '';
+  }
+}
+
+
 /* ★ GeoRiskMap — Real World Map (D3.js + TopoJSON) */
 function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
   const wrapRef = React.useRef(null);
@@ -1311,11 +1372,29 @@ Your single task: extract verifiable facts from ONE article about ONE target. Re
 
 Output strict JSON only. No markdown, no commentary. Start with { end with }.`;
 
-function buildPass1Prompt({ targetName, kycInfo, articleTitle, articleSource, articleBody, articleUrl }) {
+function buildPass1Prompt({ targetName, kycInfo, articleTitle, articleSource, articleBody, articleUrl, hasFullBody }) {
+  //                                                                                                ^^^^^^^^^^^^^
+  //                                                                                                🆕 加新參數
   const hasKyc = kycInfo && Object.values(kycInfo).some(v => v && String(v).trim());
   const kycBlock = hasKyc
     ? `KYC-supplied identifiers:\n${formatEntityContext(kycInfo)}`
     : `KYC-supplied identifiers: (none provided)`;
+
+  // 🆕 根據 hasFullBody 切換 body header
+  const bodyHeader = hasFullBody
+    ? `Body (FULL article scraped from the URL):`
+    : `Body ⚠️ NOTE — full article scrape was NOT available for this URL.
+The text below is the Google SERP context block extracted from the user's manually-saved search PDF.
+It contains the title line + source + breadcrumb + snippet (often ending in "..." because Google truncates).
+
+🎯 EXTRACTION RULES FOR SNIPPETS:
+• If the snippet clearly names the target WITH role context (e.g. "X being his Alternate Director"),
+  extract that role faithfully — DO NOT default to targetMentioned=false just because the body is short.
+• Hyphen / comma / case / space variants of the same name count as EXACT match.
+  ✅ "Kwok Kai fai Adam" ↔ "KWOK Kai-fai, Adam" → 4 tokens identical → nameMatch = EXACT
+• If the snippet shows target as "Alternate / Successor / Deputy / Replacing" the real subject,
+  set targetRole = "alternate" or "successor", and actualSubjectName = the named real subject.
+• Lower factsConfidence (0.5 – 0.7) only when role is GENUINELY ambiguous in the snippet text.`;
 
   return `# TARGET
 Name: "${targetName}"
@@ -1326,7 +1405,7 @@ URL: ${articleUrl || '(unknown)'}
 Title: ${articleTitle || '(unknown)'}
 Source: ${articleSource || '(unknown)'}
 
-Body:
+${bodyHeader}
 ${(articleBody || '').slice(0, 12000)}
 
 # EXTRACT THESE FACTS AS JSON
@@ -1355,9 +1434,11 @@ ${(articleBody || '').slice(0, 12000)}
 # DEFINITIONS
 
 nameMatch:
-  EXACT     — exact same name as target, or trivial corporate-suffix variant (Ltd / Limited / Inc).
+  EXACT     — exact same name as target, OR same name with only hyphen/comma/case/space differences, OR trivial corporate-suffix variant (Ltd / Limited / Inc).
+              ✅ "Kwok Kai fai Adam" ↔ "KWOK Kai-fai, Adam" → EXACT
+              ✅ "Alpha Holdings Ltd" ↔ "Alpha Holdings Limited" → EXACT
   VARIANT   — same person with surname-order swap (e.g. "Chan Tai Man" ↔ "Tai Man Chan").
-  SUPERSET  — article name has STRICTLY MORE tokens than target (e.g. target="Steven Andrew", article="Steven Andrew Leach"). NOT a match.
+  SUPERSET  — article name has STRICTLY MORE name tokens than target (e.g. target="Steven Andrew", article="Steven Andrew Leach"). NOT a match.
   DIFFERENT — shares some tokens but is clearly a different person/entity (different jurisdiction, industry, identifiers).
   ABSENT    — target name does not appear in the body at all.
 
@@ -1365,6 +1446,7 @@ targetRole:
   subject              — target IS the wrongdoer / investigated / charged / sanctioned party.
   successor            — target REPLACES the subject (e.g. "X appointed to replace Y, who was investigated").
   alternate            — target is alternate / substitute / deputy director of the subject.
+                         e.g. "Mr. A charged; Mr. B being his Alternate Director" → B's role = alternate, subject = A.
   victim               — target is the victim.
   witness              — target is interviewee, commentator, or expert only.
   plaintiff            — target is the plaintiff / employer suing someone else.
@@ -1388,6 +1470,7 @@ async function extractArticleFacts({ targetName, kycInfo, article, apiKey }) {
       articleSource: article.source,
       articleBody: article.body,
       articleUrl: article.url,
+      hasFullBody: article.hasFullBody, 
     });
 
     const res = await fetch('https://api.poe.com/v1/chat/completions', {
@@ -2487,16 +2570,25 @@ PAGE-CONTENT SCRAPING:
 
       // Build per-article input list (1 article per URL/anchor)
       const articles = resultUrls.map((url, i) => {
-        const body = pageContentMap.get(url) || '';
-        return {
-          rank: i + 1,
-          url,
-          title: '',                  // will be filled by Pass 1
-          source: '',
-          body: body || '(No scraped body available. Use URL/anchor context only — be conservative.)',
-          hasBody: body.length >= 200,
-        };
-      });
+  const scraped = pageContentMap.get(url) || '';
+  const hasFullBody = scraped.length >= 200;
+  // 🆕 Scrape 失敗時,fallback 去用 PDF snippet block
+  const snippet = hasFullBody ? '' : findArticleContextInPdf(pdfText, url);
+
+  return {
+    rank: i + 1,
+    url,
+    title: '',
+    source: '',
+    body: hasFullBody ? scraped : (snippet || '(No content available for this URL)'),
+    hasFullBody,
+    bodySource: hasFullBody ? 'scraped' : (snippet ? 'pdf-snippet' : 'none'),
+  };
+});
+
+// 🆕 Debug log:確認 fallback 有 work
+const sources = articles.reduce((a, x) => { a[x.bodySource]++; return a; }, { scraped: 0, 'pdf-snippet': 0, none: 0 });
+console.log(`📦 Article body sources:`, sources);
 
       // If we have ZERO resultUrls (e.g. extraction failed), fallback to one synthetic entry
       if (articles.length === 0) {
