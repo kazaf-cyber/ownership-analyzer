@@ -4086,7 +4086,7 @@ if (dropped) {
 
             const _extraStr = _extras.join(' ');
 
-            // ───── CASE 1: cls 唔係 FALSE_HIT → 強制改 ─────
+           // ───── CASE 1: cls 唔係 FALSE_HIT → 強制改 ─────
             if (r.cls !== 'FALSE_HIT') {
               const _improved = `False Hit, because the full name mentioned in this article is "${_superset}", not "${searchEntity}". The article refers to a different individual whose name does not exactly match the screened target.`;
               console.log(`🔒 Patch #10 [#${r.rank}]: ${r.cls} → FALSE_HIT (superset "${_superset}", extra: "${_extraStr}")`);
@@ -4096,7 +4096,7 @@ if (dropped) {
                 riskCat: 'N/A',
                 identityMatch: 'CONTRADICTED',
                 actualSubjectName: _superset,
-                reason: _newReason,
+                reason: _improved,                       // ← ✅ FIXED
                 _tokenSupersetForced: true,
                 _previousCls: r._previousCls || r.cls,
               };
