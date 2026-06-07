@@ -3611,14 +3611,10 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
 
 
       // ═══════════════════════════════════════════════════════
-      // 🆕 PATCH #9 — FINAL TARGET-IN-SNIPPET HARD GUARD
-      // 解決 SERP 全部結果明確 name 咗 target,但仍然標 FALSE_HIT
-      // + "unspecified party" 嘅 case (e.g. GFSC 監管登記、LinkedIn
-      // 員工 profile、Citywealth ranking、Privacy Policy 等)。
-      //
-      // Trigger: target 名 literally 出現 + cls === FALSE_HIT
-      //          + identityMatch !== CONTRADICTED
-      // Action:  改為 IRRELEVANT_MLTF (or TRUE_HIT if has ML/TF kw)
+      // 🆕 PATCH #9 v2 — TARGET-IN-ENTRY HARD GUARD (preserves AI reason)
+      // 解決 SERP 全部結果明確 name 咗 target 但被誤標 FALSE_HIT 嘅情況。
+      // KEY: 保留 AI 原本 article-specific 嘅 reason,只將 label
+      //      由 "False Hit," 改為 "Irrelevant ML/TF," / "True Hit,"
       // ═══════════════════════════════════════════════════════
       {
         const targetLc9 = String(searchEntity).toLowerCase().trim();
@@ -3627,9 +3623,10 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
         parsed = parsed.map(r => {
           if (r._manualOverride) return r;
           if (r.cls !== 'FALSE_HIT') return r;
-          if (r.identityMatch === 'CONTRADICTED') return r;  // KNOWN INFO 明確抵觸 → 真 FALSE_HIT
+          if (r.identityMatch === 'CONTRADICTED') return r;
 
-          // 🆕 FIX: 加入 actualSubjectName 同 reason,catch AI 將 target 名只寫喺 reason 嘅情況
+          // Expanded entryText: 加 actualSubjectName + reason,
+          // catch AI 將 target 名只寫喺 reason 嘅情況
           const entryText = `${r.title || ''} ${r.snippet || ''} ${r.nameInResult || ''} ${r.actualSubjectName || ''} ${r.reason || ''}`.toLowerCase();
 
           // 🚨 Guard: AI 明確話 "different entity" → 信佢,保持 FALSE_HIT
@@ -3649,27 +3646,38 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
           // Strict: 完整 target 字串出現
           const fullMatch = entryText.includes(targetLc9);
 
-          // Lenient: 2+ 連續 token 出現(處理 "STGL" / "Summit Trust Guernsey" 等變體)
+          // Lenient: 2+ 連續 token 出現
           const tokenSeqMatch = targetTokens9.length >= 2 &&
             targetTokens9.slice(0, -1).some((tok, i) =>
               entryText.includes(`${tok} ${targetTokens9[i + 1]}`)
             );
 
           if (!fullMatch && !tokenSeqMatch) {
-            console.log(`⚠️ Patch #9 [#${r.rank}]: target "${searchEntity}" NOT detected anywhere → leaving as FALSE_HIT. title="${(r.title||'').slice(0,60)}" snippet="${(r.snippet||'').slice(0,80)}" nameInResult="${r.nameInResult}"`);
+            console.log(`⚠️ Patch #9 [#${r.rank}]: target "${searchEntity}" NOT detected anywhere → leaving as FALSE_HIT`);
             return r;
           }
 
-          // Target 明明喺 snippet 入面 → FALSE_HIT 係錯
+          // ✅ Target 確實喺 entry 入面 → FALSE_HIT 錯,要修正
           const hasMLTFKeywords = r.matchedKeywords && r.matchedKeywords.length > 0;
           const newCls = hasMLTFKeywords ? 'TRUE_HIT' : 'IRRELEVANT_MLTF';
           const newLabel = newCls === 'TRUE_HIT' ? 'True Hit' : 'Irrelevant ML/TF';
 
-          const newReason = hasMLTFKeywords
-            ? `${newLabel}, because "${searchEntity}" is explicitly named in this result and ML/TF-related keywords are present in the article concerning this entity.`
-            : `${newLabel}, because "${searchEntity}" is explicitly named in this result but no ML/TF-related content concerning the target is present.`;
+          // 🎯 KEY FIX: 保留 AI 原本 article-specific reasoning
+          // 1) 剝走舊 label 前綴 (e.g. "False Hit, ")
+          // 2) 剝走可能存在嘅 "because " 前綴
+          // 3) 用新 label 重新組合,保留 AI 嘅具體論述
+          let originalBody = String(r.reason || '').trim();
+          originalBody = originalBody.replace(/^(False Hit|True Hit|No Hit|Irrelevant ML\/TF)\s*[,:]\s*/i, '');
+          originalBody = originalBody.replace(/^because\s+/i, '');
 
-          console.log(`🔒 Patch #9 [#${r.rank}]: FALSE_HIT → ${newCls} (target literally in snippet, no contradiction)`);
+          // 如果 AI 原本 reason 夠詳細 → 保留;否則 fallback 至 generic template
+          const newReason = originalBody.length >= 30
+            ? `${newLabel}, because ${originalBody}`
+            : (hasMLTFKeywords
+                ? `${newLabel}, because "${searchEntity}" is explicitly named in this result and ML/TF-related keywords are present in the article concerning this entity.`
+                : `${newLabel}, because "${searchEntity}" is explicitly named in this result but no ML/TF-related content concerning the target is present.`);
+
+          console.log(`🔒 Patch #9 [#${r.rank}]: FALSE_HIT → ${newCls} (preserved AI body: ${originalBody.length} chars)`);
 
           return {
             ...r,
