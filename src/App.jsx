@@ -2296,17 +2296,16 @@ for (let i = 1; i <= pdf.numPages; i++) {
 }
 
 console.log(`📄 Merged PDF text length: ${pdfText.length} chars (single logical SERP page)`);
-// 🆕 將抽到嘅 hyperlinks 注入到 pdfText 末尾,等後續 extractResultAnchors 揾到佢哋
+// 📋 Log only — DO NOT inject embedded URLs into pdfText.
+//    Injecting them would cause extractResultAnchors() PASS 2 to re-pick
+//    them up alongside the breadcrumb anchors from PASS 1a/1b, producing
+//    duplicate entries (one Google result counted as TWO anchors).
 if (embeddedUrls.size > 0) {
   console.log(`🔗 Extracted ${embeddedUrls.size} embedded hyperlink(s) from PDF annotations:`);
   [...embeddedUrls].forEach((u, i) => console.log(`  [${String(i+1).padStart(2,'0')}] ${u}`));
-  pdfText += '\n\n--- EMBEDDED PDF HYPERLINKS ---\n';
-  [...embeddedUrls].forEach(u => { pdfText += u + '\n'; });
-  pdfText += '--- END EMBEDDED HYPERLINKS ---\n';
 } else {
-  console.warn('⚠️ No embedded hyperlinks found in PDF annotations. Falling back to breadcrumb-only mode.');
+  console.warn('⚠️ No embedded hyperlinks found in PDF annotations. Will fall back to breadcrumb extraction.');
 }
-
       if (!pdfText.trim()) throw new Error('PDF 無法提取文字（可能是掃描圖片格式）');
 
       /* ★ 修正 2：清理 Google PDF 噪音（AI 概覽、UI 元素、引號搜尋等） */
@@ -2536,9 +2535,33 @@ sigMap.set(candidateSig, { text: normalized, lineIdx: i });
   return sorted.map(o => o.text);
 };
 
-const resultUrls = extractResultAnchors(pdfText);
-console.log(`🔗 Pre-extracted ${resultUrls.length} result anchors (URLs + breadcrumbs):`);
-resultUrls.forEach((a, i) => console.log(`  [${String(i+1).padStart(2,'0')}] ${a}`));;
+// 🔑 ANCHOR STRATEGY
+//   A Google SERP PDF contains, for EACH search result, BOTH:
+//     (a) An embedded PDF hyperlink annotation (the real clickable URL)
+//     (b) A rendered breadcrumb in the visible text (e.g. "reuters.com › ...")
+//
+//   If we use the multi-pass extractor on (b) AND also have (a), we get
+//   DOUBLE the count, because sigOf() produces different signatures for
+//   the two forms of the same result.
+//
+//   Rule:
+//     • If embedded annotations >= 3 → TRUST them as the canonical anchor
+//       list. Their order matches the SERP display order. Skip breadcrumb
+//       extraction entirely.
+//     • Else → fall back to the multi-pass extractor (covers old Chrome /
+//       scanned-image PDFs where annotations are absent).
+let resultUrls;
+if (embeddedUrls.size >= 3) {
+  resultUrls = [...embeddedUrls];
+  console.log(`🔑 Using ${resultUrls.length} embedded PDF hyperlinks as the canonical anchor list`);
+  console.log(`   (breadcrumb / full-URL / social passes SKIPPED to prevent duplicates)`);
+} else {
+  console.warn(`⚠️ Only ${embeddedUrls.size} embedded hyperlinks — falling back to multi-pass anchor extraction`);
+  resultUrls = extractResultAnchors(pdfText);
+}
+
+console.log(`🔗 Final anchor list (${resultUrls.length} item(s)):`);
+resultUrls.forEach((a, i) => console.log(`  [${String(i+1).padStart(2,'0')}] ${a}`));
 
 
  // ═══════════════════════════════════════════════════════════
