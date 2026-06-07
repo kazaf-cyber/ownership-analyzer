@@ -2563,7 +2563,6 @@ if (embeddedUrls.size >= 3) {
 console.log(`🔗 Final anchor list (${resultUrls.length} item(s)):`);
 resultUrls.forEach((a, i) => console.log(`  [${String(i+1).padStart(2,'0')}] ${a}`));
 
-
  // ═══════════════════════════════════════════════════════════
 // 🔧 F.6+R: Resolve → Scrape pipeline (Option B)
 // ═══════════════════════════════════════════════════════════
