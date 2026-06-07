@@ -2642,12 +2642,22 @@ const urlToAnchor = new Map();
     });
   }
 
-  // ────────────────────────────────────────────
-  // STEP 3: Combine direct URLs (from PDF) + resolved URLs (from breadcrumbs)
+ // ────────────────────────────────────────────
+  // STEP 3: Combine ALL scrapable URL sources
+  //   (a) Direct URLs found in visible PDF text (rare for Google SERP — usually only breadcrumbs)
+  //   (b) Embedded PDF hyperlink annotations (the REAL article URLs — most common case)
+  //   (c) URLs resolved from breadcrumbs via /api/resolve (fallback for old Chrome PDFs)
   // ────────────────────────────────────────────
   const directUrls = extractUrlsFromPdf(pdfText);
-  const allUrls = [...new Set([...directUrls, ...resolvedUrls])];  // dedup
+  const embeddedAnchorUrls = fullUrlAnchors.map(a => a.url);   // ⭐ FIX: include embedded URLs
+  const allUrls = [...new Set([...directUrls, ...embeddedAnchorUrls, ...resolvedUrls])];
   scrapeStats.attempted = allUrls.length;
+
+  console.log(`🌐 Scrape sources combined:`);
+  console.log(`   • Direct URLs from PDF text     : ${directUrls.length}`);
+  console.log(`   • Embedded PDF hyperlinks       : ${embeddedAnchorUrls.length}  ⭐`);
+  console.log(`   • Resolved from breadcrumbs     : ${resolvedUrls.length}`);
+  console.log(`   → Total unique URLs to scrape   : ${allUrls.length}`);
 
   // ────────────────────────────────────────────
   // STEP 4: Scrape all URLs
