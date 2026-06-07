@@ -2242,23 +2242,57 @@ A correctly classified TRUE_HIT is just as defensible as a correctly classified 
       const pdf = await window.pdfjsLib.getDocument({ data: arrayBuf }).promise;
       let pdfText = '';
 
-      /* ★ 修正 1：用座標還原換行，不再用 .join(' ')；頁數上限提升到 5 */
-      for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        let lastY = null;
-        let pageText = '';
-        for (const item of content.items) {
-          if (!item.str || !item.str.trim()) continue;
-          const y = item.transform ? item.transform[5] : null;
-          if (lastY !== null && y !== null && Math.abs(y - lastY) > 3) {
-            pageText += '\n';
-          }
-          pageText += item.str + ' ';
-          lastY = y;
+     const embeddedUrls = new Set();   // 🆕 集中存所有 PDF embedded hyperlinks
+
+for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
+  const page = await pdf.getPage(i);
+  const content = await page.getTextContent();
+  let lastY = null;
+  let pageText = '';
+  for (const item of content.items) {
+    if (!item.str || !item.str.trim()) continue;
+    const y = item.transform ? item.transform[5] : null;
+    if (lastY !== null && y !== null && Math.abs(y - lastY) > 3) {
+      pageText += '\n';
+    }
+    pageText += item.str + ' ';
+    lastY = y;
+  }
+
+  // 🆕 抽取 PDF 內嵌嘅 hyperlink annotations(真正可按嘅 URL)
+  try {
+    const annotations = await page.getAnnotations();
+    for (const ann of annotations) {
+      if (ann.subtype === 'Link' && ann.url) {
+        // 過濾 Google 自己嘅基礎設施
+        const u = ann.url;
+        if (u.startsWith('http') &&
+            !u.includes('google.com/search') &&
+            !u.includes('googleusercontent') &&
+            !u.includes('accounts.google') &&
+            !u.includes('googleadservices') &&
+            !u.includes('gstatic.com')) {
+          embeddedUrls.add(u);
         }
-        pdfText += pageText + '\n\n--- PAGE BREAK ---\n\n';
       }
+    }
+  } catch (annErr) {
+    console.warn(`Page ${i}: failed to read annotations`, annErr);
+  }
+
+  pdfText += pageText + '\n\n--- PAGE BREAK ---\n\n';
+}
+
+// 🆕 將抽到嘅 hyperlinks 注入到 pdfText 末尾,等後續 extractResultAnchors 揾到佢哋
+if (embeddedUrls.size > 0) {
+  console.log(`🔗 Extracted ${embeddedUrls.size} embedded hyperlink(s) from PDF annotations:`);
+  [...embeddedUrls].forEach((u, i) => console.log(`  [${String(i+1).padStart(2,'0')}] ${u}`));
+  pdfText += '\n\n--- EMBEDDED PDF HYPERLINKS ---\n';
+  [...embeddedUrls].forEach(u => { pdfText += u + '\n'; });
+  pdfText += '--- END EMBEDDED HYPERLINKS ---\n';
+} else {
+  console.warn('⚠️ No embedded hyperlinks found in PDF annotations. Falling back to breadcrumb-only mode.');
+}
 
       if (!pdfText.trim()) throw new Error('PDF 無法提取文字（可能是掃描圖片格式）');
 
