@@ -3764,7 +3764,7 @@ if (dropped) {
               }
             }
           }
-
+         }
           // ── Check 2: Plural vs actual person count ───────────
           const reasoningUsesPlural = PLURAL_PATTERNS_B.some(p => p.test(mutated.reason));
           if (reasoningUsesPlural) {
