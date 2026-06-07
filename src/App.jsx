@@ -1503,6 +1503,170 @@ async function extractArticleFacts({ targetName, kycInfo, article, apiKey }) {
   }
 }
 
+
+/* ════════════════════════════════════════════════════════════════
+   SIMILARITY GUARD — Detect & repair duplicate reasons
+   ════════════════════════════════════════════════════════════════ */
+
+function normalizeReasonForCompare(reason) {
+  if (!reason) return '';
+  return String(reason)
+    .toLowerCase()
+    .replace(/"[^"]+"/g, '"X"')
+    .replace(/\b\d{4}-\d{2}-\d{2}\b/g, 'DATE')
+    .replace(/\b\d{1,2}\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s*\d{2,4}\b/gi, 'DATE')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function findDuplicateReasonGroups(parsed) {
+  const groups = new Map();
+  for (const r of parsed) {
+    if (r.cls === 'NO_HIT' && r.riskCat === 'N/A (Extraction Failed)') continue;
+    const sig = normalizeReasonForCompare(r.reason);
+    if (!sig) continue;
+    if (!groups.has(sig)) groups.set(sig, []);
+    groups.get(sig).push(r);
+  }
+  const dupes = [];
+  for (const [sig, items] of groups.entries()) {
+    if (items.length > 1) {
+      dupes.push({ signature: sig, ranks: items.map(i => i.rank), items });
+    }
+  }
+  return dupes;
+}
+
+const PASS1B_SYSTEM_PROMPT = `You are a fact extractor for KYC/AML screening. Your previous extraction produced facts that resulted in a reason indistinguishable from another article. You must now re-extract WITH DELIBERATE EMPHASIS on what makes THIS article UNIQUE compared to its siblings.
+
+You do NOT classify. You do NOT judge risk. Output strict JSON only.`;
+
+function buildPass1BPrompt({ targetName, kycInfo, article, siblingsInfo }) {
+  const hasKyc = kycInfo && Object.values(kycInfo).some(v => v && String(v).trim());
+  const kycBlock = hasKyc
+    ? `KYC-supplied identifiers:\n${formatEntityContext(kycInfo)}`
+    : `KYC-supplied identifiers: (none provided)`;
+
+  const siblingBlock = siblingsInfo.length > 0
+    ? siblingsInfo.map((s, i) =>
+        `[Sibling ${i + 1}]\n` +
+        `  URL: ${s.url || '(unknown)'}\n` +
+        `  Previous specificEvent: "${s.specificEvent || '(empty)'}"\n` +
+        `  Previous targetActionInArticle: "${s.targetActionInArticle || '(empty)'}"\n` +
+        `  Previous articleDate: "${s.articleDate || '(unknown)'}"\n` +
+        `  Previous publisher: "${s.publisher || '(unknown)'}"`
+      ).join('\n\n')
+    : '(none)';
+
+  return `# TARGET
+Name: "${targetName}"
+${kycBlock}
+
+# THIS ARTICLE (the one you re-analyse)
+URL: ${article.url || '(unknown)'}
+Title: ${article.title || '(unknown)'}
+Source: ${article.source || '(unknown)'}
+
+Body:
+${(article.body || '').slice(0, 12000)}
+
+# SIBLINGS — Other articles that produced the SAME generic reason
+${siblingBlock}
+
+# YOUR TASK
+Re-extract facts for THIS article. Your output for specificEvent and targetActionInArticle MUST be CLEARLY DIFFERENT from every sibling above.
+
+REQUIREMENTS:
+
+1. articleDate — Look in the body for filing header, "Date of this notice", press release date, signed/dated stamps. Format YYYY-MM-DD. If genuinely absent, output "unknown".
+
+2. publisher — Identify the EXACT issuing body. Examples:
+   • "HKEXnews (notice ref: ltn20141219648)"
+   • "Sun Hung Kai Properties — Annual Report 2024"
+   • "ISS Proxy Advisor — 2025 AGM recommendation"
+   • "Reuters — 2014 ICAC trial coverage"
+
+3. specificEvent — A UNIQUE phrase (max 20 words) describing what THIS document records. Use distinctive action verbs and dates:
+   ❌ Bad (generic): "governance disclosure mentioning the target"
+   ✅ Good: "cessation of Adam Kwok's Alternate Director role effective 19 Dec 2014 following Thomas Kwok's bribery conviction"
+   ✅ Good: "appointment of Adam Kwok as Alternate Director on 13 Jul 2012 in response to ICAC investigation"
+   ✅ Good: "ISS recommendation against Adam Kwok's re-election at 2025 AGM citing related-party concerns"
+   ✅ Good: "routine listing of Adam Kwok in 2024 annual report board composition table"
+
+4. targetActionInArticle — Target's SPECIFIC status change in THIS document (5-15 words). Must differ from siblings.
+   ❌ Bad (generic): "alternate director"
+   ✅ Good: "newly appointed as Alternate Director on 13 Jul 2012"
+   ✅ Good: "ceased to serve as Alternate Director effective 19 Dec 2014"
+
+# OUTPUT SCHEMA (same fields as Pass 1)
+{
+  "targetMentioned": <true/false>,
+  "nameInArticle": "<string>",
+  "nameMatch": "<EXACT | VARIANT | SUPERSET | DIFFERENT | ABSENT>",
+  "nameMatchReason": "<string>",
+  "kycContradiction": "<string>",
+  "articleGenre": "<news | regulatory_filing | academic | court_judgment | fiction | social_media | directory_profile | self_published | fraud_alert | violation_tracker | other>",
+  "articleDate": "<YYYY-MM-DD or 'unknown'>",
+  "publisher": "<string>",
+  "specificEvent": "<UNIQUE phrase, max 20 words>",
+  "targetActionInArticle": "<UNIQUE phrase, 5-15 words>",
+  "wrongdoingDescribed": <true/false>,
+  "wrongdoingType": "<money_laundering | sanctions | bribery | fraud | tax_evasion | terrorist_financing | export_control | customs_fraud | civil_dispute | regulatory_violation | environmental | none | other>",
+  "wrongdoingInMLTFScope": <true/false>,
+  "targetRole": "<subject | successor | alternate | victim | witness | plaintiff | colleague | passing_mention | unrelated_same_name | not_present>",
+  "actualSubjectName": "<string>",
+  "evidenceQuote": "<≤25-word verbatim quote>",
+  "factsConfidence": <0.0-1.0>
+}
+
+Output JSON only. Start with { end with }.`;
+}
+
+async function reExtractWithDistinguishing({ targetName, kycInfo, article, siblings, apiKey }) {
+  try {
+    const siblingsInfo = siblings.map(s => ({
+      url: s.url,
+      specificEvent: s._facts?.specificEvent || '',
+      targetActionInArticle: s._facts?.targetActionInArticle || '',
+      articleDate: s._facts?.articleDate || '',
+      publisher: s._facts?.publisher || '',
+    }));
+
+    const userPrompt = buildPass1BPrompt({ targetName, kycInfo, article, siblingsInfo });
+
+    const res = await fetch('https://api.poe.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
+      body: JSON.stringify({
+        model: 'gemini-3.5-flash',
+        messages: [
+          { role: 'system', content: PASS1B_SYSTEM_PROMPT },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.15,
+        max_tokens: 1800,
+        response_format: { type: 'json_object' },
+      }),
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    const raw = data?.choices?.[0]?.message?.content || '';
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    return JSON.parse(match[0]);
+  } catch (e) {
+    console.warn('Pass 1B re-extraction failed:', e.message);
+    return null;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   END SIMILARITY GUARD
+   ════════════════════════════════════════════════════════════════ */
+
+  
 function classifyFromFacts({ facts, targetName, mode }) {
   const isSanction = mode === 'sanction';
   const irrelevantLabel = isSanction ? 'Irrelevant sanction' : 'Irrelevant ML/TF';
@@ -1683,7 +1847,7 @@ function classifyFromFacts({ facts, targetName, mode }) {
     actualSubjectName: '',
     _factsConfidence: facts.factsConfidence,
   };
-
+}
 /* ════════════════════════════════════════════════════════════════
    END TWO-PASS ARCHITECTURE
    ════════════════════════════════════════════════════════════════ */
@@ -2709,6 +2873,95 @@ console.log(`📦 Article body sources:`, sources);
         console.log(`✅ Count match: ${parsed.length} items = ${resultUrls.length} anchors`);
       }
 
+
+      // ═══════════════════════════════════════════════════════
+      // 🆕 PASS 1B: SIMILARITY GUARD + AUTO RE-PROMPT
+      // ═══════════════════════════════════════════════════════
+      setProgress(92);
+      setStage('檢查 reasons 是否唯一...');
+
+      const dupeGroups = findDuplicateReasonGroups(parsed);
+
+      if (dupeGroups.length > 0) {
+        const totalDupeItems = dupeGroups.reduce((s, g) => s + g.items.length, 0);
+        console.warn(`⚠️ Found ${dupeGroups.length} duplicate-reason group(s), ${totalDupeItems} item(s) need re-extraction:`);
+        dupeGroups.forEach((g, i) => {
+          console.warn(`   Group ${i + 1}: ranks [${g.ranks.join(', ')}]`);
+          console.warn(`     Signature: ${g.signature.slice(0, 120)}...`);
+        });
+
+        setProgress(95);
+        setStage(`Pass 1B: 重新分析 ${totalDupeItems} 篇相似文章...`);
+
+        // For each duplicate group, re-extract each member with sibling context
+        for (let gi = 0; gi < dupeGroups.length; gi++) {
+          const group = dupeGroups[gi];
+          console.log(`🔄 Re-extracting group ${gi + 1}/${dupeGroups.length} (ranks: ${group.ranks.join(', ')})...`);
+
+          const reExtractPromises = group.items.map(item => {
+            const siblings = group.items.filter(s => s.rank !== item.rank);
+            const article = articles.find(a => a.rank === item.rank);
+            if (!article) return Promise.resolve(null);
+            return reExtractWithDistinguishing({
+              targetName: searchEntity,
+              kycInfo: entityContext,
+              article,
+              siblings,
+              apiKey,
+            });
+          });
+
+          const reExtracted = await Promise.allSettled(reExtractPromises);
+
+          reExtracted.forEach((r, i) => {
+            const item = group.items[i];
+            if (r.status !== 'fulfilled' || !r.value) {
+              console.warn(`   ⚠️ Re-extraction failed for rank ${item.rank} — keeping original`);
+              return;
+            }
+            const newFacts = r.value;
+            const newCls = classifyFromFacts({ facts: newFacts, targetName: searchEntity, mode });
+            const idx = parsed.findIndex(p => p.rank === item.rank);
+            if (idx !== -1) {
+              parsed[idx] = {
+                ...parsed[idx],
+                cls: newCls.cls,
+                identityMatch: newCls.identityMatch,
+                nameInResult: newFacts.nameInArticle || parsed[idx].nameInResult,
+                actualSubjectName: newCls.actualSubjectName || parsed[idx].actualSubjectName,
+                confidence: typeof newFacts.factsConfidence === 'number'
+                  ? Math.round(newFacts.factsConfidence * 100) / 100
+                  : parsed[idx].confidence,
+                snippet: newFacts.evidenceQuote || parsed[idx].snippet,
+                reason: newCls.reason,
+                riskCat: newCls.riskCat,
+                _facts: newFacts,
+                _reExtracted: true,
+              };
+              console.log(`   ✅ Rank ${item.rank} re-extracted:`);
+              console.log(`      specificEvent: "${newFacts.specificEvent}"`);
+              console.log(`      targetAction:  "${newFacts.targetActionInArticle}"`);
+            }
+          });
+        }
+
+        // Final verification
+        const remainingDupes = findDuplicateReasonGroups(parsed);
+        if (remainingDupes.length > 0) {
+          console.warn(`⚠️ ${remainingDupes.length} group(s) STILL have duplicate reasons after re-extraction:`);
+          remainingDupes.forEach((g, i) => {
+            console.warn(`   Remaining Group ${i + 1}: ranks [${g.ranks.join(', ')}]`);
+          });
+        } else {
+          console.log(`✅ All reasons now unique after Pass 1B re-extraction.`);
+        }
+      } else {
+        console.log(`✅ All reasons already unique — no Pass 1B needed.`);
+      }
+      // ═══════════════════════════════════════════════════════
+      // END PASS 1B
+      // ═══════════════════════════════════════════════════════
+      
       setProgress(100);
       timerIdsRef.current.push(setTimeout(() => {
         setIsAnalyzing(false);
@@ -2870,11 +3123,14 @@ const ResultCard = ({ r }) => {
             </div>
 
             {/* Meta row */}
-            {(r.source || r.date || r._manualOverride) && (
+            {(r.source || r.date || r._manualOverride || r._reExtracted) && (
               <div className="flex items-center gap-2 mt-1.5 flex-wrap text-[10px] text-slate-400">
                 {r.source && <span className="font-semibold">{r.source}</span>}
                 {r.source && r.date && <span>·</span>}
                 {r.date && <span className="font-mono">{r.date}</span>}
+                {r._reExtracted && (
+                  <span className="text-blue-600 font-bold">🔄 Re-analyzed (distinguishing)</span>
+                )}
                 {r._manualOverride && (
                   <span className="text-indigo-600 font-bold">✏️ Manual override</span>
                 )}
