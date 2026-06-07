@@ -3629,7 +3629,22 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
           if (r.cls !== 'FALSE_HIT') return r;
           if (r.identityMatch === 'CONTRADICTED') return r;  // KNOWN INFO 明確抵觸 → 真 FALSE_HIT
 
-          const entryText = `${r.title || ''} ${r.snippet || ''} ${r.nameInResult || ''}`.toLowerCase();
+          // 🆕 FIX: 加入 actualSubjectName 同 reason,catch AI 將 target 名只寫喺 reason 嘅情況
+          const entryText = `${r.title || ''} ${r.snippet || ''} ${r.nameInResult || ''} ${r.actualSubjectName || ''} ${r.reason || ''}`.toLowerCase();
+
+          // 🚨 Guard: AI 明確話 "different entity" → 信佢,保持 FALSE_HIT
+          const reasonLcCheck = String(r.reason || '').toLowerCase();
+          const explicitlyDifferentEntity =
+            /\b(?:a |the )?different (person|individual|entity|party|company|organisation|organization)\b/.test(reasonLcCheck) ||
+            /\bnot the (same|screened) (target|subject|individual|person|entity)\b/.test(reasonLcCheck) ||
+            /\b(?:shares?|share) the same name\b/.test(reasonLcCheck) ||
+            /\bhappens to (share|have)\b/.test(reasonLcCheck) ||
+            /\bdistinct (from|to)\b/.test(reasonLcCheck);
+
+          if (explicitlyDifferentEntity) {
+            console.log(`⏭️ Patch #9 [#${r.rank}]: skipped — AI explicitly stated different entity`);
+            return r;
+          }
 
           // Strict: 完整 target 字串出現
           const fullMatch = entryText.includes(targetLc9);
@@ -3640,7 +3655,10 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
               entryText.includes(`${tok} ${targetTokens9[i + 1]}`)
             );
 
-          if (!fullMatch && !tokenSeqMatch) return r;
+          if (!fullMatch && !tokenSeqMatch) {
+            console.log(`⚠️ Patch #9 [#${r.rank}]: target "${searchEntity}" NOT detected anywhere → leaving as FALSE_HIT. title="${(r.title||'').slice(0,60)}" snippet="${(r.snippet||'').slice(0,80)}" nameInResult="${r.nameInResult}"`);
+            return r;
+          }
 
           // Target 明明喺 snippet 入面 → FALSE_HIT 係錯
           const hasMLTFKeywords = r.matchedKeywords && r.matchedKeywords.length > 0;
