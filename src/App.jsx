@@ -3498,6 +3498,29 @@ if (dropped) {
         parsed = parsed.map(r => {
           if (r._manualOverride) return r;
 
+// 🚫 Token-count guard (NEW): 如果 article party 名比 target 多 token
+//    (例如 "Steven Andrew Leach Jr." vs "Steven Andrew"),
+//    視為不同人 → skip fiction detection,等 Patch #10 強制 FALSE_HIT。
+{
+  const _tgt = String(searchEntity).toLowerCase().trim();
+  const _tgtTokens = _tgt.split(/\s+/).filter(x => x.length >= 2);
+  const _cand = `${r.nameInResult || ''} ${r.actualSubjectName || ''}`.trim();
+  if (_cand && _tgtTokens.length >= 1) {
+    const _titleRe = /^(mr|mrs|ms|dr|sir|prof|hon)\.?$/i;
+    const _candTokens = _cand.toLowerCase()
+      .replace(/[.,()"']/g, ' ')
+      .split(/\s+/)
+      .filter(x => x.length >= 2 && !_titleRe.test(x));
+    const _allTgtIn = _tgtTokens.every(tt =>
+      _candTokens.some(ct => ct === tt || ct.startsWith(tt) || tt.startsWith(ct))
+    );
+    if (_candTokens.length > _tgtTokens.length && _allTgtIn) {
+      console.log(`🚫 Patch #7b skipped for [#${r.rank}]: article party "${_cand}" is name-superset of "${searchEntity}" → leaving for Patch #10 to force FALSE_HIT`);
+      return r;
+    }
+  }
+}
+
           // 🛡️ 學術網域永遠唔 trigger fiction reclassification
           const isAcademic = academicDomainRegex.test(`${r.url || ''} ${r.source || ''}`);
           if (isAcademic) return r;
@@ -3936,7 +3959,126 @@ if (dropped) {
       }
 
       // ═══════════════════════════════════════════════════════
-      // 🆕 CENTRAL SUFFIX PASS — 所有 IRRELEVANT_MLTF reason 末尾強制加
+      // 🆕 PATCH #10 — TOKEN-COUNT SUPERSET FINAL ENFORCER
+      // 解決:
+      //   (a) Amazon / Spotify / 學術 paper 等場景被 #7b 錯壓成 IRRELEVANT_MLTF,
+      //       但 article party 名係 target 嘅 superset (e.g. "Steven Andrew Leach Jr.")
+      //       → FORCE 回 FALSE_HIT。
+      //   (b) 已係 FALSE_HIT 但 reason 太通用(冇講 actual party name)
+      //       → IMPROVE reason,寫明真實人物名 + extra tokens。
+      // Rule: article party tokens > target tokens
+      //       AND 所有 target tokens 都喺 article party 入面
+      //       AND extra tokens 唔係 titles/honorifics
+      // ═══════════════════════════════════════════════════════
+      {
+        const _tgtClean10 = String(searchEntity).toLowerCase().trim();
+        const _tgtTokens10 = _tgtClean10.split(/\s+/).filter(t => t.length >= 2);
+        const _titleRe10 = /^(mr|mrs|ms|dr|sir|prof|hon)\.?$/i;
+
+        if (_tgtTokens10.length >= 1) {
+          parsed = parsed.map(r => {
+            if (r._manualOverride) return r;
+
+            // 第一步:收集所有可能嘅 "article party" 名
+            const _candidates = [];
+            if (r.nameInResult) _candidates.push(r.nameInResult);
+            if (r.actualSubjectName && r.actualSubjectName !== r.nameInResult) {
+              _candidates.push(r.actualSubjectName);
+            }
+
+            // 第二步:從 title + snippet 抽取「Extra + Target」或「Target + Extra」名
+            const _fullText = `${r.title || ''} ${r.snippet || ''}`;
+            const _tgtPattern = _tgtTokens10
+              .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+              .join('\\s+');
+            try {
+              const _supersetRe = new RegExp(
+                `\\b(?:[A-Z][a-zA-Z.'-]+\\s+){0,2}${_tgtPattern}(?:\\s+[A-Z][a-zA-Z.'-]+){0,3}\\b`,
+                'g'
+              );
+              const _matches = _fullText.match(_supersetRe) || [];
+              _matches.forEach(m => {
+                const trimmed = m.trim().replace(/[.,;:]+$/, '');
+                if (
+                  trimmed.toLowerCase() !== _tgtClean10 &&
+                  trimmed.split(/\s+/).length > _tgtTokens10.length &&
+                  !_candidates.some(c => c.toLowerCase() === trimmed.toLowerCase())
+                ) {
+                  _candidates.push(trimmed);
+                }
+              });
+            } catch {}
+
+            // 第三步:逐個 candidate check superset condition
+            for (const cand of _candidates) {
+              const candStr = String(cand).trim();
+              const candTokens = candStr.toLowerCase()
+                .replace(/[.,()"']/g, ' ')
+                .split(/\s+/)
+                .filter(x => x.length >= 2 && !_titleRe10.test(x));
+
+              if (candTokens.length <= _tgtTokens10.length) continue;
+
+              const allIn = _tgtTokens10.every(tt =>
+                candTokens.some(ct => ct === tt || ct.startsWith(tt) || tt.startsWith(ct))
+              );
+              if (!allIn) continue;
+
+              const extraTokens = candTokens.filter(ct =>
+                !_tgtTokens10.some(tt => ct === tt || ct.startsWith(tt) || tt.startsWith(ct))
+              );
+              const extraStr = extraTokens.join(' ');
+
+              // CASE 1: cls 唔係 FALSE_HIT → 強制改
+              if (r.cls !== 'FALSE_HIT') {
+                const newReason = `False Hit, because the individual named in this article is "${candStr}", whose full name contains additional token(s)${extraStr ? ` ("${extraStr}")` : ''} beyond the screened target "${searchEntity}". By the token-count / superset name rule, this is a different individual who only partially shares the target's name.`;
+                console.log(`🔒 Patch #10 [#${r.rank}]: ${r.cls} → FALSE_HIT (superset "${candStr}", extra: "${extraStr}")`);
+                return {
+                  ...r,
+                  cls: 'FALSE_HIT',
+                  riskCat: 'N/A',
+                  identityMatch: 'CONTRADICTED',
+                  actualSubjectName: candStr,
+                  reason: newReason,
+                  _tokenSupersetForced: true,
+                  _previousCls: r._previousCls || r.cls,
+                };
+              }
+
+              // CASE 2: 已係 FALSE_HIT — 檢查 reason 質素
+              const reasonLc = String(r.reason || '').toLowerCase();
+              const lastNameToken = extraTokens[extraTokens.length - 1] || '';
+              const hasSpecificName =
+                reasonLc.includes(candStr.toLowerCase()) ||
+                (lastNameToken && reasonLc.includes(lastNameToken.toLowerCase()));
+              const isGeneric =
+                /impossible to (determine|identify|verify|ascertain)/i.test(r.reason || '') ||
+                /cannot be (definitively |reliably |clearly |positively )?(identified|determined|verified)/i.test(r.reason || '') ||
+                /without (further |any |additional |sufficient )?identifying information/i.test(r.reason || '') ||
+                /no specific (individual|subject|entity|person)/i.test(r.reason || '');
+
+              if (!hasSpecificName || isGeneric) {
+                const improvedReason = `False Hit, because the individual named in this article is "${candStr}", whose name contains additional token(s)${extraStr ? ` ("${extraStr}")` : ''} beyond the screened target "${searchEntity}". This is a different individual sharing only partial name with the target.`;
+                console.log(`📝 Patch #10 [#${r.rank}]: FALSE_HIT reason improved with actual name "${candStr}"`);
+                return {
+                  ...r,
+                  reason: improvedReason,
+                  actualSubjectName: r.actualSubjectName || candStr,
+                  _falseHitReasonImproved: true,
+                };
+              }
+              break;
+            }
+            return r;
+          });
+
+          const _enforced10 = parsed.filter(r => r._tokenSupersetForced).length;
+          const _improved10 = parsed.filter(r => r._falseHitReasonImproved).length;
+          if (_enforced10 + _improved10 > 0) {
+            console.log(`🔒 Patch #10 summary: ${_enforced10} forced to FALSE_HIT, ${_improved10} reasons improved`);
+          }
+        }
+      }
       
       // ═══════════════════════════════════════════════════════
       // 🆕 CENTRAL SUFFIX PASS — 所有 IRRELEVANT_MLTF reason 末尾強制加
