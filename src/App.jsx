@@ -2088,6 +2088,15 @@ STEP C — Apply the 4 CDD KNOWN INFO RULES:
   Pattern C — PLAINTIFF / EMPLOYER / VICTIM:
     "Shell PLC sued former trader for embezzlement" — Shell PLC is plaintiff, NOT subject → IRRELEVANT_MLTF.
 
+   Pattern D — ALTERNATE / SUBSTITUTE DIRECTOR:
+    "Mr. A was charged under [law]; Mr. B being his Alternate Director."
+    "Mr. B ceased to be the Alternate Director of Mr. A."
+    → A is the principal subject. B is the alternate / substitute / deputy.
+    → For B: IRRELEVANT_MLTF. State actualSubjectName = "A".
+    → NEVER vague-out as "an unspecified party" — call B by name explicitly.
+    🚨 The screened target's name IS in the disclosure (it's a regulatory filing).
+       Do not pretend it isn't. Identify the role, then judge wrongdoing scope. 
+
   YOU MUST verify the GRAMMATICAL SUBJECT of every wrongdoing sentence
   is actually the target before classifying as TRUE_HIT.
 
