@@ -3149,30 +3149,39 @@ if (stage2Candidates.length > 0) {
 
         const stage2Results = await Promise.allSettled(
           stage2Candidates.map(async (candidate) => {
-            // ── Find the best matching article body ────────────────
+           // ── 🎯 PATCH Y: STRICT ARTICLE ANCHORING (no cross-article bleed) ──
+            //    舊版會 fallback 落 pdfText(成個 SERP),導致 AI 引用其他 entry
+            //    嘅 wrongdoing 嚟證明 target 係 subject(典型 #8 PubMed bug)。
+            //    新版只接受:URL 精確 match → title 精確 match → 自己 snippet,
+            //    絕對唔會用 pdfText / 所有 scraped page 拼接。
             let articleText = '';
+            let _anchorMode = 'none';
 
-            // Strategy A: match by title or source in scraped pages
-            for (const [, content] of pageContentMap) {
-              const lc = content.toLowerCase();
-              if (
-                (candidate.title && lc.includes(candidate.title.slice(0, 30).toLowerCase())) ||
-                (candidate.source && lc.includes(candidate.source.toLowerCase()))
-              ) {
-                articleText = content;
-                break;
+            // Strategy A: match by exact URL (most precise)
+            if (candidate.url && pageContentMap.has(candidate.url)) {
+              articleText = pageContentMap.get(candidate.url);
+              _anchorMode = 'url-exact';
+            }
+
+            // Strategy B: match by substantial title (≥ 20 chars, use 40-char prefix)
+            if (!articleText && candidate.title && candidate.title.length >= 20) {
+              const _titleKey = candidate.title.slice(0, 40).toLowerCase();
+              for (const [url, content] of pageContentMap) {
+                if (content.toLowerCase().includes(_titleKey)) {
+                  articleText = content;
+                  _anchorMode = `title-match(${url.slice(0, 40)}…)`;
+                  break;
+                }
               }
             }
 
-            // Strategy B: concat all scraped pages (when title/source can't anchor)
-            if (!articleText && pageContentMap.size > 0) {
-              articleText = [...pageContentMap.values()].join('\n\n').slice(0, 30000);
-            }
-
-            // Strategy C: last resort — snippet + raw PDF text
+            // Strategy C: final fallback — own title + snippet ONLY
+            //   ⚠️ NEVER fall back to full pdfText — that's the bleed source.
             if (!articleText || articleText.length < 100) {
-              articleText = (candidate.snippet || '') + '\n' + (pdfText || '').slice(0, 5000);
+              articleText = `${candidate.title || ''}\n${candidate.snippet || ''}`;
+              _anchorMode = 'snippet-only';
             }
+            console.log(`📌 Stage 2 [#${candidate.rank}]: articleText anchor = ${_anchorMode} (${articleText.length} chars)`);
 
             const { passages, mentions } = extractRelevantPassages(articleText, searchEntity);
 
@@ -3958,124 +3967,174 @@ if (dropped) {
         });
       }
 
-      // ═══════════════════════════════════════════════════════
-      // 🆕 PATCH #10 — TOKEN-COUNT SUPERSET FINAL ENFORCER
-      // 解決:
-      //   (a) Amazon / Spotify / 學術 paper 等場景被 #7b 錯壓成 IRRELEVANT_MLTF,
-      //       但 article party 名係 target 嘅 superset (e.g. "Steven Andrew Leach Jr.")
-      //       → FORCE 回 FALSE_HIT。
-      //   (b) 已係 FALSE_HIT 但 reason 太通用(冇講 actual party name)
-      //       → IMPROVE reason,寫明真實人物名 + extra tokens。
-      // Rule: article party tokens > target tokens
-      //       AND 所有 target tokens 都喺 article party 入面
-      //       AND extra tokens 唔係 titles/honorifics
+     // ═══════════════════════════════════════════════════════
+      // 🆕 PATCH #10 v2 — TOKEN-COUNT SUPERSET FINAL ENFORCER
+      // 修正:
+      //   (a) Regex 加 'i' flag → "Steven Andrew Mcdonald" 大小寫 match
+      //   (b) 支援逗號格式 → "Leach Jr., Steven Andrew" 識別為 superset
+      //   (c) 加 initials pattern → "SA Baker" 識別為 target initials + extra
+      //   (d) Reason quality enforcement(就算已經 FALSE_HIT 都要寫明 actual name)
       // ═══════════════════════════════════════════════════════
       {
-        const _tgtClean10 = String(searchEntity).toLowerCase().trim();
-        const _tgtTokens10 = _tgtClean10.split(/\s+/).filter(t => t.length >= 2);
-        const _titleRe10 = /^(mr|mrs|ms|dr|sir|prof|hon)\.?$/i;
+        const _tgtCleanX = String(searchEntity).toLowerCase().trim();
+        const _tgtTokensX = _tgtCleanX.split(/\s+/).filter(t => t.length >= 2);
+        const _honorificX = /^(mr|mrs|ms|dr|sir|prof|hon|jr|sr|ii|iii|iv|esq)\.?$/i;
+        const _stopwordX = /^(the|a|an|of|in|at|by|on|for|to|and|or|but|with|from|as|is|are|was|book|books|track|song|album|story|novel|chapter|series|review|news|page|site|fund|director|manager|company|limited|inc|corp|ltd|llc|group|holdings|university|college|institute|department|office|service|search|results|article|former|current|new)$/i;
 
-        if (_tgtTokens10.length >= 1) {
+        if (_tgtTokensX.length >= 1) {
           parsed = parsed.map(r => {
             if (r._manualOverride) return r;
 
-            // 第一步:收集所有可能嘅 "article party" 名
-            const _candidates = [];
-            if (r.nameInResult) _candidates.push(r.nameInResult);
-            if (r.actualSubjectName && r.actualSubjectName !== r.nameInResult) {
-              _candidates.push(r.actualSubjectName);
+            // ───── Step A: 收集 candidate names 從 3 個來源 ─────
+            const _candidates = new Map();   // name → source
+
+            // Source 1: AI 明確返回嘅 nameInResult / actualSubjectName
+            if (r.nameInResult && r.nameInResult.trim().length >= 3) {
+              _candidates.set(r.nameInResult.trim(), 'nameInResult');
+            }
+            if (r.actualSubjectName && r.actualSubjectName.trim().length >= 3
+                && r.actualSubjectName.trim() !== (r.nameInResult || '').trim()) {
+              _candidates.set(r.actualSubjectName.trim(), 'actualSubjectName');
             }
 
-            // 第二步:從 title + snippet 抽取「Extra + Target」或「Target + Extra」名
-            const _fullText = `${r.title || ''} ${r.snippet || ''}`;
-            const _tgtPattern = _tgtTokens10
+            // Source 2: 掃描 title + snippet 嘅 capitalized name sequence
+            //           包含 target tokens(支援 ", " 逗號分隔)
+            const _textX = `${r.title || ''} ${r.snippet || ''}`;
+            const _tgtRe = _tgtTokensX
               .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
               .join('\\s+');
             try {
-              const _supersetRe = new RegExp(
-                `\\b(?:[A-Z][a-zA-Z.'-]+\\s+){0,2}${_tgtPattern}(?:\\s+[A-Z][a-zA-Z.'-]+){0,3}\\b`,
-                'g'
+              // Pattern:up to 3 capitalized tokens before + target + up to 3 after
+              //         (?:,?\s+) 容許名 + 逗號(處理 "Leach Jr., Steven Andrew")
+              const _aroundRe = new RegExp(
+                `\\b(?:[A-Z][a-zA-Z.'-]+(?:,?\\s+)){0,3}${_tgtRe}(?:(?:,?\\s+)[A-Z][a-zA-Z.'-]+){0,3}\\b`,
+                'gi'   // ★ case-insensitive
               );
-              const _matches = _fullText.match(_supersetRe) || [];
-              _matches.forEach(m => {
-                const trimmed = m.trim().replace(/[.,;:]+$/, '');
-                if (
-                  trimmed.toLowerCase() !== _tgtClean10 &&
-                  trimmed.split(/\s+/).length > _tgtTokens10.length &&
-                  !_candidates.some(c => c.toLowerCase() === trimmed.toLowerCase())
-                ) {
-                  _candidates.push(trimmed);
+              let _mm;
+              while ((_mm = _aroundRe.exec(_textX)) !== null) {
+                const _hit = _mm[0]
+                  .replace(/[,;:]+/g, ' ')
+                  .replace(/\s+/g, ' ')
+                  .trim();
+                if (_hit && _hit.length > _tgtCleanX.length + 2) {
+                  _candidates.set(_hit, 'title-snippet');
                 }
-              });
-            } catch {}
+              }
+            } catch (e) { /* regex 出錯就 skip */ }
 
-            // 第三步:逐個 candidate check superset condition
-            for (const cand of _candidates) {
-              const candStr = String(cand).trim();
-              const candTokens = candStr.toLowerCase()
-                .replace(/[.,()"']/g, ' ')
+            // Source 3: Initials pattern(e.g. "SA Baker" = "Steven Andrew" 嘅 initials + Baker)
+            if (_tgtTokensX.length >= 2) {
+              const _inits = _tgtTokensX.map(t => t[0]).join('');   // "sa"
+              try {
+                // "SA Baker" / "SA Smith Jones"
+                const _initRe1 = new RegExp(
+                  `\\b${_inits}\\s+[A-Z][a-z]+(?:\\s+[A-Z][a-z]+)?\\b`,
+                  'gi'
+                );
+                // "S.A. Baker" / "S. A. Baker"
+                const _initRe2 = new RegExp(
+                  `\\b${_inits.split('').join('\\.\\s*')}\\.?\\s+[A-Z][a-z]+(?:\\s+[A-Z][a-z]+)?\\b`,
+                  'gi'
+                );
+                const _initHits = [
+                  ...(_textX.match(_initRe1) || []),
+                  ...(_textX.match(_initRe2) || []),
+                ];
+                for (const _h of _initHits) {
+                  const _clean = _h.replace(/\s+/g, ' ').trim();
+                  if (_clean) _candidates.set(_clean, 'initials');
+                }
+              } catch (e) { /* skip */ }
+            }
+
+            // ───── Step B: 逐個 candidate 驗證 superset condition ─────
+            let _superset = null;
+            let _extras = [];
+
+            for (const [candStr, source] of _candidates) {
+              const _candToksLc = candStr.toLowerCase()
+                .replace(/[.,()"'<>[\]{}]/g, ' ')
                 .split(/\s+/)
-                .filter(x => x.length >= 2 && !_titleRe10.test(x));
+                .filter(x => x.length >= 1 && !_honorificX.test(x) && !_stopwordX.test(x));
 
-              if (candTokens.length <= _tgtTokens10.length) continue;
+              if (_candToksLc.length <= _tgtTokensX.length) continue;
 
-              const allIn = _tgtTokens10.every(tt =>
-                candTokens.some(ct => ct === tt || ct.startsWith(tt) || tt.startsWith(ct))
-              );
-              if (!allIn) continue;
-
-              const extraTokens = candTokens.filter(ct =>
-                !_tgtTokens10.some(tt => ct === tt || ct.startsWith(tt) || tt.startsWith(ct))
-              );
-              const extraStr = extraTokens.join(' ');
-
-              // CASE 1: cls 唔係 FALSE_HIT → 強制改
-              if (r.cls !== 'FALSE_HIT') {
-                const newReason = `False Hit, because the individual named in this article is "${candStr}", whose full name contains additional token(s)${extraStr ? ` ("${extraStr}")` : ''} beyond the screened target "${searchEntity}". By the token-count / superset name rule, this is a different individual who only partially shares the target's name.`;
-                console.log(`🔒 Patch #10 [#${r.rank}]: ${r.cls} → FALSE_HIT (superset "${candStr}", extra: "${extraStr}")`);
-                return {
-                  ...r,
-                  cls: 'FALSE_HIT',
-                  riskCat: 'N/A',
-                  identityMatch: 'CONTRADICTED',
-                  actualSubjectName: candStr,
-                  reason: newReason,
-                  _tokenSupersetForced: true,
-                  _previousCls: r._previousCls || r.cls,
-                };
+              // Initials 來源:第一個 token 必須係 target initials
+              if (source === 'initials') {
+                const _firstTok = _candToksLc[0] || '';
+                const _tgtInits = _tgtTokensX.map(t => t[0]).join('').toLowerCase();
+                if (_firstTok.replace(/\./g, '') !== _tgtInits) continue;
+                _superset = candStr;
+                _extras = _candToksLc.slice(1);
+                break;
               }
 
-              // CASE 2: 已係 FALSE_HIT — 檢查 reason 質素
-              const reasonLc = String(r.reason || '').toLowerCase();
-              const lastNameToken = extraTokens[extraTokens.length - 1] || '';
-              const hasSpecificName =
-                reasonLc.includes(candStr.toLowerCase()) ||
-                (lastNameToken && reasonLc.includes(lastNameToken.toLowerCase()));
-              const isGeneric =
-                /impossible to (determine|identify|verify|ascertain)/i.test(r.reason || '') ||
-                /cannot be (definitively |reliably |clearly |positively )?(identified|determined|verified)/i.test(r.reason || '') ||
-                /without (further |any |additional |sufficient )?identifying information/i.test(r.reason || '') ||
-                /no specific (individual|subject|entity|person)/i.test(r.reason || '');
+              // 一般 superset:所有 target tokens 都喺 candidate tokens 入面
+              const _allIn = _tgtTokensX.every(tt =>
+                _candToksLc.some(ct => ct === tt || ct.startsWith(tt) || tt.startsWith(ct))
+              );
+              if (!_allIn) continue;
 
-              if (!hasSpecificName || isGeneric) {
-                const improvedReason = `False Hit, because the individual named in this article is "${candStr}", whose name contains additional token(s)${extraStr ? ` ("${extraStr}")` : ''} beyond the screened target "${searchEntity}". This is a different individual sharing only partial name with the target.`;
-                console.log(`📝 Patch #10 [#${r.rank}]: FALSE_HIT reason improved with actual name "${candStr}"`);
-                return {
-                  ...r,
-                  reason: improvedReason,
-                  actualSubjectName: r.actualSubjectName || candStr,
-                  _falseHitReasonImproved: true,
-                };
-              }
+              _superset = candStr;
+              _extras = _candToksLc.filter(ct =>
+                !_tgtTokensX.some(tt => ct === tt || ct.startsWith(tt) || tt.startsWith(ct))
+              );
               break;
             }
+
+            if (!_superset) return r;
+
+            const _extraStr = _extras.join(' ');
+
+            // ───── CASE 1: cls 唔係 FALSE_HIT → 強制改 ─────
+            if (r.cls !== 'FALSE_HIT') {
+              const _newReason = `False Hit, because the individual named in this article is "${_superset}", whose full name contains additional token(s)${_extraStr ? ` ("${_extraStr}")` : ''} beyond the screened target "${searchEntity}". By the token-count / superset name rule, this is a different individual who only partially shares the target's name.`;
+              console.log(`🔒 Patch #10 [#${r.rank}]: ${r.cls} → FALSE_HIT (superset "${_superset}", extra: "${_extraStr}")`);
+              return {
+                ...r,
+                cls: 'FALSE_HIT',
+                riskCat: 'N/A',
+                identityMatch: 'CONTRADICTED',
+                actualSubjectName: _superset,
+                reason: _newReason,
+                _tokenSupersetForced: true,
+                _previousCls: r._previousCls || r.cls,
+              };
+            }
+
+            // ───── CASE 2: 已經 FALSE_HIT → 檢查 reason 質素 ─────
+            const _reasLc = String(r.reason || '').toLowerCase();
+            const _candLc = _superset.toLowerCase();
+            const _lastExtra = _extras[_extras.length - 1] || '';
+            const _hasName =
+              _reasLc.includes(_candLc) ||
+              (_lastExtra && _lastExtra.length >= 3 && _reasLc.includes(_lastExtra.toLowerCase()));
+            const _isGeneric =
+              /impossible to (determine|identify|verify|ascertain)/i.test(r.reason || '') ||
+              /cannot be (definitively |reliably |clearly |positively )?(identified|determined|verified)/i.test(r.reason || '') ||
+              /without (further |any |additional |sufficient )?identifying information/i.test(r.reason || '') ||
+              /no specific (individual|subject|entity|person)/i.test(r.reason || '') ||
+              /happens to share the same name/i.test(r.reason || '') ||
+              /the provided text\.?\s*$/i.test(r.reason || '');
+
+            if (!_hasName || _isGeneric) {
+              const _improved = `False Hit, because the individual named in this article is "${_superset}", whose name contains additional token(s)${_extraStr ? ` ("${_extraStr}")` : ''} beyond the screened target "${searchEntity}". This is a different individual sharing only partial name with the target.`;
+              console.log(`📝 Patch #10 [#${r.rank}]: FALSE_HIT reason improved with actual name "${_superset}"`);
+              return {
+                ...r,
+                reason: _improved,
+                actualSubjectName: r.actualSubjectName || _superset,
+                _falseHitReasonImproved: true,
+              };
+            }
+
             return r;
           });
 
-          const _enforced10 = parsed.filter(r => r._tokenSupersetForced).length;
-          const _improved10 = parsed.filter(r => r._falseHitReasonImproved).length;
-          if (_enforced10 + _improved10 > 0) {
-            console.log(`🔒 Patch #10 summary: ${_enforced10} forced to FALSE_HIT, ${_improved10} reasons improved`);
+          const _forced = parsed.filter(r => r._tokenSupersetForced).length;
+          const _improved = parsed.filter(r => r._falseHitReasonImproved).length;
+          if (_forced + _improved > 0) {
+            console.log(`🔒 Patch #10 summary: ${_forced} forced to FALSE_HIT, ${_improved} reasons improved`);
           }
         }
       }
