@@ -1452,6 +1452,283 @@ function formatEntityContext(info) {
   return parts.join('\n');
 }
 
+/* ════════════════════════════════════════════════════════════════
+   TWO-PASS ARCHITECTURE
+   Pass 1: Per-article LLM fact extraction (short prompt, isolated)
+   Pass 2: Pure JS deterministic classifier (no LLM, template reason)
+   ════════════════════════════════════════════════════════════════ */
+
+const PASS1_SYSTEM_PROMPT = `You are a fact extractor for KYC/AML screening. You do NOT classify. You do NOT judge risk. You do NOT assign labels.
+
+Your single task: extract verifiable facts from ONE article about ONE target. Read the BODY, not just the title. If unsure, return "ambiguous" or empty string. NEVER fabricate identifiers. NEVER import names or facts from other articles.
+
+Output strict JSON only. No markdown, no commentary. Start with { end with }.`;
+
+function buildPass1Prompt({ targetName, kycInfo, articleTitle, articleSource, articleBody, articleUrl }) {
+  const hasKyc = kycInfo && Object.values(kycInfo).some(v => v && String(v).trim());
+  const kycBlock = hasKyc
+    ? `KYC-supplied identifiers:\n${formatEntityContext(kycInfo)}`
+    : `KYC-supplied identifiers: (none provided)`;
+
+  return `# TARGET
+Name: "${targetName}"
+${kycBlock}
+
+# ARTICLE (this is the ONLY article you analyse)
+URL: ${articleUrl || '(unknown)'}
+Title: ${articleTitle || '(unknown)'}
+Source: ${articleSource || '(unknown)'}
+
+Body:
+${(articleBody || '').slice(0, 12000)}
+
+# EXTRACT THESE FACTS AS JSON
+
+{
+  "targetMentioned": <true if target name (full name or all its tokens) literally appears in the body above; false otherwise>,
+  "nameInArticle": "<exact party name as it appears in the article; empty string if target not mentioned>",
+  "nameMatch": "<one of: EXACT | VARIANT | SUPERSET | DIFFERENT | ABSENT>",
+  "nameMatchReason": "<one short sentence justifying nameMatch>",
+
+  "kycContradiction": "<if KYC info EXPLICITLY contradicts the article's named party (different DOB, nationality, jurisdiction, etc.), describe in one sentence; else empty string>",
+
+  "articleGenre": "<one of: news | regulatory_filing | academic | court_judgment | fiction | social_media | directory_profile | self_published | fraud_alert | violation_tracker | other>",
+
+  "wrongdoingDescribed": <true if the article describes any wrongdoing, investigation, allegation, charge, conviction, or designation; false otherwise>,
+  "wrongdoingType": "<one of: money_laundering | sanctions | bribery | fraud | tax_evasion | terrorist_financing | export_control | customs_fraud | civil_dispute | regulatory_violation | environmental | none | other>",
+  "wrongdoingInMLTFScope": <true if wrongdoingType is one of: money_laundering, sanctions, bribery, fraud, tax_evasion, terrorist_financing, export_control, customs_fraud; false otherwise>,
+
+  "targetRole": "<one of: subject | successor | alternate | victim | witness | plaintiff | colleague | passing_mention | unrelated_same_name | not_present>",
+  "actualSubjectName": "<if targetRole is NOT 'subject', the name of the actual wrongdoer AS IT APPEARS IN THIS ARTICLE'S BODY; empty string otherwise. NEVER copy a name from other articles or sources.>",
+  "evidenceQuote": "<the single most decisive ≤25-word verbatim quote from the body supporting targetRole>",
+
+  "factsConfidence": <0.0 to 1.0>
+}
+
+# DEFINITIONS
+
+nameMatch:
+  EXACT     — exact same name as target, or trivial corporate-suffix variant (Ltd / Limited / Inc).
+  VARIANT   — same person with surname-order swap (e.g. "Chan Tai Man" ↔ "Tai Man Chan").
+  SUPERSET  — article name has STRICTLY MORE tokens than target (e.g. target="Steven Andrew", article="Steven Andrew Leach"). NOT a match.
+  DIFFERENT — shares some tokens but is clearly a different person/entity (different jurisdiction, industry, identifiers).
+  ABSENT    — target name does not appear in the body at all.
+
+targetRole:
+  subject              — target IS the wrongdoer / investigated / charged / sanctioned party.
+  successor            — target REPLACES the subject (e.g. "X appointed to replace Y, who was investigated").
+  alternate            — target is alternate / substitute / deputy director of the subject.
+  victim               — target is the victim.
+  witness              — target is interviewee, commentator, or expert only.
+  plaintiff            — target is the plaintiff / employer suing someone else.
+  colleague            — target works at the same organisation but is NOT implicated.
+  passing_mention      — target named briefly, not central to any wrongdoing.
+  unrelated_same_name  — same name appears but article context clearly indicates a different person.
+  not_present          — target name does not appear in the body.
+
+# CRITICAL RULES
+1. Trace pronouns to their antecedent. "He replaces X, who was charged" — "he" = target, "X" = subject. Target is SUCCESSOR.
+2. The actualSubjectName field MUST contain a name that literally appears in THIS article's body. If you cannot find one, leave it empty.
+3. Output JSON only.`;
+}
+
+async function extractArticleFacts({ targetName, kycInfo, article, apiKey }) {
+  try {
+    const userPrompt = buildPass1Prompt({
+      targetName,
+      kycInfo,
+      articleTitle: article.title,
+      articleSource: article.source,
+      articleBody: article.body,
+      articleUrl: article.url,
+    });
+
+    const res = await fetch('https://api.poe.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
+      body: JSON.stringify({
+        model: 'gemini-3.5-flash',
+        messages: [
+          { role: 'system', content: PASS1_SYSTEM_PROMPT },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.05,
+        max_tokens: 1500,
+        response_format: { type: 'json_object' },
+      }),
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    const raw = data?.choices?.[0]?.message?.content || '';
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    return JSON.parse(match[0]);
+  } catch (e) {
+    console.warn(`Pass 1 fact extraction failed:`, e.message);
+    return null;
+  }
+}
+
+function classifyFromFacts({ facts, targetName, mode }) {
+  const isSanction = mode === 'sanction';
+  const irrelevantLabel = isSanction ? 'Irrelevant sanction' : 'Irrelevant ML/TF';
+  const suffix = isSanction ? ' There is no sanctions violations.' : ' There is no ML/TF negative news.';
+
+  const roleText = {
+    subject: 'the wrongdoer', successor: 'a successor to the actual subject',
+    alternate: 'an Alternate Director', victim: 'the victim',
+    witness: 'a witness or commentator', plaintiff: 'the plaintiff',
+    colleague: 'a colleague at the same organisation', passing_mention: 'a passing mention',
+    unrelated_same_name: 'an unrelated party with the same name', not_present: 'not present',
+  };
+
+  const wrongdoingText = {
+    money_laundering: 'money laundering', sanctions: 'sanctions violations',
+    bribery: 'bribery and corruption', fraud: 'fraud',
+    tax_evasion: 'criminal tax evasion', terrorist_financing: 'terrorist financing',
+    export_control: 'export control violations', customs_fraud: 'customs fraud',
+    civil_dispute: 'a civil dispute', regulatory_violation: 'a regulatory violation',
+    environmental: 'environmental violations', none: 'no wrongdoing',
+    other: 'an unspecified matter',
+  };
+
+  const genreText = {
+    news: 'this is a news article',
+    regulatory_filing: 'this is a regulatory disclosure document',
+    academic: 'this is an academic publication and any matching keywords appear in a scholarly context',
+    court_judgment: 'this is a court judgment',
+    fiction: 'this is a fictional or creative work, and any matching keywords are plot elements or character names, not real-world findings',
+    social_media: 'this is a social media post',
+    directory_profile: 'this is a professional directory profile',
+    self_published: "this is the entity's own self-published content",
+    fraud_alert: 'this is a fraud-alert warning issued by the named organisation against third-party impersonators',
+    violation_tracker: 'this is a corporate violations tracker page',
+    other: 'this article',
+  };
+
+  const mapRiskCat = () => {
+    if (isSanction) return 'Sanctions';
+    const m = {
+      money_laundering: 'Money Laundering', sanctions: 'Sanctions',
+      bribery: 'Bribery & Corruption', fraud: 'Fraud', tax_evasion: 'Tax Evasion',
+      terrorist_financing: 'Terrorist Financing', export_control: 'Export Control',
+      customs_fraud: 'Customs Fraud',
+    };
+    return m[facts.wrongdoingType] || 'Other ML/TF';
+  };
+
+  // ── RULE 1 — Target absent in body → FALSE_HIT
+  if (!facts.targetMentioned || facts.nameMatch === 'ABSENT' || facts.targetRole === 'not_present') {
+    return {
+      cls: 'FALSE_HIT',
+      reason: `False Hit, because the screened target "${targetName}" is not mentioned in this article. ${facts.nameMatchReason || ''}`.trim(),
+      riskCat: 'N/A',
+      identityMatch: 'NO_INFO',
+      actualSubjectName: '',
+      _factsConfidence: facts.factsConfidence,
+    };
+  }
+
+  // ── RULE 2 — Token superset → FALSE_HIT
+  if (facts.nameMatch === 'SUPERSET') {
+    return {
+      cls: 'FALSE_HIT',
+      reason: `False Hit, because the article refers to "${facts.nameInArticle || 'a different party'}", whose name contains additional tokens beyond the screened target "${targetName}". This indicates a different individual or entity. ${facts.nameMatchReason || ''}`.trim(),
+      riskCat: 'N/A',
+      identityMatch: 'CONTRADICTED',
+      actualSubjectName: facts.nameInArticle || '',
+      _factsConfidence: facts.factsConfidence,
+    };
+  }
+
+  // ── RULE 3 — Different person/entity → FALSE_HIT
+  if (facts.nameMatch === 'DIFFERENT' || facts.targetRole === 'unrelated_same_name') {
+    return {
+      cls: 'FALSE_HIT',
+      reason: `False Hit, because the article concerns "${facts.nameInArticle || 'a party with the same name'}", which is a different individual or entity from the screened target "${targetName}". ${facts.nameMatchReason || ''}`.trim(),
+      riskCat: 'N/A',
+      identityMatch: 'CONTRADICTED',
+      actualSubjectName: facts.nameInArticle || '',
+      _factsConfidence: facts.factsConfidence,
+    };
+  }
+
+  // ── RULE 4 — KYC contradiction → FALSE_HIT
+  if (facts.kycContradiction && facts.kycContradiction.trim()) {
+    return {
+      cls: 'FALSE_HIT',
+      reason: `False Hit, because the KYC-supplied identifying information contradicts the article's named party: ${facts.kycContradiction}`,
+      riskCat: 'N/A',
+      identityMatch: 'CONTRADICTED',
+      actualSubjectName: facts.nameInArticle || '',
+      _factsConfidence: facts.factsConfidence,
+    };
+  }
+
+  // ── RULE 5 — Fiction / fraud-alert / self-published → IRRELEVANT
+  if (['fiction', 'fraud_alert', 'self_published'].includes(facts.articleGenre)) {
+    return {
+      cls: 'IRRELEVANT_MLTF',
+      reason: `${irrelevantLabel}, because ${genreText[facts.articleGenre]}.${suffix}`,
+      riskCat: 'N/A',
+      identityMatch: 'PARTIAL_MATCH',
+      actualSubjectName: '',
+      _factsConfidence: facts.factsConfidence,
+    };
+  }
+
+  // ── RULE 6 — No wrongdoing OR out of ML/TF scope → IRRELEVANT
+  if (!facts.wrongdoingDescribed || !facts.wrongdoingInMLTFScope) {
+    const scopeNote = facts.wrongdoingDescribed
+      ? ` The article describes ${wrongdoingText[facts.wrongdoingType] || 'a matter'}, which is outside ML/TF scope.`
+      : ' The article does not describe any wrongdoing concerning the target.';
+    return {
+      cls: 'IRRELEVANT_MLTF',
+      reason: `${irrelevantLabel}, because ${genreText[facts.articleGenre]} and the screened target appears in the role of ${roleText[facts.targetRole] || 'a connected party'}.${scopeNote}${suffix}`,
+      riskCat: 'N/A',
+      identityMatch: 'PARTIAL_MATCH',
+      actualSubjectName: '',
+      _factsConfidence: facts.factsConfidence,
+    };
+  }
+
+  // ── RULE 7 — ML/TF wrongdoing exists but target NOT the subject → IRRELEVANT
+  if (facts.targetRole !== 'subject') {
+    const subjectClause = facts.actualSubjectName && facts.actualSubjectName.trim()
+      ? ` The actual subject of the wrongdoing is "${facts.actualSubjectName}", not the screened target.`
+      : '';
+    return {
+      cls: 'IRRELEVANT_MLTF',
+      reason: `${irrelevantLabel}, because although the article describes ${wrongdoingText[facts.wrongdoingType] || 'wrongdoing'}, the screened target "${targetName}" appears only as ${roleText[facts.targetRole] || 'a connected party'}.${subjectClause}${suffix}`,
+      riskCat: facts.actualSubjectName ? `N/A (Subject = ${facts.actualSubjectName})` : 'N/A',
+      identityMatch: 'PARTIAL_MATCH',
+      actualSubjectName: facts.actualSubjectName || '',
+      _factsConfidence: facts.factsConfidence,
+    };
+  }
+
+  // ── RULE 8 — TRUE_HIT: target IS subject of in-scope wrongdoing
+  const ev = facts.evidenceQuote && facts.evidenceQuote.trim()
+    ? ` Evidence from the article: "${facts.evidenceQuote}".`
+    : '';
+  return {
+    cls: 'TRUE_HIT',
+    reason: `True Hit, because the screened target "${targetName}" is the direct subject of ${wrongdoingText[facts.wrongdoingType] || 'wrongdoing'} described in this article.${ev}`,
+    riskCat: mapRiskCat(),
+    identityMatch: 'FULL_MATCH',
+    actualSubjectName: '',
+    _factsConfidence: facts.factsConfidence,
+  };
+}
+
+/* ════════════════════════════════════════════════════════════════
+   END TWO-PASS ARCHITECTURE
+   ════════════════════════════════════════════════════════════════ */
+
+
+
 /* ========== GENERIC SCREENING COMPONENT (shared by Adverse Media & Sanction) ========== */
 
 function ScreeningModule({ entityName: initialEntityName, mode, onFlagSTR }) {
@@ -2812,1635 +3089,133 @@ PAGE-CONTENT SCRAPING:
 }
 
 // ═══════════════════════════════════════════════════════════
-// 🆕 Fix 3: Poe Web-Search 預檢索
-// ═══════════════════════════════════════════════════════════
-setProgress(43);
-setStage('正在向 Poe Web-Search 取得實體背景...');
-let preSearchContext = null;
-try {
-  preSearchContext = await enrichWithPoeWebSearch(searchEntity, apiKey, entityContext);
-} catch (preSearchErr) {
-  console.warn('Pre-search failed (non-fatal):', preSearchErr);
-}
-if (preSearchContext) {
-  const bgBlock = `\n=== 🌐 ENTITY BACKGROUND (Poe Web-Search Pre-Research) ===
-This is supplementary background research on the entity, retrieved from Poe's web search bot.
-Use this to:
-  • Disambiguate same-name cases (verify Chinese name / role / affiliation match)
-  • Cross-reference snippet claims against known facts
-  • Identify aliases or romanization variants the article may use
-DO NOT cite this section as primary evidence — only use it for entity disambiguation.
+      // 🆕 TWO-PASS: Pass 1 (per-article fact extraction) + Pass 2 (JS classifier)
+      // ═══════════════════════════════════════════════════════════
+      setProgress(50);
+      setStage('Pass 1: 抽取每篇文章嘅 facts...');
 
-${preSearchContext}
-=== END BACKGROUND ===\n\n`;
-  enrichedContent = bgBlock + enrichedContent;
-  console.log(`📚 Pre-search context prepended (${preSearchContext.length} chars)`);
-} else {
-  console.log(`⏭️ Pre-search skipped — proceeding with PDF + scraped content only`);
-}
+      // Build URL → body map from enrichedContent
+      const pageContentMap = new Map();
+      const pageRe = /--- PAGE CONTENT: ([^\s)]+)[^-]*---\n([\s\S]*?)\n--- END ---/g;
+      let pm;
+      while ((pm = pageRe.exec(enrichedContent)) !== null) {
+        pageContentMap.set(pm[1], pm[2]);
+      }
+      console.log(`📚 Two-pass: have ${pageContentMap.size} full-page bodies`);
 
-setProgress(45);
-setStage('Poe AI 分析中...');
-
-/* ★ 用真實的 resultUrls 數量,移除舊的 externalUrlCount 計算 */
-const resultCount = resultUrls.length > 0 ? resultUrls.length : 10;
-
-const hasPageContent = scrapedCount > 0;
-
-/* ★ 必須傳入 resultUrls 作為第 7 個參數 */
-const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, hasPageContent, lang, entityContext, resultUrls);
-
-      const res = await fetch('https://api.poe.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
-        body: JSON.stringify({
-          model: 'gemini-3.5-flash',
-          messages: [
-            { role: 'system', content: buildSystemPrompt() },
-            { role: 'user', content: fullPrompt }
-          ],
-          temperature: 0.05,
-          max_tokens: 32768,
-          response_format: { type: 'json_object' }
-        })
+      // Build per-article input list (1 article per URL/anchor)
+      const articles = resultUrls.map((url, i) => {
+        const body = pageContentMap.get(url) || '';
+        return {
+          rank: i + 1,
+          url,
+          title: '',                  // will be filled by Pass 1
+          source: '',
+          body: body || '(No scraped body available. Use URL/anchor context only — be conservative.)',
+          hasBody: body.length >= 200,
+        };
       });
 
-      setProgress(80); setStage('正在解析 AI 回應...');
-      if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData?.error?.message || `HTTP ${res.status}`); }
-      const data = await res.json();
-      const rawText = data?.choices?.[0]?.message?.content || '[]';
-
-// ════════════════════════════════════════════════════════════
-// 🛡️ ROBUST JSON PARSER — handles 5 known failure modes
-//   1. Markdown code fence wrapping
-//   2. Bare array (LLM returns [...] directly) ← 今次出問題嘅 case
-//   3. Object wrapper ({analyses:[...]} / {results:[...]})
-//   4. Trailing comma / smart quote / control char
-//   5. Truncation by max_tokens (recover all complete objects)
-// ════════════════════════════════════════════════════════════
-let parsed;
-const parseAttempts = [];
-const stripFences = (s) => s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
-
-try {
-  // Strategy 1: Direct parse(handles both bare array & wrapped object)
-  const cleaned = stripFences(rawText);
-  parsed = JSON.parse(cleaned);
-  parseAttempts.push('S1-direct');
-} catch (e1) {
-  try {
-    // Strategy 2: Locate array boundary([...])
-    const fb = rawText.indexOf('[');
-    const lb = rawText.lastIndexOf(']');
-    if (fb === -1 || lb <= fb) throw new Error('no array boundary');
-    parsed = JSON.parse(rawText.slice(fb, lb + 1));
-    parseAttempts.push('S2-array-slice');
-  } catch (e2) {
-    try {
-      // Strategy 3: Object wrapper {analyses:[...]} / {results:[...]} / etc.
-      const fc = rawText.indexOf('{');
-      const lc = rawText.lastIndexOf('}');
-      if (fc === -1 || lc <= fc) throw new Error('no object boundary');
-      const obj = JSON.parse(rawText.slice(fc, lc + 1));
-      const wrapperKeys = ['analyses', 'analysis', 'results', 'result', 'items', 'data', 'hits', 'output', 'response'];
-      let found = null;
-      for (const k of wrapperKeys) {
-        if (Array.isArray(obj[k])) { found = obj[k]; parseAttempts.push(`S3-wrapper(${k})`); break; }
-      }
-      // Single-key object whose value is an array
-      if (!found) {
-        const keys = Object.keys(obj);
-        if (keys.length === 1 && Array.isArray(obj[keys[0]])) {
-          found = obj[keys[0]];
-          parseAttempts.push(`S3-single-key(${keys[0]})`);
-        }
-      }
-      if (!found) throw new Error('no wrapper key matched');
-      parsed = found;
-    } catch (e3) {
-      try {
-        // Strategy 4: Repair common malformations
-        const fb = rawText.indexOf('[');
-        if (fb === -1) throw new Error('no array start');
-        const lb = rawText.lastIndexOf(']');
-        let snippet = rawText.slice(fb, lb !== -1 ? lb + 1 : undefined);
-        snippet = snippet
-          .replace(/,(\s*[}\]])/g, '$1')              // trailing comma
-          .replace(/[\u201C\u201D]/g, '"')            // smart double quote → "
-          .replace(/[\u2018\u2019]/g, "'")            // smart single quote → '
-          .replace(/[\u0000-\u001F]+/g, ' ');         // control chars
-        parsed = JSON.parse(snippet);
-        parseAttempts.push('S4-repaired');
-      } catch (e4) {
-        try {
-          // Strategy 5: Partial parse — recover all complete {...} objects
-          // (用於 max_tokens 切斷中間嘅 case)
-          const fb = rawText.indexOf('[');
-          if (fb === -1) throw new Error('no array start for partial');
-          const objs = [];
-          let depth = 0, inStr = false, esc = false, objStart = -1;
-          for (let i = fb + 1; i < rawText.length; i++) {
-            const ch = rawText[i];
-            if (esc) { esc = false; continue; }
-            if (ch === '\\') { esc = true; continue; }
-            if (ch === '"') { inStr = !inStr; continue; }
-            if (inStr) continue;
-            if (ch === '{') { if (depth === 0) objStart = i; depth++; }
-            else if (ch === '}') {
-              depth--;
-              if (depth === 0 && objStart !== -1) {
-                try { objs.push(JSON.parse(rawText.slice(objStart, i + 1))); } catch {}
-                objStart = -1;
-              }
-            }
-          }
-          if (objs.length === 0) throw new Error('partial parse recovered 0 objects');
-          parsed = objs;
-          parseAttempts.push(`S5-partial(${objs.length} obj)`);
-          console.warn(`⚠️ JSON truncated by max_tokens — recovered ${objs.length} complete object(s)`);
-        } catch (e5) {
-          // All strategies failed — give DETAILED diagnostic
-          console.error('🔴 All JSON parse strategies failed:', {
-            e1: e1.message, e2: e2.message, e3: e3.message, e4: e4.message, e5: e5.message,
-            rawLength: rawText.length,
-            firstChars: rawText.slice(0, 100),
-            lastChars: rawText.slice(-100),
-          });
-          throw new Error(
-            `AI 回應格式錯誤(5 個 fallback strategies 全部失敗)。\n\n` +
-            `📏 總長度: ${rawText.length} chars\n\n` +
-            `📄 開頭 500 字:\n${rawText.slice(0, 500)}\n\n` +
-            `📄 結尾 200 字:\n${rawText.slice(-200)}`
-          );
-        }
-      }
-    }
-  }
-}
-console.log(`✅ JSON parsed via: ${parseAttempts.join(' → ')} | ${Array.isArray(parsed) ? parsed.length : '?'} items`);
-
-// 🆕 Normalize:if Strategy 3 / 4 wrapped 出單一 object,包成 array
-if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') {
-  if ('rank' in parsed || 'url' in parsed || 'cls' in parsed) {
-    console.log('📦 Single result object detected → wrapping into array');
-    parsed = [parsed];
-  }
-}
-      if (!Array.isArray(parsed) || parsed.length === 0) {
-        parsed = [{ rank: 1, title: lang === 'zh' ? '無分析結果' : 'No results', source: '', date: '', snippet: lang === 'zh' ? 'AI未返回有效結果。' : 'AI returned no valid results.', matchedKeywords: [], cls: 'NO_HIT', confidence: 1.0, reason: lang === 'zh' ? '返回空結果。' : 'Returned empty results.', riskCat: 'N/A' }];
-      }
-      // ═══════════════════════════════════════════════════════
-      // 🔒 N→N BACKFILL: Force AI output count = PDF anchor count
-      // 確保結果條數 100% 等於你手動 Google 搜尋結果頁面條數
-      // ═══════════════════════════════════════════════════════
-      if (resultUrls.length > 0) {
-        const aiByUrl = new Map();
-        const aiByIndex = [];
-        parsed.forEach((r, i) => {
-          if (r.url) aiByUrl.set(r.url, r);
-          aiByIndex[i] = r;
+      // If we have ZERO resultUrls (e.g. extraction failed), fallback to one synthetic entry
+      if (articles.length === 0) {
+        articles.push({
+          rank: 1,
+          url: '(no URLs extracted)',
+          title: '',
+          source: '',
+          body: pdfText.slice(0, 8000),
+          hasBody: false,
         });
+      }
 
-        const backfilled = resultUrls.map((anchor, i) => {
-          // Strategy 1: AI returned this URL exactly
-          let aiResult = aiByUrl.get(anchor);
-          
-          // Strategy 2: AI returned at this position (URL field may be empty/wrong)
-          if (!aiResult && aiByIndex[i]) {
-            aiResult = { ...aiByIndex[i], url: anchor };
-          }
+      setProgress(55);
 
-          if (aiResult) {
-            return { ...aiResult, rank: i + 1, url: anchor };
-          }
+      // ═══ Pass 1 — parallel per-article fact extraction ═══
+      const factsResults = await Promise.allSettled(
+        articles.map(a => extractArticleFacts({
+          targetName: searchEntity,
+          kycInfo: entityContext,
+          article: a,
+          apiKey,
+        }))
+      );
 
-          // Strategy 3: Backfill missing
-          console.warn(`⚠️ Backfill missing item #${i + 1}: ${anchor}`);
+      setProgress(85);
+      setStage('Pass 2: 套規則生成分類結果...');
+
+      // ═══ Pass 2 — pure JS classification ═══
+      let parsed = factsResults.map((fr, i) => {
+        const article = articles[i];
+
+        // Pass 1 failure → mark as NO_HIT
+        if (fr.status !== 'fulfilled' || !fr.value) {
           return {
-            rank: i + 1,
-            url: anchor,
-            title: '(AI did not return this URL)',
-            source: '',
+            rank: article.rank,
+            url: article.url,
+            title: article.title || '',
+            source: article.source || '',
             date: '',
-            snippet: 'AI skipped this URL in its response — likely scrape failed or item lost.',
-            retrievalStatus: 'FAILED',
+            snippet: '',
             matchedKeywords: [],
             cls: 'NO_HIT',
             identityMatch: 'NO_INFO',
             nameInResult: '',
             actualSubjectName: '',
             confidence: 0,
-            reason: `[Auto-backfill] AI did not classify this URL/anchor. Manual review required. Original anchor: ${anchor}`,
-            riskCat: 'N/A (AI Skipped)',
-            missingInfo: [],
-          };
-        });
-
-        if (backfilled.length !== parsed.length) {
-          console.log(`🔒 Backfilled: ${parsed.length} AI items → ${backfilled.length} items (matches ${resultUrls.length} PDF anchors)`);
-        }
-        parsed = backfilled;
-      }
-
-      
-     const VALID_CLS = ['TRUE_HIT', 'FALSE_HIT', 'IRRELEVANT_MLTF', 'NO_HIT'];
-      parsed = parsed.map((r, i) => ({
-        ...r,
-        rank: i + 1,
-        // Per CDD rule: unknown labels default to IRRELEVANT_MLTF (not NO_HIT),
-        // because "no ML/TF content" is the natural default rather than "no mention at all"
-        cls: VALID_CLS.includes(r.cls) ? r.cls : 'IRRELEVANT_MLTF',
-        identityMatch: ['FULL_MATCH', 'PARTIAL_MATCH', 'NO_INFO', 'CONTRADICTED'].includes(r.identityMatch) ? r.identityMatch : 'NO_INFO',
-        nameInResult: r.nameInResult || '',
-        confidence: typeof r.confidence === 'number' ? Math.round(Math.min(1, Math.max(0, r.confidence)) * 100) / 100 : 0.8,
-        matchedKeywords: Array.isArray(r.matchedKeywords) ? r.matchedKeywords.slice(0, 5) : [],
-        missingInfo: Array.isArray(r.missingInfo) ? r.missingInfo.slice(0, 8) : [],
-        title: r.title || '',
-        source: r.source || '',
-        date: r.date || '',
-        snippet: r.snippet || '',
-        reason: r.reason || '',
-        riskCat: r.riskCat || 'N/A'
-      }));
-
-      
-// ═══════════════════════════════════════════════════════
-// 🛡️ POST-PROCESSING — Minimal sanity checks (CDD-respect mode)
-// ═══════════════════════════════════════════════════════
-// Philosophy: Trust the model's CDD reasoning. No confidence-threshold downgrade.
-// We only fix:
-//   1. TRUE_HIT with empty matchedKeywords (structural mismatch)
-//   2. Asian/Western name-order variant wrongly marked FALSE_HIT
-
-const normalizeNameTokens = (name) => {
-  if (!name) return [];
-  return String(name).toLowerCase()
-    .replace(/[.,;:'"\-()]/g, ' ')
-    .split(/\s+/)
-    .filter(t => t.length > 1);
-};
-
-const hasOnlyLatinChars = (name) => name && /^[\x00-\x7F\s]+$/.test(String(name));
-
-const isSamePersonDifferentOrder = (name1, name2) => {
-  if (!name1 || !name2) return false;
-  if (!hasOnlyLatinChars(name1) || !hasOnlyLatinChars(name2)) return false;
-  const t1 = normalizeNameTokens(name1);
-  const t2 = normalizeNameTokens(name2);
-  if (t1.length === 0 || t2.length === 0) return false;
-  if (t1.length !== t2.length) return false;
-  if (t1.join(' ') === t2.join(' ')) return false;
-  return [...t1].sort().join(' ') === [...t2].sort().join(' ');
-};
-
-parsed = parsed.map(r => {
-  
-  // 🛡️ Sanity 1: TRUE_HIT MUST have matched keywords (structural check)
-  if (r.cls === 'TRUE_HIT' && (!r.matchedKeywords || r.matchedKeywords.length === 0)) {
-    const newReason = r.reason && r.reason.match(/^True Hit,/i)
-      ? r.reason.replace(/^True Hit,/i, 'Irrelevant ML/TF,')
-      : `Irrelevant ML/TF, because no concrete ML/TF keywords were matched in the article body, indicating no specific ML/TF predicate concerning the target. ${r.reason || ''}`.trim();
-    return {
-      ...r,
-      cls: 'IRRELEVANT_MLTF',
-      riskCat: 'N/A',
-      reason: newReason,
-    };
-  }
-
-  // 🛡️ Sanity 2: Asian/Western surname-order variant — recognise as same person
-  if (
-    r.nameInResult &&
-    isSamePersonDifferentOrder(searchEntity, r.nameInResult) &&
-    r.cls === 'FALSE_HIT'
-  ) {
-    const hasMLTF = r.matchedKeywords && r.matchedKeywords.length > 0;
-    const newCls = hasMLTF ? 'TRUE_HIT' : 'IRRELEVANT_MLTF';
-    const newLabel = newCls === 'TRUE_HIT' ? 'True Hit' : 'Irrelevant ML/TF';
-    return {
-      ...r,
-      identityMatch: 'FULL_MATCH',
-      cls: newCls,
-      reason: `${newLabel}, because "${r.nameInResult}" and "${searchEntity}" are the same person presented in Asian and Western surname-order variants. ${hasMLTF ? 'ML/TF-related keywords are present in the article concerning this individual.' : 'No ML/TF-related content is present in the article concerning this individual.'}`,
-    };
-  }
-
-  return r;
-});
-        
-       
-      // ════════════════════════════════════════════════════════════
-      // 🎯 STAGE 2: ROLE-AWARE RE-ANALYSIS (P0)
-      // 只針對 Stage 1 嘅 TRUE_HIT / POSSIBLE_HIT 做第二輪分析
-      // 專門識別:target 係主角定係接替者 / 證人 / 受害者
-      // ════════════════════════════════════════════════════════════
-      // 🆕 Fix 2a: 擴大 Stage 2 覆蓋範圍 —
-// 除咗 NO_HIT 之外,所有類別都做角色分析。
-// 原因:
-//  • IRRELEVANT_MLTF 可能其實係 TRUE_HIT(Stage 1 因為 snippet 中文 regex 漏咗而誤降級)
-//  • FALSE_HIT 可能其實係同人(Stage 1 NAME_SIMILAR 判錯)
-//  • PENDING_INFO 可以由 article body 補回身份判斷
-// extractRelevantPassages 會自動 skip 冇 target mention 嘅 article,
-// 所以新增嘅 API call 都只係用喺真係相關嘅 case,唔會大幅增加 cost。
-// Cost 估算:典型 10 個結果裡面,大約 ~3-5 個會真正觸發 LLM call。
-// 🆕 Fix 4: Stage 2 必須覆蓋 NO_HIT —
-// 之前嘅版本只覆蓋 IRRELEVANT_MLTF / FALSE_HIT,
-// 但 Stage 1 嘅過度保守會將清楚嘅 TRUE_HIT 誤判為 NO_HIT,
-// 結果 fallback 完全失效。
-// 現改為:只要唔係 manual override,全部都做角色分析,
-// 由 extractRelevantPassages 自動 skip 冇 target mention 嘅 article。
-// ⭐ FIX 3: 偵測係咪公司 entity
-//   公司 entity 唔做 Stage 2 角色分析(只適用於個人姓名歧義)
-const isCompanyEntity = (() => {
-  // 1. 名稱包含公司後綴
-  const companySuffixPattern = /\b(ltd|limited|inc|incorporated|corp|corporation|co|llc|plc|gmbh|sa|ag|nv|bv|spa|srl|holdings?|group|company|enterprises?|industries|international|trading|investments?)\b\.?/i;
-  const chineseCompanyPattern = /(有限公司|股份有限公司|集團|控股|實業|企業|工業|貿易|投資|公司|商行|企業社)/;
-  
-  if (companySuffixPattern.test(searchEntity) || chineseCompanyPattern.test(searchEntity)) {
-    return true;
-  }
-  
-  // 2. 補充資料無 DOB 同 gender(個人 KYC 通常會填)
-  const hasIndividualInfo = entityContext && (entityContext.dob || entityContext.gender);
-  if (hasIndividualInfo) return false;
-  
-  // 3. 補充資料填咗「公司/職稱」但實體名唔似人名
-  if (entityContext?.company && !/^[A-Z][a-z]+\s+[A-Z][a-z]+/.test(searchEntity)) {
-    return true;
-  }
-  
-  return false;
-})();
-
-const stage2Candidates = isCompanyEntity 
-  ? []  // ⭐ 公司 entity 信 Stage 1 結果,唔做 Stage 2
-  : parsed.filter(r => !r._manualOverride);
-
-if (isCompanyEntity) {
-  console.log(`🏢 Detected company entity "${searchEntity}" — skipping Stage 2 role analysis`);
-}
-
-if (stage2Candidates.length > 0) {
-  setProgress(85);
-  setStage(`Stage 2 角色分析中 (${stage2Candidates.length} 項)...`);
-  console.log(`🎯 Stage 2: re-analyzing ${stage2Candidates.length} hits for role`);
-
-        // Build URL → full-page-content map from enrichedContent
-        const pageContentMap = new Map();
-        const pageRe = /--- PAGE CONTENT: ([^\s)]+)[^-]*---\n([\s\S]*?)\n--- END ---/g;
-        let pm;
-        while ((pm = pageRe.exec(enrichedContent)) !== null) {
-          pageContentMap.set(pm[1], pm[2]);
-        }
-        console.log(`📚 Stage 2: have ${pageContentMap.size} full-page contents to query`);
-
-        const stage2Results = await Promise.allSettled(
-          stage2Candidates.map(async (candidate) => {
-           // ── 🎯 PATCH Y: STRICT ARTICLE ANCHORING (no cross-article bleed) ──
-            //    舊版會 fallback 落 pdfText(成個 SERP),導致 AI 引用其他 entry
-            //    嘅 wrongdoing 嚟證明 target 係 subject(典型 #8 PubMed bug)。
-            //    新版只接受:URL 精確 match → title 精確 match → 自己 snippet,
-            //    絕對唔會用 pdfText / 所有 scraped page 拼接。
-            let articleText = '';
-            let _anchorMode = 'none';
-
-            // Strategy A: match by exact URL (most precise)
-            if (candidate.url && pageContentMap.has(candidate.url)) {
-              articleText = pageContentMap.get(candidate.url);
-              _anchorMode = 'url-exact';
-            }
-
-            // Strategy B: match by substantial title (≥ 20 chars, use 40-char prefix)
-            if (!articleText && candidate.title && candidate.title.length >= 20) {
-              const _titleKey = candidate.title.slice(0, 40).toLowerCase();
-              for (const [url, content] of pageContentMap) {
-                if (content.toLowerCase().includes(_titleKey)) {
-                  articleText = content;
-                  _anchorMode = `title-match(${url.slice(0, 40)}…)`;
-                  break;
-                }
-              }
-            }
-
-            // Strategy C: final fallback — own title + snippet ONLY
-            //   ⚠️ NEVER fall back to full pdfText — that's the bleed source.
-            if (!articleText || articleText.length < 100) {
-              articleText = `${candidate.title || ''}\n${candidate.snippet || ''}`;
-              _anchorMode = 'snippet-only';
-            }
-            console.log(`📌 Stage 2 [#${candidate.rank}]: articleText anchor = ${_anchorMode} (${articleText.length} chars)`);
-
-            const { passages, mentions } = extractRelevantPassages(articleText, searchEntity);
-
-            if (mentions === 0 || passages.length === 0) {
-              console.log(`⚠️ Stage 2 [#${candidate.rank}]: NO target mention found in article body → skip`);
-              return null;
-            }
-
-            console.log(`🔬 Stage 2 [#${candidate.rank}]: ${mentions} mentions, ${passages.length} passages → calling LLM`);
-
-            const prompt = buildStage2Prompt({
-              targetName: searchEntity,
-              knownInfo: entityContext,
-              passages,
-              originalCls: candidate.cls,
-              originalReason: candidate.reason,
-              candidateTitle: candidate.title,
-              candidateSource: candidate.source,
-            });
-
-            try {
-              const res = await fetch('https://api.poe.com/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${apiKey.trim()}`
-                },
-                body: JSON.stringify({
-                  model: 'gemini-3.5-flash',
-                  messages: [
-                    { role: 'system', content: STAGE2_SYSTEM_PROMPT },
-                    { role: 'user', content: prompt }
-                  ],
-                  temperature: 0.05,
-                  max_tokens: 3000
-                })
-              });
-              if (!res.ok) return null;
-              const data = await res.json();
-              const raw = data?.choices?.[0]?.message?.content || '{}';
-              const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
-              const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-              if (!jsonMatch) return null;
-              const s2 = JSON.parse(jsonMatch[0]);
-              return { rank: candidate.rank, ...s2 };
-            } catch (e) {
-              console.error(`Stage 2 [#${candidate.rank}] failed:`, e);
-              return null;
-            }
-          })
-        );
-
-// 🛡️ Truncation guard: detect mid-sentence cut-offs from max_tokens
-const isReasoningTruncated = (text) => {
-  if (!text || typeof text !== 'string') return true;
-  const trimmed = text.trim();
-  if (trimmed.length < 30) return true;
-  // Ends without terminal punctuation
-  if (!/[.!?'"]$/.test(trimmed)) return true;
-  // Ends with article / preposition / linking verb (typical truncation pattern)
-  if (/\b(a|an|the|is|was|are|were|of|to|for|with|by|on|in|at|from|that|which|and|or|but)\s*$/i.test(trimmed)) return true;
-  return false;
-};
-  
-// ── Merge Stage 2 results back into `parsed` ─────────────
-stage2Results.forEach((res) => {
-  if (res.status !== 'fulfilled' || !res.value) return;
-  const s2 = res.value;
-  const idx = parsed.findIndex(p => p.rank === s2.rank);
-  if (idx === -1) return;
-
-  const original = parsed[idx];
-  const conf = typeof s2.confidence === 'number' ? s2.confidence : 0;
-  const rawReasoning = String(s2.reasoning || '').trim();
-const cleanReasoning = isReasoningTruncated(rawReasoning) ? '' : rawReasoning;
-if (rawReasoning && !cleanReasoning) {
-  console.warn(`⚠️ Stage 2 [#${s2.rank}]: reasoning truncated by max_tokens, dropping: "${rawReasoning.slice(-60)}"`);
-}
-
-if (s2.wrongdoingApplies === false && conf >= 0.70) {
-    const mltfExists = s2.mltfMatterExistsInArticle === true;
-
-    // 🎯 CDD Rule fix: no ML/TF content → ALWAYS IRRELEVANT_MLTF
-    //    (per CDD: "no need to verify identity if there is no ML/TF content")
-    // Only mark FALSE_HIT when ML/TF content EXISTS but target is a different person
-    let downgrade;
-    if (!mltfExists) {
-      // No ML/TF in article at all → IRRELEVANT_MLTF regardless of roleType
-      downgrade = 'IRRELEVANT_MLTF';
-    } else if (s2.roleType === 'unrelated') {
-      // ML/TF exists + target is clearly a different person → FALSE_HIT
-      downgrade = 'FALSE_HIT';
-    } else {
-      // ML/TF exists but target is successor/witness/victim/colleague → IRRELEVANT_MLTF
-      downgrade = 'IRRELEVANT_MLTF';
-    }
-
-    let amlReason;
-    if (downgrade === 'FALSE_HIT') {
-      amlReason = `False Hit, because the individual/entity named in this article is a different party who happens to share the same name as the screened subject ${searchEntity}. ${cleanReasoning}`;
-    } else if (mltfExists) {
-      amlReason = `Irrelevant ML/TF, because the article describes ML/TF-related content, but the wrongdoing applies to ${s2.actualSubjectName || 'another party'}, not to ${searchEntity}. ${searchEntity} appears in the article only in the role of ${s2.roleType}. ${cleanReasoning}`;
-    } else {
-      amlReason = `Irrelevant ML/TF, because the article does not contain any ML/TF-related subject matter concerning ${searchEntity}, who appears in the article only in the role of ${s2.roleType}. ${cleanReasoning}`;
-    }
-
-    parsed[idx] = {
-      ...original,
-      cls: downgrade,
-      confidence: Math.max(conf, 0.75),
-      riskCat: downgrade === 'FALSE_HIT'
-        ? 'N/A'
-        : (mltfExists
-            ? `N/A (Subject = ${s2.actualSubjectName || 'other party'})`
-            : 'N/A'),
-      _stage2: s2,
-      _stage1Original: { cls: original.cls, reason: original.reason },
-      reason: amlReason,
-    };
-    console.log(`📉 Stage 2 [#${s2.rank}]: ${original.cls} → ${downgrade} (role: ${s2.roleType})`);
-
-  } else if (s2.wrongdoingApplies === true && conf >= 0.70) {
-    // Stage 2 CONFIRMS target IS the subject.
-    // If Stage 1 had wrongly classified as IRRELEVANT_MLTF / FALSE_HIT / NO_HIT
-    // AND Stage 2 high conf AND ML/TF matter exists → upgrade to TRUE_HIT.
-    const shouldUpgrade = (original.cls === 'IRRELEVANT_MLTF'
-                        || original.cls === 'FALSE_HIT'
-                        || original.cls === 'NO_HIT')
-                       && conf >= 0.75
-                       && s2.mltfMatterExistsInArticle === true;
-    const newCls = shouldUpgrade ? 'TRUE_HIT' : original.cls;
-
-    const evidenceTail = s2.evidenceQuote
-      ? ` Supporting evidence from the article: "${s2.evidenceQuote}".`
-      : '';
-    const upgradedReason = `True Hit, because ${searchEntity} is confirmed as the direct subject of the wrongdoing described in this article. ${cleanReasoning}${evidenceTail}`;
-
-    parsed[idx] = {
-      ...original,
-      cls: newCls,
-      confidence: Math.min(1.0, Math.max(original.confidence, conf)),
-      _stage2: s2,
-      _stage1Original: { cls: original.cls, reason: original.reason },
-      reason: newCls === 'TRUE_HIT' ? upgradedReason : original.reason,
-      ...(shouldUpgrade ? { riskCat: original.riskCat === 'N/A' ? 'Upgraded by role analysis' : original.riskCat } : {}),
-    };
-
-    if (shouldUpgrade) {
-      console.log(`📈 Stage 2 [#${s2.rank}]: ${original.cls} → TRUE_HIT (UPGRADED, role: ${s2.roleType}, conf ${conf})`);
-    } else {
-      console.log(`✅ Stage 2 [#${s2.rank}]: CONFIRMED ${original.cls} (role: ${s2.roleType})`);
-    }
-
-  } else {
-    // Stage 2 inconclusive — keep Stage 1 cls + reason
-    parsed[idx] = {
-      ...original,
-      _stage2: s2,
-      _stage1Original: { cls: original.cls, reason: original.reason },
-    };
-    console.log(`⚠️ Stage 2 [#${s2.rank}]: inconclusive (conf ${conf})`);
-  }
-});
-        setProgress(95);
-        setStage('Stage 2 完成,正在整理結果...');
-      }
-
-     // ═══════════════════════════════════════════════════════
-      // 🧼 PATCH #6 — CONDITIONAL REASONING SANITISER
-      // Drops sentences that reference OTHER candidates' names IF
-      // those names do not actually appear in THIS article's body.
-      // Preserves legitimate cross-references (e.g. SERP aggregate pages).
-      // ═══════════════════════════════════════════════════════
-      {
-        // Build per-candidate article-text corpus from scraped pages
-        const pageContentMap = new Map();
-        const pageRe = /--- PAGE CONTENT: ([^\s)]+)[^-]*---\n([\s\S]*?)\n--- END ---/g;
-        let pm;
-        while ((pm = pageRe.exec(enrichedContent)) !== null) {
-          pageContentMap.set(pm[1], pm[2]);
-        }
-
-        parsed = parsed.map((r, idx) => {
-          if (!r.reason || typeof r.reason !== 'string') return r;
-
-          // Locate this candidate's own article body
-          let ownArticleText = (r.title || '') + ' ' + (r.snippet || '');
-          // Try to attach scraped body via URL match
-          if (r.url && pageContentMap.has(r.url)) {
-            ownArticleText += ' ' + pageContentMap.get(r.url);
-          } else {
-            // Fallback: match by title/source within any scraped page
-            for (const [, content] of pageContentMap) {
-              const lc = content.toLowerCase();
-              if (
-                (r.title && lc.includes(r.title.slice(0, 30).toLowerCase())) ||
-                (r.source && lc.includes(r.source.toLowerCase()))
-              ) {
-                ownArticleText += ' ' + content;
-                break;
-              }
-            }
-          }
-          ownArticleText = ownArticleText.toLowerCase();
-
-          // Collect names of all OTHER candidates in this batch
-          const ownSubject = (r.actualSubjectName || r.nameInResult || '').trim().toLowerCase();
-          const otherNames = parsed
-            .map((other, i) => {
-              if (i === idx) return null;
-              const n = (other.actualSubjectName || other.nameInResult || '').trim();
-              return (n && n.toLowerCase() !== ownSubject && n.length > 3) ? n : null;
-            })
-            .filter(Boolean);
-
-          if (otherNames.length === 0) return r;
-
-          // Sentence-level filter
-          const sentences = r.reason.split(/(?<=[.!?])\s+/);
-          let droppedCount = 0;
-
-          const kept = sentences.filter(sentence => {
-            const isBleed = otherNames.some(otherName => {
-              const escaped = otherName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-              const re = new RegExp(`\\b${escaped}\\b`, 'i');
-              const inSentence = re.test(sentence);
-              const inArticle  = re.test(ownArticleText);
-              return inSentence && !inArticle;
-            });
-            if (isBleed) {
-              droppedCount++;
-              console.log(
-                `🧼 [#${r.rank}] Cross-article bleed dropped: ` +
-                `"${sentence.substring(0, 90)}${sentence.length > 90 ? '…' : ''}"`
-              );
-            }
-            return !isBleed;
-          });
-
-          const newReason = kept.join(' ').trim();
-
-          // Fallback: if sanitiser emptied everything, keep original
-          if (newReason.length === 0) {
-            console.warn(`⚠️ [#${r.rank}] Sanitiser emptied reasoning — keeping original.`);
-            return r;
-          }
-
-          if (droppedCount > 0) {
-            return {
-              ...r,
-              reason: newReason,
-              _reasoningSanitised: true,
-              _droppedSentences: droppedCount,
-            };
-          }
-          return r;
-        });
-
-        const totalSanitised = parsed.filter(r => r._reasoningSanitised).length;
-        if (totalSanitised > 0) {
-          console.log(`🧼 Patch #6: sanitised reasoning on ${totalSanitised} item(s)`);
-        }
-      }
-
-     // ═══════════════════════════════════════════════════════
-      // 🆕 PATCH #7a — CROSS-ARTICLE META-BLEED PHRASE STRIPPER
-      // 移除 AI 將「成個 SERP 有多個同名人」嘅 meta-observation
-      // 錯誤套落單條 article reasoning 嘅情況 (修 #1, #4)
-      // ═══════════════════════════════════════════════════════
-      {
-        const bleedPhrasePatterns = [
-          /\bthe (text|article|page|source|snippet) is a (search results? page|compilation of search results?|aggregation|listing|collection) (containing|featuring|with|of|that lists?) multiple( distinct| different)?[^.!?]*[.!?]/gi,
-          /\b(this )?(is )?a (compilation|aggregation|collection|listing) of (multiple )?(search results?|individuals|entries|persons)[^.!?]*[.!?]/gi,
-          /\bsearch results? page (containing|featuring|with|listing) multiple[^.!?]*[.!?]/gi,
-          /\bthe (article|text|page) is a (compilation|aggregation) of (search results?|multiple)[^.!?]*[.!?]/gi,
-        ];
-        parsed = parsed.map(r => {
-          if (r._manualOverride || !r.reason) return r;
-          let cleaned = r.reason;
-          let dropped = false;
-          for (const pat of bleedPhrasePatterns) {
-  if (pat.test(cleaned)) {
-    cleaned = cleaned.replace(pat, '').replace(/\s{2,}/g, ' ').replace(/\s+([.!?])/g, '$1').trim();
-    dropped = true;
-  }
-}
-
-// 🆕 Residue cleanup: 移除被 regex 切斷後遺留嘅 sentence-head 片段
-if (dropped) {
-  cleaned = cleaned
-    // 結尾遺留 "The text" / "The article" / "The page" / "The source" 而冇動詞
-    .replace(/\b(?:The|This)\s+(?:text|article|page|source|snippet|search results?)\s*\.?\s*$/i, '')
-    // 結尾遺留 "is a" / "contains" 等開頭片段
-    .replace(/\b(?:is|are|contains?|features?|lists?|aggregat\w+)\s*\.?\s*$/i, '')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/[\s,;]+([.!?])/g, '$1')
-    .replace(/\s+$/, '')
-    .trim();
-  // 確保末尾有句號
-  if (cleaned && !/[.!?]$/.test(cleaned)) cleaned += '.';
-}
-          if (dropped && cleaned.length > 10) {
-            console.log(`🧼 Patch #7a [#${r.rank}]: stripped cross-article meta-bleed phrase`);
-            return { ...r, reason: cleaned, _bleedPhraseStripped: true };
-          }
-          return r;
-        });
-      }
-
-     // ═══════════════════════════════════════════════════════
-      // 🆕 PATCH #7b — FICTION / CREATIVE WORK DETECTOR (FIXED)
-      // 強制小說 / 電影 / 歌曲 / 遊戲 → IRRELEVANT_MLTF
-      // 因為 "corruption" / "investigation" / "murder" 喺呢類
-      // context 入面只係劇情元素或角色名 (修 #2)
-      // 🛠 Fix: academic whitelist + isAcademic 必須喺 .map(r=>...) 入面
-      // ═══════════════════════════════════════════════════════
-      {
-        const academicDomainRegex = /\b(pubmed\.ncbi\.nlm\.nih\.gov|ncbi\.nlm\.nih\.gov|nih\.gov|arxiv\.org|sciencedirect|springer|nature\.com|sciencemag|cell\.com|wiley\.com|tandfonline|sage(pub|journals)|jstor|researchgate|academia\.edu|semanticscholar|biorxiv|medrxiv|pnas\.org|plos|bmj\.com|thelancet|nejm\.org|ieee\.org|acm\.org|ssrn|hindawi|frontiersin|mdpi)/i;
-        const mediaDomainRegex = /\b(amazon\.[a-z]{2,3}(\/|\.|\s|›)|goodreads|barnesandnoble|imdb\.com|netflix\.com|wattpad|fanfiction|archiveofourown|spotify|open\.spotify|music\.apple|youtube\.com\/watch|steampowered|store\.steam|comixology|smashwords|kobo\.com|audible\.com|booktopia)/i;
-        const strongFictionMarkers = /\b(novel|fiction|fictional|paperback|hardcover|kindle edition|audiobook|chapter\s+\d|protagonist|detective\s+[a-z]+\s+(investigates|solves|uncovers|tracks|hunts|probes)|nightclub promoter['']?s?\s+murder|fictional character|book series|sequel|prequel|book\s+\d+\s+of|murder mystery|crime thriller)\b/i;
-        const songMarkers = /\b(song and lyrics|song lyrics|track\s+by|album by|featured artist|spotify|apple music|playlist)\b/i;
-
-        parsed = parsed.map(r => {
-          if (r._manualOverride) return r;
-
-// 🚫 Token-count guard (NEW): 如果 article party 名比 target 多 token
-//    (例如 "Steven Andrew Leach Jr." vs "Steven Andrew"),
-//    視為不同人 → skip fiction detection,等 Patch #10 強制 FALSE_HIT。
-{
-  const _tgt = String(searchEntity).toLowerCase().trim();
-  const _tgtTokens = _tgt.split(/\s+/).filter(x => x.length >= 2);
-  const _cand = `${r.nameInResult || ''} ${r.actualSubjectName || ''}`.trim();
-  if (_cand && _tgtTokens.length >= 1) {
-    const _titleRe = /^(mr|mrs|ms|dr|sir|prof|hon)\.?$/i;
-    const _candTokens = _cand.toLowerCase()
-      .replace(/[.,()"']/g, ' ')
-      .split(/\s+/)
-      .filter(x => x.length >= 2 && !_titleRe.test(x));
-    const _allTgtIn = _tgtTokens.every(tt =>
-      _candTokens.some(ct => ct === tt || ct.startsWith(tt) || tt.startsWith(ct))
-    );
-    if (_candTokens.length > _tgtTokens.length && _allTgtIn) {
-      console.log(`🚫 Patch #7b skipped for [#${r.rank}]: article party "${_cand}" is name-superset of "${searchEntity}" → leaving for Patch #10 to force FALSE_HIT`);
-      return r;
-    }
-  }
-}
-
-          // 🛡️ 學術網域永遠唔 trigger fiction reclassification
-          const isAcademic = academicDomainRegex.test(`${r.url || ''} ${r.source || ''}`);
-          if (isAcademic) return r;
-
-          const combinedText = `${r.title || ''} ${r.snippet || ''}`;
-          const urlSourceText = `${r.url || ''} ${r.source || ''}`;
-          const isMediaDomain = mediaDomainRegex.test(urlSourceText);
-          const hasStrongFiction = strongFictionMarkers.test(combinedText);
-          const hasSongContext = songMarkers.test(combinedText);
-          const isFiction = (isMediaDomain && (hasStrongFiction || hasSongContext)) || hasStrongFiction;
-
-          if (!isFiction) return r;
-          if (r.cls === 'IRRELEVANT_MLTF' && /work of (creative|fiction)|fictional (plot|narrative|character)|plot element|劇情|虛構/i.test(r.reason || '')) return r;
-
-          const kind = hasSongContext ? 'song / music track' : isMediaDomain ? 'commercial listing for a book or media product' : 'fictional narrative';
-          const newReason = `Irrelevant ML/TF, because this is a ${kind}. Keywords such as "corruption", "investigation", "fraud", or "murder" appearing in the snippet refer to plot elements, song titles, or fictional character names — not real-world wrongdoing concerning the screened subject.`;
-
-          console.log(`📚 Patch #7b [#${r.rank}]: ${r.cls} → IRRELEVANT_MLTF (fiction/creative content detected)`);
-          return {
-            ...r,
-            cls: 'IRRELEVANT_MLTF',
-            riskCat: 'N/A',
-            reason: newReason,
-            _fictionDetected: true,
-            _previousCls: r._previousCls || r.cls,
-          };
-        });
-      }
-
-      // ═══════════════════════════════════════════════════════
-      // 🆕 PATCH #7c — LABEL/REASON CONSISTENCY ENFORCER (EXPANDED)
-      //   (1) Fraud-Alert 受害者語境 (修 #5)
-      //   (2) Internal contradiction:「不同人」+「就係 target」(修 #5)
-      //   (3) No-subject-identified → FALSE_HIT (extended regex 修 #9)
-      //   (4) Different subject explicitly named → FALSE_HIT
-      // ═══════════════════════════════════════════════════════
-      parsed = parsed.map(r => {
-        if (r._manualOverride) return r;
-        const snippetLc = String(r.snippet || '').toLowerCase();
-        let mutated = { ...r };
-        let reasonRaw = String(mutated.reason || '');
-        let reasonLc = reasonRaw.toLowerCase();
-
-        // ── 7c-1: Fraud-Alert impersonation context ─────────
-        const isFraudAlertVictim =
-  /fraud alert[\s\S]{0,200}(scammers?|beware|warning|fake|impersonat|spoof|cloned?|phishing|fraudulent)/i.test(snippetLc) ||
-  /scammers? (may )?(impersonat|spoof|clone|pretend|pose)/i.test(snippetLc) ||
-  /(impersonat\w+|spoof\w+|cloned?|fake|fraudulent)\s+(our|the company|us|the brand|the firm|the bank|the (organi[sz]ation|fund|manager|investment)|m&g|[A-Z])/i.test(snippetLc) ||
-  /(beware of|warning about|alert.*regarding)\s+(scams?|fraud|impersonation|fake (websites?|accounts?|profiles?))/i.test(snippetLc);
-        if (isFraudAlertVictim && (mutated.cls === 'TRUE_HIT' || mutated.cls === 'POTENTIAL_HIT' || mutated.cls === 'FALSE_HIT')) {
-          console.log(`🛡️ Patch #7c-1 [#${r.rank}]: 'Fraud Alert' = impersonation warning, not subject wrongdoing → IRRELEVANT_MLTF`);
-          mutated = {
-            ...mutated,
-            cls: 'IRRELEVANT_MLTF',
-            riskCat: 'N/A',
-            reason: `Irrelevant ML/TF, because the "Fraud Alert" mentioned in this article is a warning issued by the organization about third-party scammers impersonating it, and is unrelated to any wrongdoing by the screened subject.`,
-            _fraudAlertVictim: true,
-            _previousCls: mutated._previousCls || r.cls,
-          };
-          reasonRaw = mutated.reason;
-          reasonLc = reasonRaw.toLowerCase();
-        }
-
-        // ── 7c-2: Internal contradiction (different + same) ──
-        const claimsDifferentParty =
-          /different (party|individual|person|entity)/i.test(reasonLc) ||
-          /happens to share/i.test(reasonLc) ||
-          /not the (same|screened) (person|individual|target|entity)/i.test(reasonLc);
-        const claimsSameAsTarget =
-          /\bthe screened (target|subject|individual)\s+is\s+(a|an|the)\s+[\w\s&,'-]+?\s+(at|of|for|with)\s+[A-Z]/i.test(reasonRaw);
-        if (claimsDifferentParty && claimsSameAsTarget) {
-          console.warn(`⚠️ Patch #7c-2 [#${r.rank}]: contradiction — stripping the same-as-target sentence`);
-          let cleaned = reasonRaw.replace(/\.?\s*the screened (target|subject|individual)\s+is\s+[^.]+\./gi, '.');
-          cleaned = cleaned.replace(/\s{2,}/g, ' ').replace(/\s+([.!?])/g, '$1').replace(/\.+/g, '.').trim();
-          mutated = { ...mutated, reason: cleaned || mutated.reason, _contradictionFixed: true };
-          reasonRaw = mutated.reason;
-          reasonLc = reasonRaw.toLowerCase();
-        }
-
-        // ── 7c-3: No subject identified (EXTENDED regex set) ─
-        const noSubjectIdentified =
-          /no specific (individual|subject|entity|person) (is )?(identified|named|mentioned)/i.test(reasonLc) ||
-          /does not (identify|name|mention) any specific/i.test(reasonLc) ||
-          /generic regulatory framework/i.test(reasonLc) ||
-          /register tool|landing page|disclaimer-only/i.test(reasonLc) ||
-          /without (further |any |additional |sufficient )?identifying information/i.test(reasonLc) ||
-          /impossible to (determine|identify|verify|ascertain) which/i.test(reasonLc) ||
-          /which of (these|those|the) (individuals|persons|entities|parties|candidates|named)/i.test(reasonLc) ||
-          /(target |subject )?cannot be (definitively |reliably |clearly |positively )?(identified|determined|verified|confirmed|established)/i.test(reasonLc) ||
-          /no clear (subject|target|individual|named party|wrongdoer)/i.test(reasonLc) ||
-          /aggregate (page|listing|results|directory|index)/i.test(reasonLc) ||
-          /(index|directory|landing|register) page (containing|listing|with|of)/i.test(reasonLc) ||
-          /unable to (determine|identify|attribute|link)/i.test(reasonLc) ||
-          /cannot meaningfully (attribute|link|associate)/i.test(reasonLc);
-
-        // ── 7c-4: Different subject explicitly named ─────────
-        const mentionsDifferentSubject =
-          /\bapplies to\s+[A-Z]/i.test(reasonRaw) ||
-          /wrongdoing applies to/i.test(reasonLc) ||
-          (mutated.actualSubjectName && mutated.actualSubjectName.trim() &&
-           mutated.actualSubjectName.trim().toLowerCase() !== (mutated.nameInResult || '').trim().toLowerCase());
-
-        if (mutated.cls === 'IRRELEVANT_MLTF' && (mentionsDifferentSubject || noSubjectIdentified)) {
-          const newReason = reasonRaw.replace(/^Irrelevant ML\/TF,?\s*/i, 'False Hit, ');
-          console.log(`📉 Patch #7c-3/4 [#${r.rank}]: IRRELEVANT_MLTF → FALSE_HIT (no subject / different subject identified)`);
-          mutated = {
-            ...mutated,
-            cls: 'FALSE_HIT',
-            reason: newReason.match(/^False Hit,/i) ? newReason : `False Hit, ${newReason}`,
-            riskCat: 'N/A',
-            _consistencyFixed: true,
-            _previousCls: mutated._previousCls || r.cls,
+            reason: `No Hit, because fact extraction failed for this URL. Manual review recommended. URL: ${article.url}`,
+            riskCat: 'N/A (Extraction Failed)',
           };
         }
 
-        return mutated;
+        const facts = fr.value;
+        const cls = classifyFromFacts({ facts, targetName: searchEntity, mode });
+
+        return {
+          rank: article.rank,
+          url: article.url,
+          title: article.title || '',
+          source: article.source || '',
+          date: '',
+          snippet: facts.evidenceQuote || '',
+          matchedKeywords: [],
+          cls: cls.cls,
+          identityMatch: cls.identityMatch,
+          nameInResult: facts.nameInArticle || '',
+          actualSubjectName: cls.actualSubjectName || '',
+          confidence: typeof facts.factsConfidence === 'number'
+            ? Math.round(facts.factsConfidence * 100) / 100
+            : 0.8,
+          reason: cls.reason,
+          riskCat: cls.riskCat,
+          _facts: facts,                // keep raw facts for debugging
+        };
       });
 
-      // ═══════════════════════════════════════════════════════
-// 🆕 PATCH #8a v2 — GENERIC REASONING REWRITER (EXPANDED)
-// (1) 偵測 plural template:"these individuals" / "multiple parties"
-// (2) 🆕 偵測 singular vague evasion:"an unspecified party" /
-//     "an unidentified individual" — AI 用嚟避開 call target by name
-// (3) 從 entry 自身 title + snippet 抽 specific name,重寫 reasoning
-// ═══════════════════════════════════════════════════════
-{
-  const GENERIC_PLURAL_PHRASES = [
-    /\bthese\s+(?:distinct\s+|different\s+|various\s+|separate\s+)?individuals\b/i,
-    /\bseveral\s+different\s+(?:individuals|people|persons)\b/i,
-    /\bmultiple\s+(?:individuals|people|persons|entities|parties)\b/i,
-    /\bvarious\s+(?:individuals|people|persons|entities)\b/i,
-    /\bthese\s+(?:different|various|distinct|separate)\s+parties\b/i,
-  ];
-
-  // 🆕 NEW — Singular vague evasion phrases
-  const VAGUE_SINGULAR_PHRASES = [
-    /\ban?\s+unspecified\s+(party|individual|person|entity|director|officer|executive|appointee)\b/i,
-    /\ban?\s+unidentified\s+(party|individual|person|entity|director|officer)\b/i,
-    /\ban?\s+(unnamed|undisclosed|unknown)\s+(party|individual|person|entity|director|officer|appointee)\b/i,
-    /\bthe\s+(individual|party|person|entity|director|appointee)\s+(?:in question|mentioned|named|referenced|described|involved|cited)\b/i,
-    /\b(some|certain)\s+(individual|party|person|entity|director)\b/i,
-  ];
-
-  const EXCLUDE_NAME_TOKENS = /^(The|This|That|These|Those|And|But|Or|For|With|From|Into|About|After|Before|During|Through|Under|Over|Above|Below|Limited|Holdings|Group|Company|Corporation|Inc|Ltd|Plc|Llc|United|States|Kingdom|Republic|Department|Office|Service|System|Report|Page|News|Information|Search|Results|Court|Bank|Center|Centre|January|February|March|April|May|June|July|August|September|October|November|December|Mr|Mrs|Ms|Dr|Sir|Prof|HKEX|HKEXnews|SEC|SCMP|FT|Reuters|Bloomberg)$/i;
-
-  parsed = parsed.map(r => {
-    if (r._manualOverride || !r.reason) return r;
-
-    const usesGenericPlural = GENERIC_PLURAL_PHRASES.some(p => p.test(r.reason));
-    const usesVagueSingular = VAGUE_SINGULAR_PHRASES.some(p => p.test(r.reason));
-    if (!usesGenericPlural && !usesVagueSingular) return r;
-
-    const fullText = `${r.title || ''} ${r.snippet || ''}`;
-    const fullTextLc = fullText.toLowerCase();
-
-    // 抽 capitalized name sequences(支援 hyphen + comma:"KWOK Kai-fai, Adam")
-    const romanizedMatches = (fullText.match(/\b[A-Z][A-Za-z]+(?:[-\s,]+[A-Z][A-Za-z]+){1,4}\b/g) || []);
-    const chineseMatches = (fullText.match(/[\u4e00-\u9fa5]{2,4}/g) || []);
-    const uniqueNames = [...new Set([...romanizedMatches, ...chineseMatches])]
-      .filter(n => !EXCLUDE_NAME_TOKENS.test(n))
-      .filter(n => n.length >= 3);
-
-    // 判斷 target 係咪喺 entry 入面(用 token sequence match,容許 hyphen / comma)
-    const targetLc = String(searchEntity).toLowerCase().trim();
-    const targetTokens = targetLc.split(/\s+/).filter(t => t.length >= 2);
-    const targetInEntry = fullTextLc.includes(targetLc) ||
-      (targetTokens.length >= 2 && targetTokens.slice(0, -1).some((tok, i) =>
-        fullTextLc.includes(`${tok} ${targetTokens[i + 1]}`) ||
-        fullTextLc.includes(`${tok}-${targetTokens[i + 1]}`) ||
-        fullTextLc.includes(`${tok}, ${targetTokens[i + 1]}`)
-      ));
-
-    // ────────────────────────────────────────────────────
-    // 🚨 CASE 1: Vague Singular + Target IS in entry
-    //   AI 用 "unspecified party" 嚟避開 call target by name —
-    //   即 target 其實有出現,但 AI 唔肯認。強制 IRRELEVANT_MLTF。
-    // ────────────────────────────────────────────────────
-    if (usesVagueSingular && targetInEntry) {
-      const alternatePattern = /\b(?:alternate|substitute|deputy|acting)\s+director\b/i.test(fullText)
-                            || /\bbeing\s+his\s+(?:alternate|substitute|deputy)\b/i.test(fullText);
-      const successorPattern = /\b(?:succeed|replace|step\s+in\s+for|take\s+over\s+from|appointed?\s+to\s+replace)\b/i.test(fullText);
-
-      // 嘗試抽 actual subject(通常喺 "against Mr. X" / "charged Mr. Y" 之後)
-      const subjectMatch = fullText.match(
-        /\b(?:against|charged|laid against|investigation of|prosecution of|sanctions on|sanctioned)\s+(?:Mr\.?|Ms\.?|Mrs\.?|Dr\.?)?\s*([A-Z][A-Za-z\-]+(?:[\s,]+[A-Z][A-Za-z\-]+){1,3})/
-      );
-      const actualSubject = subjectMatch
-        ? subjectMatch[1].replace(/[,;]+$/, '').trim()
-        : (r.actualSubjectName && r.actualSubjectName.trim()) || '';
-
-      let roleDesc = 'a connected party';
-      if (alternatePattern) roleDesc = 'an Alternate Director';
-      else if (successorPattern) roleDesc = 'a successor';
-
-      const newReason = actualSubject
-        ? `Irrelevant ML/TF, because the wrongdoing applies to ${actualSubject}, not to ${searchEntity}, who appears in the article only in the role of ${roleDesc}. There is no ML/TF negative news.`
-        : `Irrelevant ML/TF, because although ${searchEntity} is named in the article, the actual subject of any wrongdoing described is a different party, and ${searchEntity} appears only as ${roleDesc}. There is no ML/TF negative news.`;
-
-      console.log(`🔧 Patch #8a v2 [#${r.rank}]: vague singular + target in entry → IRRELEVANT_MLTF (role=${roleDesc}, subject="${actualSubject || 'unknown'}")`);
-
-      return {
-        ...r,
-        cls: 'IRRELEVANT_MLTF',
-        riskCat: actualSubject ? `N/A (Subject = ${actualSubject})` : 'N/A',
-        identityMatch: 'PARTIAL_MATCH',
-        actualSubjectName: actualSubject || r.actualSubjectName || '',
-        reason: newReason,
-        _vagueRewritten: true,
-        _previousCls: r._previousCls || r.cls,
-      };
-    }
-
-    // ────────────────────────────────────────────────────
-    // CASE 2: Plural 但 entry 真係有 2+ 個人 → 合理,唔改
-    // ────────────────────────────────────────────────────
-    if (usesGenericPlural && uniqueNames.length > 1) return r;
-
-    // ────────────────────────────────────────────────────
-    // CASE 3: Entry 只有 0-1 unique name → template contamination
-    // ────────────────────────────────────────────────────
-    const specName = (r.actualSubjectName && r.actualSubjectName.trim()) || uniqueNames[0] || '';
-
-    if (!specName) {
-      let trimmedReason = r.reason
-        .replace(/\bthese\s+(?:distinct\s+|different\s+|various\s+|separate\s+)?individuals\b/gi, 'this individual')
-        .replace(/\bseveral\s+different\s+(?:individuals|people|persons)\b/gi, 'this individual')
-        .replace(/\bmultiple\s+(?:individuals|people|persons|parties)\b/gi, 'this individual')
-        .replace(/\bvarious\s+(?:individuals|people|persons)\b/gi, 'this individual')
-        .replace(/\bare\s+(?=distinct|different|separate|unrelated)/gi, 'is ')
-        .replace(/\ban?\s+unspecified\s+(?:party|individual|person|entity|director|appointee)\b/gi, 'the named party in this article')
-        .replace(/\ban?\s+(?:unnamed|undisclosed|unknown)\s+(?:party|individual|person|entity)\b/gi, 'the named party in this article');
-      console.log(`🔧 Patch #8a v2 [#${r.rank}]: no specific name → fixed plural/vague → singular`);
-      return { ...r, reason: trimmedReason.trim(), _pluralOnlyFixed: true };
-    }
-
-    let newReason;
-    if (r.cls === 'FALSE_HIT') {
-      newReason = `False Hit, because the article specifically concerns "${specName}", whose name or other identifiers differ from the screened subject. This is a single different individual, not the screened target.`;
-    } else if (r.cls === 'IRRELEVANT_MLTF') {
-      newReason = `Irrelevant ML/TF, because the article specifically concerns "${specName}" and contains no ML/TF subject matter affecting the screened target.`;
-    } else {
-      let trimmedReason = r.reason
-        .replace(/\bthese\s+(?:distinct\s+|different\s+|various\s+|separate\s+)?individuals\b/gi, `this individual ("${specName}")`)
-        .replace(/\bseveral\s+different\s+(?:individuals|people|persons)\b/gi, `this individual ("${specName}")`)
-        .replace(/\ban?\s+unspecified\s+(?:party|individual|person|entity|director|appointee)\b/gi, `"${specName}"`);
-      console.log(`🔧 Patch #8a v2 [#${r.rank}]: kept ${r.cls}, replaced plural/vague with "${specName}"`);
-      return { ...r, reason: trimmedReason.trim(), _genericRewritten: true, _originalGenericReason: r.reason };
-    }
-
-    console.log(`🔧 Patch #8a v2 [#${r.rank}]: rewrote → specific name "${specName}"`);
-    return { ...r, reason: newReason, _genericRewritten: true, _originalGenericReason: r.reason };
-  });
-}
-       // ═══════════════════════════════════════════════════════
-      // 🆕 PATCH #8b — FIX B: EVIDENCE + PLURAL VERIFICATION
-      // (1) actualSubjectName 必須喺 entry snippet 入面真正出現
-      //     否則 → 視為從其他 entry 借用,redact 之
-      // (2) 用 plural 嘅 reasoning 必須真係有 2+ 個人 喺 entry
-      // ═══════════════════════════════════════════════════════
-      {
-        const PLURAL_PATTERNS_B = [
-          /\bthese\s+(?:distinct\s+|different\s+)?individuals\b/i,
-          /\bseveral\s+different\s+(?:individuals|people|persons)\b/i,
-          /\bmultiple\s+(?:individuals|people|persons|entities)\b/i,
-          /\bvarious\s+(?:individuals|people|persons|entities)\b/i,
-        ];
-
-        const EXCLUDE_B = /^(The|This|These|Those|Limited|Holdings|Company|Corporation|Inc|Ltd|Plc|Llc|January|February|March|April|May|June|July|August|September|October|November|December|United|States|Kingdom|January|Mr|Mrs|Ms|Dr)$/i;
-
-        parsed = parsed.map(r => {
-          if (r._manualOverride || !r.reason) return r;
-
-          const entryText = `${r.title || ''} ${r.snippet || ''}`;
-          const entryTextLc = entryText.toLowerCase();
-          let mutated = { ...r };
-
-          // ── Check 1: actualSubjectName hallucination ──────────
-          if (mutated.actualSubjectName && mutated.actualSubjectName.trim().length >= 4) {
-  const subjectStr = mutated.actualSubjectName.trim();
-  const subjectLc = subjectStr.toLowerCase();
-  const isPlaceholder = /^(unknown|other|another|a\s+different|the\s+wrongdoer|another\s+party|the\s+actual|n\/a)/i.test(subjectLc);
-
-  // 🆕 NEW: 如果 actualSubjectName 就係 target 本身(或 superset/subset 變體),唔好 redact
-  const targetLcCheck = String(searchEntity).toLowerCase().trim();
-  const isTargetItself =
-    subjectLc === targetLcCheck ||
-    subjectLc.includes(targetLcCheck) ||
-    targetLcCheck.includes(subjectLc);
-
-  if (isTargetItself) {
-    console.log(`✅ Patch #8b [#${r.rank}]: actualSubjectName "${subjectStr}" IS target — skip redaction`);
-  } else if (!isPlaceholder) {
-  // 🆕 Normalise:strip dots, collapse internal whitespace, remove non-letter chars
-  const normalize = (s) => s.toLowerCase()
-    .replace(/[.,'"]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const subjectNorm = normalize(subjectStr);
-  const entryNorm = normalize(entryTextLc);
-
-  // Direct normalised match
-  let foundDirect = entryNorm.includes(subjectNorm);
-
-  // 🆕 Token-based fallback: include 2-letter tokens (e.g. "SA Baker")
-  let fuzzyMatch = false;
-  if (!foundDirect) {
-    const subjectTokens = subjectNorm.split(' ').filter(t => t.length >= 2); // 由 3 改為 2
-    fuzzyMatch = subjectTokens.length >= 2 &&
-      subjectTokens.slice(0, -1).some((t, i) => entryNorm.includes(`${t} ${subjectTokens[i + 1]}`));
-  }
-
-  if (!foundDirect && !fuzzyMatch) {
-
-              if (!fuzzyMatch) {
-                console.warn(`🚨 Patch #8b [#${r.rank}]: actualSubjectName "${subjectStr}" NOT in entry — hallucinated from other batch result`);
-
-                // Redact 個 hallucinated name 喺 reasoning
-                const escaped = subjectStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const redactedReason = mutated.reason
-                  .replace(new RegExp(`["']?\\b${escaped}\\b["']?`, 'gi'), 'an unspecified party')
-                  .replace(/\bapplies\s+to\s+an\s+unspecified\s+party\b/gi, 'applies to a party not identified in this article')
-                  .replace(/\s{2,}/g, ' ')
-                  .trim();
-
-                mutated = {
-                  ...mutated,
-                  actualSubjectName: '',
-                  reason: redactedReason,
-                  _hallucinatedSubject: true,
-                  _originalHallucinatedName: subjectStr,
-                };
-              }
-            }
-          }
-         }
-          // ── Check 2: Plural vs actual person count ───────────
-          const reasoningUsesPlural = PLURAL_PATTERNS_B.some(p => p.test(mutated.reason));
-          if (reasoningUsesPlural) {
-            const romanizedNames = entryText.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}\b/g) || [];
-            const chineseNames = entryText.match(/[\u4e00-\u9fa5]{2,4}/g) || [];
-            const uniqueNames = new Set(
-              [...romanizedNames, ...chineseNames]
-                .filter(n => !EXCLUDE_B.test(n) && n.length >= 3)
-            );
-
-            if (uniqueNames.size <= 1) {
-              console.warn(`🚨 Patch #8b [#${r.rank}]: PLURAL used but entry has ${uniqueNames.size} unique name — fixing to singular`);
-
-              const fixedReason = mutated.reason
-                .replace(/\bthese\s+(?:distinct\s+|different\s+)?individuals\b/gi, 'this individual')
-                .replace(/\bseveral\s+different\s+(?:individuals|people|persons)\b/gi, 'this individual')
-                .replace(/\bmultiple\s+(?:individuals|people|persons)\b/gi, 'this individual')
-                .replace(/\bmultiple\s+entities\b/gi, 'this entity')
-                .replace(/\bvarious\s+(?:individuals|people|persons)\b/gi, 'this individual')
-                .replace(/\bare\s+(?=distinct|different|separate|unrelated)/gi, 'is ')
-                .replace(/\s{2,}/g, ' ')
-                .trim();
-
-              mutated = { ...mutated, reason: fixedReason, _pluralFixedB: true };
-            }
-          }
-
-          return mutated;
-        });
-      }
-
-      // ═══════════════════════════════════════════════════════
-      // 🆕 PATCH #8c — FIX C: ENHANCED FRAUD-ALERT VICTIM DETECTOR
-      // 強化 title-level + 多 pattern 識別,確保 fraud alert 類
-      // page 被正確分類為 IRRELEVANT_MLTF。
-      // (補強現有 PATCH #7c-1)
-      // ═══════════════════════════════════════════════════════
-      {
-        parsed = parsed.map(r => {
-          if (r._manualOverride) return r;
-
-          const titleLc = String(r.title || '').toLowerCase();
-          const snippetLc = String(r.snippet || '').toLowerCase();
-          const combinedLc = titleLc + ' ' + snippetLc;
-
-          const isFraudAlertVictim =
-            // A. Title-level alert markers
-            /\b(fraud\s*alert|scam\s*alert|fraud\s*warning|impersonation\s*alert|customer\s*notice|safety\s*notice|investor\s*alert|fraud\s*notice|security\s*alert|phishing\s*alert)\b/i.test(titleLc) ||
-
-            // B. Scammers actively impersonating
-            /\bscammers?\s+(?:are\s+|may\s+|have\s+been\s+|continue\s+to\s+)?(?:impersonat|spoof|clon|pretend|pos|claim|misrepresent)/i.test(snippetLc) ||
-
-            // C. Organisation warning about fraudsters
-            /\b(?:we|our\s+(?:company|firm|bank|fund|organisation|organization))\s+(?:have\s+been|has\s+been|are|is)\s+(?:made\s+aware|informed|warned|alerted|notified)\s+(?:of|that|about)\s+(?:fraudsters?|scammers?|fraudulent|impersonator)/i.test(snippetLc) ||
-
-            // D. Beware of / warning about
-            /\b(?:beware\s+of|warning\s+about|alert\s+(?:regarding|about)|caution\s+against|notice\s+regarding)\s+(?:scams?|fraud|impersonation|fake|fraudulent)/i.test(combinedLc) ||
-
-            // E. Fake / cloned / fraudulent website / email / account
-            /\b(?:fraudulent|fake|cloned?|spoofed?|unauthorised|unauthorized|bogus)\s+(?:websites?|emails?|accounts?|profiles?|apps?|advertisements?|messages?|investments?|offers?|schemes?)/i.test(snippetLc) ||
-
-            // F. "purporting to be" / "claiming to be" us
-            /\b(?:purport\w*|claim\w*)\s+to\s+be\s+(?:us|our|the\s+(?:company|firm|bank|fund))/i.test(snippetLc);
-
-          if (!isFraudAlertVictim) return r;
-
-          // 已經正確分類 + reasoning 提到 victim/impersonation? skip
-          if (
-            r.cls === 'IRRELEVANT_MLTF' &&
-            /impersonat|fraud[-\s]?alert|warning\s+about|victim\s+of|fraudulent\s+website|scammer|fake\s+(?:website|account)|issued\s+by\s+the\s+(?:named|organisation)|purporting|claiming\s+to\s+be/i.test(r.reason || '')
-          ) {
-            return r;
-          }
-
-          console.log(`🛡️ Patch #8c [#${r.rank}]: Fraud Alert victim context detected → forcing IRRELEVANT_MLTF`);
-
-          return {
-            ...r,
-            cls: 'IRRELEVANT_MLTF',
-            riskCat: 'N/A',
-            reason: `Irrelevant ML/TF, because this article is a fraud-alert / warning notice issued BY the named organisation about third-party scammers impersonating it. The screened subject is the victim of impersonation, not the wrongdoer.`,
-            _fraudAlertVictimC: true,
-            _previousCls: r._previousCls || r.cls,
-          };
-        });
-      }
-
-
-      // ═══════════════════════════════════════════════════════
-// 🆕 PATCH #9 v3 — TARGET-IN-ENTRY + ALTERNATE-DIRECTOR HARD GUARD
-//   (1) 🆕 ALTERNATE / SUBSTITUTE / SUCCESSOR DIRECTOR pattern detection
-//       — 即使 explicitlyDifferentEntity 為 true 都 override,因為呢個係
-//          結構性 false-positive(target 在 article 但只係 alternate role)。
-//   (2) 保留原本 fullMatch / tokenSeqMatch logic
-//   (3) 保留 AI 原本 article-specific reasoning
-// ═══════════════════════════════════════════════════════
-{
-  const targetLc9 = String(searchEntity).toLowerCase().trim();
-  const targetTokens9 = targetLc9.split(/\s+/).filter(tok => tok.length >= 3);
-
-  parsed = parsed.map(r => {
-    if (r._manualOverride) return r;
-    if (r.cls !== 'FALSE_HIT') return r;
-    if (r.identityMatch === 'CONTRADICTED') return r;
-
-    const entryText = `${r.title || ''} ${r.snippet || ''} ${r.nameInResult || ''} ${r.actualSubjectName || ''} ${r.reason || ''}`.toLowerCase();
-    const articleText = `${r.title || ''} ${r.snippet || ''}`;
-
-    // Token match(支援 hyphen / comma:"KWOK Kai-fai, Adam")
-    const fullMatch = entryText.includes(targetLc9);
-    const tokenSeqMatch = targetTokens9.length >= 2 &&
-      targetTokens9.slice(0, -1).some((tok, i) => {
-        const next = targetTokens9[i + 1];
-        return entryText.includes(`${tok} ${next}`)
-            || entryText.includes(`${tok}-${next}`)
-            || entryText.includes(`${tok}, ${next}`);
-      });
-
-    // ────────────────────────────────────────────────────
-    // 🚨 NEW: ALTERNATE DIRECTOR HARD GATE
-    //   即使 AI 講 "different entity",只要 article 結構係
-    //   alternate / substitute / deputy / successor pattern
-    //   + target name 喺 entry 入面 → 強制 IRRELEVANT_MLTF
-    // ────────────────────────────────────────────────────
-    const alternatePattern =
-      /\b(?:alternate|substitute|deputy|acting)\s+director\b/i.test(articleText) ||
-      /\bbeing\s+his\s+(?:alternate|substitute|deputy|acting)\b/i.test(articleText) ||
-      /\bappoint(?:ed|ment)?\s+(?:as\s+)?(?:the\s+)?(?:alternate|substitute|deputy)\b/i.test(articleText) ||
-      /\bcease[sd]?\s+to\s+be\s+the\s+(?:alternate|substitute|deputy)\b/i.test(articleText);
-
-    if (alternatePattern && (fullMatch || tokenSeqMatch)) {
-      // 抽 principal director(真正被告)
-      const principalMatch = articleText.match(
-        /\b(?:against|charged|laid against|investigation of|prosecution of|sanctions on|sanctioned)\s+(?:Mr\.?|Ms\.?|Mrs\.?|Dr\.?)?\s*([A-Z][A-Za-z\-]+(?:[\s,]+[A-Z][A-Za-z\-]+){1,3})/
-      );
-      const actualSubject = principalMatch
-        ? principalMatch[1].replace(/[,;]+$/, '').trim()
-        : (r.actualSubjectName && r.actualSubjectName.trim()) || '';
-
-      const hasMLTFKeywords = r.matchedKeywords && r.matchedKeywords.length > 0;
-      const newReason = actualSubject
-        ? `Irrelevant ML/TF, because the wrongdoing applies to ${actualSubject}, not to ${searchEntity}, who appears in the article only in the role of Alternate Director. There is no ML/TF negative news.`
-        : `Irrelevant ML/TF, because although ${searchEntity} is named in this regulatory disclosure, the role described is solely as an Alternate Director, and the actual subject of any wrongdoing is a different party (the principal director). There is no ML/TF negative news.`;
-
-      console.log(`🔒 Patch #9 v3 [#${r.rank}]: ALTERNATE DIRECTOR detected → IRRELEVANT_MLTF (subject="${actualSubject || 'principal director'}", hadKeywords=${hasMLTFKeywords})`);
-
-      return {
-        ...r,
-        cls: 'IRRELEVANT_MLTF',
-        identityMatch: 'PARTIAL_MATCH',
-        actualSubjectName: actualSubject || '',
-        riskCat: actualSubject ? `N/A (Subject = ${actualSubject})` : 'N/A',
-        reason: newReason,
-        _alternateDirectorForced: true,
-        _previousCls: r._previousCls || r.cls,
-      };
-    }
-
-    // ────────────────────────────────────────────────────
-    // 原本 explicitlyDifferentEntity guard
-    // ────────────────────────────────────────────────────
-    const reasonLcCheck = String(r.reason || '').toLowerCase();
-    const explicitlyDifferentEntity =
-      /\b(?:a |the )?different (person|individual|entity|party|company|organisation|organization)\b/.test(reasonLcCheck) ||
-      /\bnot the (same|screened) (target|subject|individual|person|entity)\b/.test(reasonLcCheck) ||
-      /\b(?:shares?|share) the same name\b/.test(reasonLcCheck) ||
-      /\bhappens to (share|have)\b/.test(reasonLcCheck) ||
-      /\bdistinct (from|to)\b/.test(reasonLcCheck);
-
-    if (explicitlyDifferentEntity) {
-      console.log(`⏭️ Patch #9 [#${r.rank}]: skipped — AI explicitly stated different entity`);
-      return r;
-    }
-
-    if (!fullMatch && !tokenSeqMatch) {
-      console.log(`⚠️ Patch #9 [#${r.rank}]: target "${searchEntity}" NOT detected → leaving as FALSE_HIT`);
-      return r;
-    }
-
-    // Target 喺 entry 入面 → FALSE_HIT 錯
-    const hasMLTFKeywords = r.matchedKeywords && r.matchedKeywords.length > 0;
-    const newCls = hasMLTFKeywords ? 'TRUE_HIT' : 'IRRELEVANT_MLTF';
-    const newLabel = newCls === 'TRUE_HIT' ? 'True Hit' : 'Irrelevant ML/TF';
-
-    let originalBody = String(r.reason || '').trim();
-    originalBody = originalBody.replace(/^(False Hit|True Hit|No Hit|Irrelevant ML\/TF)\s*[,:]\s*/i, '');
-    originalBody = originalBody.replace(/^because\s+/i, '');
-    // 🆕 預先 strip suffix,避免重複拼接
-    originalBody = originalBody.replace(/\s*There\s+is\s+no\s+ML\/TF\s+negative\s+news\.?\s*$/i, '').trim();
-
-    const newReason = originalBody.length >= 30
-      ? `${newLabel}, because ${originalBody}`
-      : (hasMLTFKeywords
-          ? `${newLabel}, because "${searchEntity}" is explicitly named in this result and ML/TF-related keywords are present in the article concerning this entity.`
-          : `${newLabel}, because "${searchEntity}" is explicitly named in this result but no ML/TF-related content concerning the target is present.`);
-
-    console.log(`🔒 Patch #9 v3 [#${r.rank}]: FALSE_HIT → ${newCls} (preserved AI body: ${originalBody.length} chars)`);
-
-    return {
-      ...r,
-      cls: newCls,
-      identityMatch: r.identityMatch === 'NO_INFO' ? 'PARTIAL_MATCH' : r.identityMatch,
-      actualSubjectName: '',
-      riskCat: hasMLTFKeywords ? r.riskCat : 'N/A',
-      reason: newReason,
-      _targetInSnippetForced: true,
-      _previousCls: r._previousCls || r.cls,
-    };
-  });
-}
-
-     // ═══════════════════════════════════════════════════════
-      // 🆕 PATCH #10 v2 — TOKEN-COUNT SUPERSET FINAL ENFORCER
-      // 修正:
-      //   (a) Regex 加 'i' flag → "Steven Andrew Mcdonald" 大小寫 match
-      //   (b) 支援逗號格式 → "Leach Jr., Steven Andrew" 識別為 superset
-      //   (c) 加 initials pattern → "SA Baker" 識別為 target initials + extra
-      //   (d) Reason quality enforcement(就算已經 FALSE_HIT 都要寫明 actual name)
-      // ═══════════════════════════════════════════════════════
-      {
-        const _tgtCleanX = String(searchEntity).toLowerCase().trim();
-        const _tgtTokensX = _tgtCleanX.split(/\s+/).filter(t => t.length >= 2);
-        const _honorificX = /^(mr|mrs|ms|dr|sir|prof|hon|jr|sr|ii|iii|iv|esq)\.?$/i;
-        const _stopwordX = /^(the|a|an|of|in|at|by|on|for|to|and|or|but|with|from|as|is|are|was|book|books|track|song|album|story|novel|chapter|series|review|news|page|site|fund|director|manager|company|limited|inc|corp|ltd|llc|group|holdings|university|college|institute|department|office|service|search|results|article|former|current|new)$/i;
-
-        if (_tgtTokensX.length >= 1) {
-          parsed = parsed.map(r => {
-            if (r._manualOverride) return r;
-
-            // ───── Step A: 收集 candidate names 從 3 個來源 ─────
-            const _candidates = new Map();   // name → source
-
-            // Source 1: AI 明確返回嘅 nameInResult / actualSubjectName
-            if (r.nameInResult && r.nameInResult.trim().length >= 3) {
-              _candidates.set(r.nameInResult.trim(), 'nameInResult');
-            }
-            if (r.actualSubjectName && r.actualSubjectName.trim().length >= 3
-                && r.actualSubjectName.trim() !== (r.nameInResult || '').trim()) {
-              _candidates.set(r.actualSubjectName.trim(), 'actualSubjectName');
-            }
-
-            // Source 2: 掃描 title + snippet 嘅 capitalized name sequence
-            //           包含 target tokens(支援 ", " 逗號分隔)
-            const _textX = `${r.title || ''} ${r.snippet || ''}`;
-            const _tgtRe = _tgtTokensX
-              .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-              .join('\\s+');
-            try {
-              // Pattern:up to 3 capitalized tokens before + target + up to 3 after
-              //         (?:,?\s+) 容許名 + 逗號(處理 "Leach Jr., Steven Andrew")
-              const _aroundRe = new RegExp(
-                `\\b(?:[A-Z][a-zA-Z.'-]+(?:,?\\s+)){0,3}${_tgtRe}(?:(?:,?\\s+)[A-Z][a-zA-Z.'-]+){0,3}\\b`,
-                'gi'   // ★ case-insensitive
-              );
-              let _mm;
-              while ((_mm = _aroundRe.exec(_textX)) !== null) {
-                const _hit = _mm[0]
-                  .replace(/[,;:]+/g, ' ')
-                  .replace(/\s+/g, ' ')
-                  .trim();
-                if (_hit && _hit.length > _tgtCleanX.length + 2) {
-                  _candidates.set(_hit, 'title-snippet');
-                }
-              }
-            } catch (e) { /* regex 出錯就 skip */ }
-
-            // Source 3: Initials pattern(e.g. "SA Baker" = "Steven Andrew" 嘅 initials + Baker)
-            if (_tgtTokensX.length >= 2) {
-              const _inits = _tgtTokensX.map(t => t[0]).join('');   // "sa"
-              try {
-                // "SA Baker" / "SA Smith Jones"
-                const _initRe1 = new RegExp(
-                  `\\b${_inits}\\s+[A-Z][a-z]+(?:\\s+[A-Z][a-z]+)?\\b`,
-                  'gi'
-                );
-                // "S.A. Baker" / "S. A. Baker"
-                const _initRe2 = new RegExp(
-                  `\\b${_inits.split('').join('\\.\\s*')}\\.?\\s+[A-Z][a-z]+(?:\\s+[A-Z][a-z]+)?\\b`,
-                  'gi'
-                );
-                const _initHits = [
-                  ...(_textX.match(_initRe1) || []),
-                  ...(_textX.match(_initRe2) || []),
-                ];
-                for (const _h of _initHits) {
-                  const _clean = _h.replace(/\s+/g, ' ').trim();
-                  if (_clean) _candidates.set(_clean, 'initials');
-                }
-              } catch (e) { /* skip */ }
-            }
-
-            // ───── Step B: 逐個 candidate 驗證 superset condition ─────
-            let _superset = null;
-            let _extras = [];
-
-            for (const [candStr, source] of _candidates) {
-              const _candToksLc = candStr.toLowerCase()
-                .replace(/[.,()"'<>[\]{}]/g, ' ')
-                .split(/\s+/)
-                .filter(x => x.length >= 1 && !_honorificX.test(x) && !_stopwordX.test(x));
-
-              if (_candToksLc.length <= _tgtTokensX.length) continue;
-
-              // Initials 來源:第一個 token 必須係 target initials
-              if (source === 'initials') {
-                const _firstTok = _candToksLc[0] || '';
-                const _tgtInits = _tgtTokensX.map(t => t[0]).join('').toLowerCase();
-                if (_firstTok.replace(/\./g, '') !== _tgtInits) continue;
-                _superset = candStr;
-                _extras = _candToksLc.slice(1);
-                break;
-              }
-
-              // 一般 superset:所有 target tokens 都喺 candidate tokens 入面
-              const _allIn = _tgtTokensX.every(tt =>
-                _candToksLc.some(ct => ct === tt || ct.startsWith(tt) || tt.startsWith(ct))
-              );
-              if (!_allIn) continue;
-
-              _superset = candStr;
-              _extras = _candToksLc.filter(ct =>
-                !_tgtTokensX.some(tt => ct === tt || ct.startsWith(tt) || tt.startsWith(ct))
-              );
-              break;
-            }
-
-            if (!_superset) return r;
-
-            const _extraStr = _extras.join(' ');
-
-           // ───── CASE 1: cls 唔係 FALSE_HIT → 強制改 ─────
-            if (r.cls !== 'FALSE_HIT') {
-              const _improved = `False Hit, because the full name mentioned in this article is "${_superset}", not "${searchEntity}". The article refers to a different individual whose name does not exactly match the screened target.`;
-              console.log(`🔒 Patch #10 [#${r.rank}]: ${r.cls} → FALSE_HIT (superset "${_superset}", extra: "${_extraStr}")`);
-              return {
-                ...r,
-                cls: 'FALSE_HIT',
-                riskCat: 'N/A',
-                identityMatch: 'CONTRADICTED',
-                actualSubjectName: _superset,
-                reason: _improved,                       // ← ✅ FIXED
-                _tokenSupersetForced: true,
-                _previousCls: r._previousCls || r.cls,
-              };
-            }
-
-            // ───── CASE 2: 已經 FALSE_HIT → 檢查 reason 質素 ─────
-            const _reasLc = String(r.reason || '').toLowerCase();
-            const _candLc = _superset.toLowerCase();
-            const _lastExtra = _extras[_extras.length - 1] || '';
-            const _hasName =
-              _reasLc.includes(_candLc) ||
-              (_lastExtra && _lastExtra.length >= 3 && _reasLc.includes(_lastExtra.toLowerCase()));
-            const _isGeneric =
-              /impossible to (determine|identify|verify|ascertain)/i.test(r.reason || '') ||
-              /cannot be (definitively |reliably |clearly |positively )?(identified|determined|verified)/i.test(r.reason || '') ||
-              /without (further |any |additional |sufficient )?identifying information/i.test(r.reason || '') ||
-              /no specific (individual|subject|entity|person)/i.test(r.reason || '') ||
-              /happens to share the same name/i.test(r.reason || '') ||
-              /the provided text\.?\s*$/i.test(r.reason || '');
-
-            if (!_hasName || _isGeneric) {
-              const _improved = `False Hit, because the full name mentioned in this article is "${_superset}", not "${searchEntity}". The article refers to a different individual whose name does not exactly match the screened target.`;
-              console.log(`📝 Patch #10 [#${r.rank}]: FALSE_HIT reason improved with actual name "${_superset}"`);
-              return {
-                ...r,
-                reason: _improved,
-                actualSubjectName: r.actualSubjectName || _superset,
-                _falseHitReasonImproved: true,
-              };
-            }
-
-            return r;
-          });
-
-          const _forced = parsed.filter(r => r._tokenSupersetForced).length;
-          const _improved = parsed.filter(r => r._falseHitReasonImproved).length;
-          if (_forced + _improved > 0) {
-            console.log(`🔒 Patch #10 summary: ${_forced} forced to FALSE_HIT, ${_improved} reasons improved`);
-          }
-        }
-      }
-      
-      // ═══════════════════════════════════════════════════════
-// 🆕 SANCTION-MODE COMPREHENSIVE NORMALIZATION
-// 喺 sanction 模式下,將 ALL results 入面所有 ML/TF 字眼
-// 統一改為 sanctions 字眼。覆蓋全部 4 個 cls,同所有 text field
-// (reason / riskCat / _stage1Original.reason)。
-// Adverse media 模式:no-op,保持原狀。
-// Idempotent — 重複 apply 唔會出 bug。
-// ═══════════════════════════════════════════════════════
-if (isSanction) {
-  const sanitizeMLTFToSanctions = (text) => {
-    if (!text || typeof text !== 'string') return text;
-    let s = text;
-
-    // Label prefix(case-sensitive — preserve sentence start)
-    s = s.replace(/^Irrelevant ML\/TF\s*,/, 'Irrelevant sanction,');
-    s = s.replace(/\bIrrelevant ML\/TF\b/g, 'Irrelevant sanction');
-
-    // Mandatory suffix
-    s = s.replace(/There\s+is\s+no\s+ML\/TF\s+negative\s+news\.?/gi, 'There is no sanctions violations.');
-
-    // Long compound phrases first
-    s = s.replace(/\bmoney\s+laundering\s*(?:and|or|\/)\s*terrorist\s+financing\b/gi, 'sanctions');
-    s = s.replace(/\bML\/TF[-\s]related\b/gi, 'sanctions-related');
-    s = s.replace(/\bML\/TF\s+(content|matter|concern|issue|context|nature|scope|wrongdoing|allegation|category|news|hit|finding|signal|element|keyword|keywords|predicate|predicates|subject\s+matter|behaviour|behavior|activity|activities)\b/gi, 'sanctions $1');
-
-    // Standalone ML or ML and TF
-    s = s.replace(/\bML\s+and\s+TF\b/gi, 'sanctions');
-
-    // Bare ML/TF — LAST (so compound phrases above already handled)
-    s = s.replace(/\bML\/TF\b/g, 'sanctions');
-
-    return s;
-  };
-
-  parsed = parsed.map(r => {
-    const out = { ...r };
-    if (out.reason)  out.reason  = sanitizeMLTFToSanctions(out.reason);
-    if (out.riskCat) out.riskCat = sanitizeMLTFToSanctions(out.riskCat);
-    if (out._stage1Original?.reason) {
-      out._stage1Original = {
-        ...out._stage1Original,
-        reason: sanitizeMLTFToSanctions(out._stage1Original.reason),
-      };
-    }
-    return out;
-  });
-  console.log(`🛡️ Sanction-mode normalization: scrubbed ML/TF wording from ${parsed.length} item(s)`);
-}
-
-// ═══════════════════════════════════════════════════════
-// 🆕 FIX C — RESIDUAL SUFFIX SANITISER
-// 當 label 由 IRRELEVANT_MLTF 改成 FALSE_HIT / TRUE_HIT / NO_HIT 時,
-// 原本嘅 mandatory suffix(" There is no ML/TF negative news." /
-// " There is no sanctions violations.")應該被 strip 走。
-// 必須喺 CENTRAL SUFFIX PASS 之前 run。
-// ═══════════════════════════════════════════════════════
-{
-  const SUFFIX_PATTERNS = [
-    /\s*There\s+is\s+no\s+ML\/TF\s+negative\s+news\.?\s*$/i,
-    /\s*There\s+is\s+no\s+sanctions\s+violations?\.?\s*$/i,
-    /\s*There\s+(?:is|are)\s+no\s+(?:relevant\s+)?(?:ML\/TF|sanctions|adverse|negative)\s+[^.]*\.?\s*$/i,
-  ];
-
-  let strippedCount = 0;
-  parsed = parsed.map(r => {
-    // IRRELEVANT_MLTF / IRRELEVANT_SANCTION 應該保留 suffix
-    if (r.cls === 'IRRELEVANT_MLTF') return r;
-
-    let cleaned = String(r.reason || '');
-    let didStrip = false;
-    for (const pat of SUFFIX_PATTERNS) {
-      if (pat.test(cleaned)) {
-        cleaned = cleaned.replace(pat, '').trim();
-        didStrip = true;
-      }
-    }
-
-    if (!didStrip) return r;
-
-    // 確保結尾有句號
-    if (cleaned && !/[.!?]$/.test(cleaned)) cleaned += '.';
-
-    strippedCount++;
-    console.log(`🧼 Fix C [#${r.rank}]: stripped residual IRRELEVANT suffix from ${r.cls} reason`);
-    return { ...r, reason: cleaned, _residualSuffixStripped: true };
-  });
-
-  if (strippedCount > 0) {
-    console.log(`🧼 Fix C summary: ${strippedCount} item(s) had residual suffix stripped`);
-  }
-}
-
-
-
-      
-// ═══════════════════════════════════════════════════════
-// 🆕 CENTRAL SUFFIX PASS — Mode-aware
-// 確保每條 IRRELEVANT_MLTF reason 末尾都有 mode-specific suffix:
-//   • Sanction mode      → "There is no sanctions violations."
-//   • Adverse media mode → "There is no ML/TF negative news."
-// Idempotent — 唔會重複加。
-// ═══════════════════════════════════════════════════════
-parsed = parsed.map(r => {
-  if (r.cls !== 'IRRELEVANT_MLTF') return r;
-  let reason = String(r.reason || '').trim();
-  if (IRRELEVANT_SUFFIX_REGEX.test(reason)) return r;
-  if (reason && !/[.!?]$/.test(reason)) reason += '.';
-  reason = (reason ? reason + ' ' : '') + IRRELEVANT_SUFFIX;
-  return { ...r, reason };
-});
-console.log(`📝 Suffix pass — "${IRRELEVANT_SUFFIX}" enforced on ${parsed.filter(r => r.cls === 'IRRELEVANT_MLTF').length} item(s)`);
-      
-      // ═══════════════════════════════════════════════════════
-      // 🆕 F.3: COUNT VALIDATION — 警告 AI 是否漏掉結果
-      // ═══════════════════════════════════════════════════════
-      if (resultUrls.length > 0 && parsed.length < resultUrls.length) {
-        const missing = resultUrls.length - parsed.length;
-        const missPct = Math.round((missing / resultUrls.length) * 100);
-        console.warn(
-          `⚠️ COUNT MISMATCH: AI returned ${parsed.length} items but PDF had ${resultUrls.length} anchors. ` +
-          `${missing} result(s) missed (${missPct}%).`
-        );
-        console.warn(`📋 Pre-extracted anchors (${resultUrls.length}):`);
-        resultUrls.forEach((a, i) => console.warn(`  [${String(i+1).padStart(2,'0')}] ${a}`));
-        console.warn(`🤖 AI returned items (${parsed.length}):`);
-        parsed.forEach(r => console.warn(`  [${String(r.rank).padStart(2,'0')}] ${(r.source || '?')} — ${(r.title || '').slice(0, 60)}`));
-
-        // 在第一條結果的 reason 字段加上警告,讓 user 在 UI 看得到
-        if (parsed.length > 0) {
-          parsed[0] = {
-            ...parsed[0],
-            reason: `⚠️ [系統警告] AI 只回傳 ${parsed.length} 條結果,但 PDF 偵測到 ${resultUrls.length} 條 anchor(${missing} 條可能被漏掉)。請檢查瀏覽器 console 查看完整 anchor 列表。\n\n${parsed[0].reason || ''}`
-          };
-        }
-      } else if (resultUrls.length > 0 && parsed.length > resultUrls.length) {
-        console.warn(
-          `⚠️ COUNT OVERFLOW: AI returned ${parsed.length} items but PDF only had ${resultUrls.length} anchors. ` +
-          `AI may have duplicated or invented results.`
-        );
+      console.log(`✅ Two-pass complete: ${parsed.length} items classified`);
+      console.log(`   • TRUE_HIT:        ${parsed.filter(r => r.cls === 'TRUE_HIT').length}`);
+      console.log(`   • FALSE_HIT:       ${parsed.filter(r => r.cls === 'FALSE_HIT').length}`);
+      console.log(`   • IRRELEVANT_MLTF: ${parsed.filter(r => r.cls === 'IRRELEVANT_MLTF').length}`);
+      console.log(`   • NO_HIT:          ${parsed.filter(r => r.cls === 'NO_HIT').length}`);
+
+      // Count validation — guaranteed N→N because we iterate resultUrls
+      if (resultUrls.length > 0 && parsed.length !== resultUrls.length) {
+        console.warn(`⚠️ Unexpected count: parsed=${parsed.length}, anchors=${resultUrls.length}`);
       } else if (resultUrls.length > 0) {
         console.log(`✅ Count match: ${parsed.length} items = ${resultUrls.length} anchors`);
       }
-      
+
       setProgress(100);
-      timerIdsRef.current.push(setTimeout(() => { setIsAnalyzing(false); setAnalysisComplete(true); setResults(parsed); }, 300));
-    } catch (err) { setIsAnalyzing(false); setProgress(0); setStage(''); setErrorMsg(`分析失敗：${err.message}`); }
+      timerIdsRef.current.push(setTimeout(() => {
+        setIsAnalyzing(false);
+        setAnalysisComplete(true);
+        setResults(parsed);
+      }, 300));
+    } catch (err) {
+      setIsAnalyzing(false);
+      setProgress(0);
+      setStage('');
+      setErrorMsg(`分析失敗：${err.message}`);
+    }
   };
     
  const counts = useMemo(() => {
