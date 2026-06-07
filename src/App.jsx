@@ -1051,7 +1051,6 @@ function sliceSerpPdfByResultBlocks(pdfText) {
 
 
 function findArticleContextInPdf(pdfText, url) {
-function findArticleContextInPdf(pdfText, url) {
   if (!pdfText || !url) return '';
   try {
     const u = new URL(url);
