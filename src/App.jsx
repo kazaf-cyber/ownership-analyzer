@@ -1434,7 +1434,8 @@ function buildPass1Prompt({ targetName, kycInfo, articleTitle, articleSource, ar
     ? `KYC-supplied identifiers:\n${formatEntityContext(kycInfo)}`
     : `KYC-supplied identifiers: (none provided)`;
 
-  // 🆕 根據 hasFullBody 切換 body header
+// 🆕 GATE 3: publisher / articleDate / specificEvent 已改由 JS 從 PDF block 直接抽
+  //   AI 唔再負責呢 3 個 field → 結構性消滅 cross-block fact contamination
   const bodyHeader = hasFullBody
     ? `Body (FULL article scraped from the URL):`
     : `Body ⚠️ NOTE — full article scrape was NOT available for this URL.
@@ -1450,38 +1451,16 @@ It contains the title line + source + breadcrumb + snippet (often ending in "...
   set targetRole = "alternate" or "successor", and actualSubjectName = the named real subject.
 • Lower factsConfidence (0.5 – 0.7) only when role is GENUINELY ambiguous in the snippet text.
 
-🔑 MANDATORY FIELDS FROM SNIPPETS — these PREVENT identical reasons across results:
+🔑 YOUR JOB — extract ONLY semantic facts (publisher / articleDate / specificEvent are JS-derived, NOT your job):
 
-(1) publisher — ALWAYS extract from the FIRST line of the snippet block (above the URL/breadcrumb).
-  Examples: "HKEXnews", "etnet 經濟通", "Sun Hung Kai Properties", "MarketScreener",
-  "iFAST Global Markets", "SEC.gov", "Reuters", "South China Morning Post".
-  The Source header above is only a hint — extract from the snippet body itself.
+(1) targetActionInArticle (5-15 words — the SPECIFIC verb-phrase about the target IN THIS BLOCK ONLY)
+  • Read ONLY this block. Do NOT use knowledge from training data or other blocks.
+  • Examples: "appointed as Alternate Director", "ceased to be Alternate Director on 19 Dec 2014",
+    "listed in shareholding table with 160,000 long position",
+    "voted against by ISS proxy advisor", "named in board composition disclosure".
 
-(2) articleDate (YYYY-MM-DD) — Scan the snippet body for the FIRST date pattern:
-  - Chinese: "YYYY年MM月DD日" → convert (e.g. "2014年12月19日" → "2014-12-19")
-  - ISO:     "YYYY-MM-DD" or "YYYY/MM/DD"
-  - English: "Month DD, YYYY" → convert
-  NEVER return "unknown" if any date pattern is visible in the snippet.
-
-(3) specificEvent (≤15 words, MUST BE UNIQUE across results in this search)
-  Compose: <date if known> + <verb/event from snippet> + <target's role>.
-  ✅ GOOD (each is differentiating):
-   - "2014-12-19 cessation of Adam Kwok's Alternate Director role following ICAC matter"
-   - "2012-07-13 initial appointment of Adam Kwok as Alternate Director during Thomas Kwok's ICAC investigation"
-   - "Adam Kwok listed as Alternate Director in SHKP 2024/25 Corporate Governance Report"
-   - "ISS proxy advisor recommendation against Adam Kwok's executive director re-election"
-   - "Adam Kwok's 160,000-share long position disclosure on HKEXnews"
-  ❌ BAD (too generic, would collide with other results):
-   - "Adam Kwok mentioned in corporate document"
-   - "Director information disclosure"
-
-(4) targetActionInArticle (5-10 words — the SPECIFIC verb-phrase about the target)
-  Examples: "appointed as Alternate Director", "ceased to be Alternate Director",
-  "listed in shareholding table with 160,000 long position",
-  "voted against by ISS proxy advisor", "named in board composition disclosure".
-
-(5) wrongdoingDescribed + targetRole CONSISTENCY:
-  • If the snippet mentions "Bribery Ordinance", "ICAC", "Independent Commission Against Corruption",
+(2) wrongdoingDescribed + targetRole CONSISTENCY:
+  • If THIS BLOCK mentions "Bribery Ordinance", "ICAC", "Independent Commission Against Corruption",
     "Prevention of Bribery", "fraud charges", "criminal prosecution", "released on bail",
     → wrongdoingDescribed = true.
   • If wrongdoingDescribed = true AND target is shown as Alternate/Successor of another NAMED person
@@ -1490,12 +1469,11 @@ It contains the title line + source + breadcrumb + snippet (often ending in "...
   • If target appears ONLY in a shareholding / voting / board-list table with NO wrongdoing context,
     → targetRole = "passing_mention", wrongdoingDescribed = false.
 
-⚠️ ANTI-DUPLICATION RULE
-   No two results in the same search should produce IDENTICAL (publisher, articleDate, specificEvent) triples.
-   If two snippets cover the same underlying matter (e.g. Thomas Kwok's ICAC case), pick the
-   DIFFERENTIATING facet for specificEvent (appointment vs cessation vs annual report mention vs
-   shareholding disclosure vs proxy voting).`;
-
+⚠️ HARD CONSTRAINT — BLOCK ISOLATION
+   You only see ONE block. Your wrongdoingDescribed, targetRole, actualSubjectName, evidenceQuote
+   MUST come from THIS block's text alone. NEVER import facts (e.g. "ICAC bail", "Thomas Kwok")
+   that appear in a sibling's content but NOT literally in this block — those belong to a different result.`;
+  
   return `# TARGET
 Name: "${targetName}"
 ${kycBlock}
@@ -1518,12 +1496,9 @@ ${(articleBody || '').slice(0, 12000)}
 
   "kycContradiction": "<if KYC info EXPLICITLY contradicts the article's named party, describe in one sentence; else empty string>",
 
-  "articleGenre": "<one of: news | regulatory_filing | academic | court_judgment | fiction | social_media | directory_profile | self_published | fraud_alert | violation_tracker | other>",
+ "articleGenre": "<one of: news | regulatory_filing | academic | court_judgment | fiction | social_media | directory_profile | self_published | fraud_alert | violation_tracker | other>",
 
-  "articleDate": "<the publication or filing date of THIS article in YYYY-MM-DD; 'unknown' if not stated>",
-  "publisher": "<the issuing organisation, regulator, or news outlet for THIS article, e.g. 'HKEXnews', 'SEC', 'Reuters', 'Sun Hung Kai Properties (annual report)'; empty string if unknown>",
-  "specificEvent": "<ONE short phrase (max 15 words) describing the SPECIFIC event THIS article documents — must differentiate it from any other article about the same matter. Examples: 'appointment of Adam Kwok as Alternate Director following ICAC investigation of Thomas Kwok', 'cessation of Adam Kwok's Alternate Director role on 19 Dec 2014', 'proxy advisor's recommendation against Adam Kwok's re-election', 'mention in 2024/25 annual governance report'. Avoid generic phrases like 'governance disclosure'.>",
-  "targetActionInArticle": "<the SPECIFIC action/status the article attributes to the screened target in 5-10 words, e.g. 'appointed as Alternate Director', 'ceased to be Alternate Director', 'recommended against by ISS', 'listed in board composition table'>",
+  "targetActionInArticle": "<the SPECIFIC action/status THIS BLOCK attributes to the screened target in 5-15 words, e.g. 'appointed as Alternate Director', 'ceased to be Alternate Director', 'recommended against by ISS', 'listed in board composition table'. Use ONLY facts literally present in this block.>",
 
   "wrongdoingDescribed": <true if the article describes any wrongdoing, investigation, allegation, charge, conviction, or designation; false otherwise>,
   "wrongdoingType": "<one of: money_laundering | sanctions | bribery | fraud | tax_evasion | terrorist_financing | export_control | customs_fraud | civil_dispute | regulatory_violation | environmental | none | other>",
@@ -1651,10 +1626,7 @@ function buildPass1BPrompt({ targetName, kycInfo, article, siblingsInfo }) {
     ? siblingsInfo.map((s, i) =>
         `[Sibling ${i + 1}]\n` +
         `  URL: ${s.url || '(unknown)'}\n` +
-        `  Previous specificEvent: "${s.specificEvent || '(empty)'}"\n` +
-        `  Previous targetActionInArticle: "${s.targetActionInArticle || '(empty)'}"\n` +
-        `  Previous articleDate: "${s.articleDate || '(unknown)'}"\n` +
-        `  Previous publisher: "${s.publisher || '(unknown)'}"`
+        `  Previous targetActionInArticle: "${s.targetActionInArticle || '(empty)'}"`
       ).join('\n\n')
     : '(none)';
 
@@ -1674,31 +1646,22 @@ ${(article.body || '').slice(0, 12000)}
 ${siblingBlock}
 
 # YOUR TASK
-Re-extract facts for THIS article. Your output for specificEvent and targetActionInArticle MUST be CLEARLY DIFFERENT from every sibling above.
+Re-extract facts for THIS article. Your output for targetActionInArticle MUST be CLEARLY DIFFERENT from every sibling above. (publisher / articleDate / specificEvent are now JS-derived from THIS block — NOT your responsibility.)
 
-REQUIREMENTS:
+REQUIREMENT:
 
-1. articleDate — Look in the body for filing header, "Date of this notice", press release date, signed/dated stamps. Format YYYY-MM-DD. If genuinely absent, output "unknown".
-
-2. publisher — Identify the EXACT issuing body. Examples:
-   • "HKEXnews (notice ref: ltn20141219648)"
-   • "Sun Hung Kai Properties — Annual Report 2024"
-   • "ISS Proxy Advisor — 2025 AGM recommendation"
-   • "Reuters — 2014 ICAC trial coverage"
-
-3. specificEvent — A UNIQUE phrase (max 20 words) describing what THIS document records. Use distinctive action verbs and dates:
-   ❌ Bad (generic): "governance disclosure mentioning the target"
-   ✅ Good: "cessation of Adam Kwok's Alternate Director role effective 19 Dec 2014 following Thomas Kwok's bribery conviction"
-   ✅ Good: "appointment of Adam Kwok as Alternate Director on 13 Jul 2012 in response to ICAC investigation"
-   ✅ Good: "ISS recommendation against Adam Kwok's re-election at 2025 AGM citing related-party concerns"
-   ✅ Good: "routine listing of Adam Kwok in 2024 annual report board composition table"
-
-4. targetActionInArticle — Target's SPECIFIC status change in THIS document (5-15 words). Must differ from siblings.
-   ❌ Bad (generic): "alternate director"
-   ✅ Good: "newly appointed as Alternate Director on 13 Jul 2012"
+1. targetActionInArticle — Target's SPECIFIC status / role / action IN THIS BLOCK ONLY (5-15 words). MUST differ from siblings.
+   ❌ Bad (generic, copies sibling): "alternate director"
+   ✅ Good (uses date / setting unique to this block): "newly appointed as Alternate Director on 13 Jul 2012"
    ✅ Good: "ceased to serve as Alternate Director effective 19 Dec 2014"
+   ✅ Good: "listed in 2024/25 annual report board composition table"
+   ✅ Good: "voted against by ISS proxy advisor for re-election"
 
-# OUTPUT SCHEMA (same fields as Pass 1)
+⚠️ BLOCK ISOLATION
+   Use ONLY facts that are LITERALLY in THIS block. NEVER copy a fact (e.g. "ICAC bail",
+   "Thomas Kwok") that appears in a sibling's block but is NOT in this block's own text.
+
+# OUTPUT SCHEMA
 {
   "targetMentioned": <true/false>,
   "nameInArticle": "<string>",
@@ -1706,16 +1669,13 @@ REQUIREMENTS:
   "nameMatchReason": "<string>",
   "kycContradiction": "<string>",
   "articleGenre": "<news | regulatory_filing | academic | court_judgment | fiction | social_media | directory_profile | self_published | fraud_alert | violation_tracker | other>",
-  "articleDate": "<YYYY-MM-DD or 'unknown'>",
-  "publisher": "<string>",
-  "specificEvent": "<UNIQUE phrase, max 20 words>",
-  "targetActionInArticle": "<UNIQUE phrase, 5-15 words>",
+  "targetActionInArticle": "<UNIQUE phrase, 5-15 words, from THIS block only>",
   "wrongdoingDescribed": <true/false>,
   "wrongdoingType": "<money_laundering | sanctions | bribery | fraud | tax_evasion | terrorist_financing | export_control | customs_fraud | civil_dispute | regulatory_violation | environmental | none | other>",
   "wrongdoingInMLTFScope": <true/false>,
   "targetRole": "<subject | successor | alternate | victim | witness | plaintiff | colleague | passing_mention | unrelated_same_name | not_present>",
   "actualSubjectName": "<string>",
-  "evidenceQuote": "<≤25-word verbatim quote>",
+  "evidenceQuote": "<≤25-word verbatim quote from THIS block>",
   "factsConfidence": <0.0-1.0>
 }
 
@@ -1726,10 +1686,7 @@ async function reExtractWithDistinguishing({ targetName, kycInfo, article, sibli
   try {
     const siblingsInfo = siblings.map(s => ({
       url: s.url,
-      specificEvent: s._facts?.specificEvent || '',
       targetActionInArticle: s._facts?.targetActionInArticle || '',
-      articleDate: s._facts?.articleDate || '',
-      publisher: s._facts?.publisher || '',
     }));
 
     const userPrompt = buildPass1BPrompt({ targetName, kycInfo, article, siblingsInfo });
@@ -2011,6 +1968,118 @@ function preCheckTargetMentioned(facts, targetName, body) {
 
   return facts;
 }
+
+
+/* ════════════════════════════════════════════════════════════════
+   🆕 GATE 3 — JS METADATA EXTRACTION (replaces AI-extracted
+   publisher / articleDate / specificEvent)
+
+   Why JS not AI:
+   • AI sometimes imports facts from sibling blocks (e.g. result #9
+     borrowed "ICAC bail" content from #10) → cross-block contamination.
+   • JS sees ONE block + ONE url at a time → contamination is
+     STRUCTURALLY IMPOSSIBLE.
+   ════════════════════════════════════════════════════════════════ */
+
+const PUBLISHER_DOMAIN_MAP = {
+  'hkexnews.hk': 'HKEXnews',
+  'di.hkex.com.hk': 'HKEX (Disclosure of Interests)',
+  'hkex.com.hk': 'HKEX',
+  'sec.gov': 'SEC.gov',
+  'shkp.com': 'Sun Hung Kai Properties',
+  'etnet.com.hk': 'etnet 經濟通',
+  'marketscreener.com': 'MarketScreener',
+  'ifastgm.com.sg': 'iFAST Global Markets',
+  'reuters.com': 'Reuters',
+  'bloomberg.com': 'Bloomberg',
+  'ft.com': 'Financial Times',
+  'wsj.com': 'Wall Street Journal',
+  'scmp.com': 'South China Morning Post',
+  'mingpao.com': '明報',
+  'hkej.com': '信報財經新聞',
+  'on.cc': '東網',
+  'singtao.com': '星島日報',
+  'rthk.hk': 'RTHK',
+  'now.com': 'Now News',
+  'hk01.com': 'HK01',
+};
+
+function extractBlockMetadata(block, url) {
+  const result = { publisher: '', articleDate: '' };
+
+  // ── Publisher: from URL hostname (deterministic, can't be confused) ──
+  if (url) {
+    try {
+      const u = new URL(url);
+      const host = u.hostname.toLowerCase().replace(/^www\d*\./, '');
+      for (const [domain, name] of Object.entries(PUBLISHER_DOMAIN_MAP)) {
+        if (host === domain || host.endsWith('.' + domain)) {
+          result.publisher = name;
+          break;
+        }
+      }
+      if (!result.publisher) result.publisher = host;
+    } catch {}
+  }
+
+  // ── articleDate: regex scan over THIS block only ──
+  if (block && typeof block === 'string') {
+    // Pattern 1 — Chinese YYYY年MM月DD日 (works after cleanGooglePdfText NFKC)
+    const zh = block.match(/(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/);
+    if (zh) {
+      result.articleDate = `${zh[1]}-${zh[2].padStart(2,'0')}-${zh[3].padStart(2,'0')}`;
+    } else {
+      // Pattern 2 — ISO YYYY-MM-DD or YYYY/MM/DD
+      const iso = block.match(/\b(20\d{2}|19\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
+      if (iso) {
+        const m = parseInt(iso[2], 10), d = parseInt(iso[3], 10);
+        if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+          result.articleDate = `${iso[1]}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        }
+      } else {
+        // Pattern 3 — English "Month DD, YYYY" / "DD Month YYYY"
+        const monthMap = { jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06', jul:'07', aug:'08', sep:'09', oct:'10', nov:'11', dec:'12' };
+        let en = block.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2}),?\s+(20\d{2}|19\d{2})\b/i);
+        if (en) {
+          const mm = monthMap[en[1].toLowerCase().slice(0,3)];
+          if (mm) result.articleDate = `${en[3]}-${mm}-${en[2].padStart(2,'0')}`;
+        } else {
+          en = block.match(/\b(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(20\d{2}|19\d{2})\b/i);
+          if (en) {
+            const mm = monthMap[en[2].toLowerCase().slice(0,3)];
+            if (mm) result.articleDate = `${en[3]}-${mm}-${en[1].padStart(2,'0')}`;
+          }
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+function buildDeterministicSpecificEvent({ articleDate, publisher, targetActionInArticle, wrongdoingDescribed, wrongdoingType }) {
+  const parts = [];
+  if (articleDate && articleDate !== 'unknown') parts.push(articleDate);
+  if (publisher) parts.push(publisher);
+
+  const action = (targetActionInArticle || '').trim();
+  if (action) {
+    parts.push(`records target as: ${action}`);
+  } else if (wrongdoingDescribed) {
+    const w = (wrongdoingType && wrongdoingType !== 'none' && wrongdoingType !== 'other')
+      ? wrongdoingType.replace(/_/g, ' ')
+      : 'a matter';
+    parts.push(`mentions ${w} in context of the target`);
+  } else {
+    parts.push('document referencing the target');
+  }
+
+  return parts.join(' — ');
+}
+
+/* ════════════════════════════════════════════════════════════════
+   END GATE 3
+   ════════════════════════════════════════════════════════════════ */
 
 
 /* ========== GENERIC SCREENING COMPONENT (shared by Adverse Media & Sanction) ========== */
@@ -3022,10 +3091,24 @@ console.log(`📦 Article body sources:`, sources);
           };
         }
 
-        // 🆕 FIX A: name-token override BEFORE classification
+       // 🆕 FIX A: name-token override BEFORE classification
         const facts = preCheckTargetMentioned(fr.value, searchEntity, articles[i].body);
-        const cls = classifyFromFacts({ facts, targetName: searchEntity, mode });
 
+        // 🆕 GATE 3: JS-derive publisher / articleDate / specificEvent from THIS block only
+        //    (previously AI-extracted → caused result #9 to borrow #10's "ICAC bail" content)
+        const blockMeta = extractBlockMetadata(articles[i].body, articles[i].url);
+        facts.publisher = blockMeta.publisher;
+        facts.articleDate = blockMeta.articleDate || 'unknown';
+        facts.specificEvent = buildDeterministicSpecificEvent({
+          articleDate: blockMeta.articleDate,
+          publisher: blockMeta.publisher,
+          targetActionInArticle: facts.targetActionInArticle,
+          wrongdoingDescribed: facts.wrongdoingDescribed,
+          wrongdoingType: facts.wrongdoingType,
+        });
+        console.log(`📍 GATE 3 rank ${articles[i].rank}: publisher="${facts.publisher}", date="${facts.articleDate}"`);
+
+        const cls = classifyFromFacts({ facts, targetName: searchEntity, mode });
         return {
           rank: article.rank,
           url: article.url,
@@ -3106,9 +3189,24 @@ console.log(`📦 Article body sources:`, sources);
               console.warn(`   ⚠️ Re-extraction failed for rank ${item.rank} — keeping original`);
               return;
             }
-           // 🆕 FIX A: name-token override BEFORE re-classification
+          // 🆕 FIX A: name-token override BEFORE re-classification
             const articleForBody = articles.find(a => a.rank === item.rank);
             const newFacts = preCheckTargetMentioned(r.value, searchEntity, articleForBody?.body || '');
+
+            // 🆕 GATE 3: same JS metadata injection as Pass 2
+            if (articleForBody) {
+              const blockMeta = extractBlockMetadata(articleForBody.body, articleForBody.url);
+              newFacts.publisher = blockMeta.publisher;
+              newFacts.articleDate = blockMeta.articleDate || 'unknown';
+              newFacts.specificEvent = buildDeterministicSpecificEvent({
+                articleDate: blockMeta.articleDate,
+                publisher: blockMeta.publisher,
+                targetActionInArticle: newFacts.targetActionInArticle,
+                wrongdoingDescribed: newFacts.wrongdoingDescribed,
+                wrongdoingType: newFacts.wrongdoingType,
+              });
+            }
+
             const newCls = classifyFromFacts({ facts: newFacts, targetName: searchEntity, mode });
             
             const idx = parsed.findIndex(p => p.rank === item.rank);
