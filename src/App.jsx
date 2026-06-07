@@ -2270,17 +2270,42 @@ for (let i = 1; i <= pdf.numPages; i++) {
   }
 
   // 抽取 PDF 內嵌嘅 hyperlink annotations(真正可按嘅 URL)
-  try {
+ try {
     const annotations = await page.getAnnotations();
+
+    // 🔒 Comprehensive Google infrastructure URL filter
+    //    Catches: /search, /webhp, /intl, /maps, /preferences, /policies, /about,
+    //             support.google.*, policies.google.*, maps.google.*,
+    //             accounts.google.*, translate.google.*, adservice.google.*,
+    //             googleusercontent, googleadservices, gstatic, googleapis,
+    //             bare google.com / google.co.xx / google.com.xx homepages
+    const isGoogleInfra = (raw) => {
+      const lc = String(raw).toLowerCase();
+
+      // Hard-coded infra hosts / CDN
+      if (lc.includes('googleusercontent')) return true;
+      if (lc.includes('googleadservices')) return true;
+      if (lc.includes('gstatic.com')) return true;
+      if (lc.includes('googleapis.com')) return true;
+
+      // Google subdomains that are NEVER article hosts
+      if (/^https?:\/\/(support|policies|accounts|maps|translate|adservice|imghp|ads|tagmanager|analytics)\.google\./.test(lc)) return true;
+
+      // Google search engine pages: /search, /webhp, /imghp, /maps,
+      // /intl, /preferences, /advanced_search, /policies, /about,
+      // /tools, /imgres, /setprefs, /finance, /url
+      if (/\/\/(www\.)?google\.[a-z][a-z.]+\/(search|webhp|preferences|advanced_search|intl|imghp|finance|policies|about|maps|tools|imgres|setprefs|url)\b/.test(lc)) return true;
+
+      // Bare google.com / google.co.xx / google.com.xx (homepage or with query only)
+      if (/^https?:\/\/(www\.)?google\.[a-z][a-z.]+\/?(\?|$)/.test(lc)) return true;
+
+      return false;
+    };
+
     for (const ann of annotations) {
       if (ann.subtype === 'Link' && ann.url) {
         const u = ann.url;
-        if (u.startsWith('http') &&
-            !u.includes('google.com/search') &&
-            !u.includes('googleusercontent') &&
-            !u.includes('accounts.google') &&
-            !u.includes('googleadservices') &&
-            !u.includes('gstatic.com')) {
+        if (u.startsWith('http') && !isGoogleInfra(u)) {
           embeddedUrls.add(u);
         }
       }
@@ -2288,7 +2313,6 @@ for (let i = 1; i <= pdf.numPages; i++) {
   } catch (annErr) {
     console.warn(`Page ${i}: failed to read annotations`, annErr);
   }
-
   // ⚠️ NO "--- PAGE BREAK ---" marker — Chrome physical pages are NOT
   //    logical boundaries. Just join with a single newline so the text
   //    flows continuously as ONE SERP page.
