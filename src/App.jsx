@@ -3345,11 +3345,26 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
           let cleaned = r.reason;
           let dropped = false;
           for (const pat of bleedPhrasePatterns) {
-            if (pat.test(cleaned)) {
-              cleaned = cleaned.replace(pat, '').replace(/\s{2,}/g, ' ').replace(/\s+([.!?])/g, '$1').trim();
-              dropped = true;
-            }
-          }
+  if (pat.test(cleaned)) {
+    cleaned = cleaned.replace(pat, '').replace(/\s{2,}/g, ' ').replace(/\s+([.!?])/g, '$1').trim();
+    dropped = true;
+  }
+}
+
+// 🆕 Residue cleanup: 移除被 regex 切斷後遺留嘅 sentence-head 片段
+if (dropped) {
+  cleaned = cleaned
+    // 結尾遺留 "The text" / "The article" / "The page" / "The source" 而冇動詞
+    .replace(/\b(?:The|This)\s+(?:text|article|page|source|snippet|search results?)\s*\.?\s*$/i, '')
+    // 結尾遺留 "is a" / "contains" 等開頭片段
+    .replace(/\b(?:is|are|contains?|features?|lists?|aggregat\w+)\s*\.?\s*$/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/[\s,;]+([.!?])/g, '$1')
+    .replace(/\s+$/, '')
+    .trim();
+  // 確保末尾有句號
+  if (cleaned && !/[.!?]$/.test(cleaned)) cleaned += '.';
+}
           if (dropped && cleaned.length > 10) {
             console.log(`🧼 Patch #7a [#${r.rank}]: stripped cross-article meta-bleed phrase`);
             return { ...r, reason: cleaned, _bleedPhraseStripped: true };
@@ -3597,11 +3612,27 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
 
   if (isTargetItself) {
     console.log(`✅ Patch #8b [#${r.rank}]: actualSubjectName "${subjectStr}" IS target — skip redaction`);
-  } else if (!isPlaceholder && !entryTextLc.includes(subjectLc)) {
-              // Fuzzy check: 至少 2 個連續 token 出現喺 snippet
-              const subjectTokens = subjectLc.split(/\s+/).filter(t => t.length >= 3);
-              const fuzzyMatch = subjectTokens.length >= 2 &&
-                subjectTokens.slice(0, -1).some((t, i) => entryTextLc.includes(`${t} ${subjectTokens[i + 1]}`));
+  } else if (!isPlaceholder) {
+  // 🆕 Normalise:strip dots, collapse internal whitespace, remove non-letter chars
+  const normalize = (s) => s.toLowerCase()
+    .replace(/[.,'"]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const subjectNorm = normalize(subjectStr);
+  const entryNorm = normalize(entryTextLc);
+
+  // Direct normalised match
+  let foundDirect = entryNorm.includes(subjectNorm);
+
+  // 🆕 Token-based fallback: include 2-letter tokens (e.g. "SA Baker")
+  let fuzzyMatch = false;
+  if (!foundDirect) {
+    const subjectTokens = subjectNorm.split(' ').filter(t => t.length >= 2); // 由 3 改為 2
+    fuzzyMatch = subjectTokens.length >= 2 &&
+      subjectTokens.slice(0, -1).some((t, i) => entryNorm.includes(`${t} ${subjectTokens[i + 1]}`));
+  }
+
+  if (!foundDirect && !fuzzyMatch) {
 
               if (!fuzzyMatch) {
                 console.warn(`🚨 Patch #8b [#${r.rank}]: actualSubjectName "${subjectStr}" NOT in entry — hallucinated from other batch result`);
@@ -3881,15 +3912,17 @@ if (s2.wrongdoingApplies === false && conf >= 0.70) {
 
 // Strip leading "<Label>, because" or "<Label>: because" prefix from reason
   const stripLabelPrefix = (reason) => {
-    if (!reason) return '';
-    let r = String(reason).trim();
-    r = r.replace(/^(true hit|false hit|no hit|irrelevant ml\/tf)\s*[,:]\s*/i, '');
-    r = r.replace(/^(真實命中|誤報|無命中|無關\s*ml\/tf)\s*[,:,:]\s*/i, '');
-    if (!/^because\s/i.test(r)) {
-      r = `because ${r}`;
-    }
-    return r;
-  };
+  if (!reason) return '';
+  let r = String(reason).trim();
+  r = r.replace(/^(true hit|false hit|no hit|irrelevant ml\/tf)\s*[,:]\s*/i, '');
+  r = r.replace(/^(真實命中|誤報|無命中|無關\s*ml\/tf)\s*[,:,:]\s*/i, '');
+  // 🆕 Force leading "Because" → "because"(視覺一致性)
+  r = r.replace(/^Because\s/, 'because ');
+  if (!/^because\s/i.test(r)) {
+    r = `because ${r}`;
+  }
+  return r;
+};
   
  const summaryText = useMemo(() => {
     if (!results.length) return '';
