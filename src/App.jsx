@@ -2813,7 +2813,8 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
             { role: 'user', content: fullPrompt }
           ],
           temperature: 0.05,
-          max_tokens: 16384
+          max_tokens: 32768
+          response_format: { type: 'json_object' }
         })
       });
 
@@ -2821,15 +2822,123 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
       if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData?.error?.message || `HTTP ${res.status}`); }
       const data = await res.json();
       const rawText = data?.choices?.[0]?.message?.content || '[]';
-      let parsed;
-      try { const cleaned = rawText.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim(); parsed = JSON.parse(cleaned); }
-      catch {
-        try {
-          const firstBracket = rawText.indexOf('['); const lastBracket = rawText.lastIndexOf(']');
-          if (firstBracket === -1 || lastBracket === -1 || lastBracket < firstBracket) throw new Error('no array found');
-          parsed = JSON.parse(rawText.slice(firstBracket, lastBracket + 1));
-        } catch { throw new Error(`AI 回應格式錯誤。實際回傳：${rawText ? rawText.slice(0, 200) : '(empty)'}`); }
+
+// ════════════════════════════════════════════════════════════
+// 🛡️ ROBUST JSON PARSER — handles 5 known failure modes
+//   1. Markdown code fence wrapping
+//   2. Bare array (LLM returns [...] directly) ← 今次出問題嘅 case
+//   3. Object wrapper ({analyses:[...]} / {results:[...]})
+//   4. Trailing comma / smart quote / control char
+//   5. Truncation by max_tokens (recover all complete objects)
+// ════════════════════════════════════════════════════════════
+let parsed;
+const parseAttempts = [];
+const stripFences = (s) => s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+
+try {
+  // Strategy 1: Direct parse(handles both bare array & wrapped object)
+  const cleaned = stripFences(rawText);
+  parsed = JSON.parse(cleaned);
+  parseAttempts.push('S1-direct');
+} catch (e1) {
+  try {
+    // Strategy 2: Locate array boundary([...])
+    const fb = rawText.indexOf('[');
+    const lb = rawText.lastIndexOf(']');
+    if (fb === -1 || lb <= fb) throw new Error('no array boundary');
+    parsed = JSON.parse(rawText.slice(fb, lb + 1));
+    parseAttempts.push('S2-array-slice');
+  } catch (e2) {
+    try {
+      // Strategy 3: Object wrapper {analyses:[...]} / {results:[...]} / etc.
+      const fc = rawText.indexOf('{');
+      const lc = rawText.lastIndexOf('}');
+      if (fc === -1 || lc <= fc) throw new Error('no object boundary');
+      const obj = JSON.parse(rawText.slice(fc, lc + 1));
+      const wrapperKeys = ['analyses', 'analysis', 'results', 'result', 'items', 'data', 'hits', 'output', 'response'];
+      let found = null;
+      for (const k of wrapperKeys) {
+        if (Array.isArray(obj[k])) { found = obj[k]; parseAttempts.push(`S3-wrapper(${k})`); break; }
       }
+      // Single-key object whose value is an array
+      if (!found) {
+        const keys = Object.keys(obj);
+        if (keys.length === 1 && Array.isArray(obj[keys[0]])) {
+          found = obj[keys[0]];
+          parseAttempts.push(`S3-single-key(${keys[0]})`);
+        }
+      }
+      if (!found) throw new Error('no wrapper key matched');
+      parsed = found;
+    } catch (e3) {
+      try {
+        // Strategy 4: Repair common malformations
+        const fb = rawText.indexOf('[');
+        if (fb === -1) throw new Error('no array start');
+        const lb = rawText.lastIndexOf(']');
+        let snippet = rawText.slice(fb, lb !== -1 ? lb + 1 : undefined);
+        snippet = snippet
+          .replace(/,(\s*[}\]])/g, '$1')              // trailing comma
+          .replace(/[\u201C\u201D]/g, '"')            // smart double quote → "
+          .replace(/[\u2018\u2019]/g, "'")            // smart single quote → '
+          .replace(/[\u0000-\u001F]+/g, ' ');         // control chars
+        parsed = JSON.parse(snippet);
+        parseAttempts.push('S4-repaired');
+      } catch (e4) {
+        try {
+          // Strategy 5: Partial parse — recover all complete {...} objects
+          // (用於 max_tokens 切斷中間嘅 case)
+          const fb = rawText.indexOf('[');
+          if (fb === -1) throw new Error('no array start for partial');
+          const objs = [];
+          let depth = 0, inStr = false, esc = false, objStart = -1;
+          for (let i = fb + 1; i < rawText.length; i++) {
+            const ch = rawText[i];
+            if (esc) { esc = false; continue; }
+            if (ch === '\\') { esc = true; continue; }
+            if (ch === '"') { inStr = !inStr; continue; }
+            if (inStr) continue;
+            if (ch === '{') { if (depth === 0) objStart = i; depth++; }
+            else if (ch === '}') {
+              depth--;
+              if (depth === 0 && objStart !== -1) {
+                try { objs.push(JSON.parse(rawText.slice(objStart, i + 1))); } catch {}
+                objStart = -1;
+              }
+            }
+          }
+          if (objs.length === 0) throw new Error('partial parse recovered 0 objects');
+          parsed = objs;
+          parseAttempts.push(`S5-partial(${objs.length} obj)`);
+          console.warn(`⚠️ JSON truncated by max_tokens — recovered ${objs.length} complete object(s)`);
+        } catch (e5) {
+          // All strategies failed — give DETAILED diagnostic
+          console.error('🔴 All JSON parse strategies failed:', {
+            e1: e1.message, e2: e2.message, e3: e3.message, e4: e4.message, e5: e5.message,
+            rawLength: rawText.length,
+            firstChars: rawText.slice(0, 100),
+            lastChars: rawText.slice(-100),
+          });
+          throw new Error(
+            `AI 回應格式錯誤(5 個 fallback strategies 全部失敗)。\n\n` +
+            `📏 總長度: ${rawText.length} chars\n\n` +
+            `📄 開頭 500 字:\n${rawText.slice(0, 500)}\n\n` +
+            `📄 結尾 200 字:\n${rawText.slice(-200)}`
+          );
+        }
+      }
+    }
+  }
+}
+console.log(`✅ JSON parsed via: ${parseAttempts.join(' → ')} | ${Array.isArray(parsed) ? parsed.length : '?'} items`);
+
+// 🆕 Normalize:if Strategy 3 / 4 wrapped 出單一 object,包成 array
+if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') {
+  if ('rank' in parsed || 'url' in parsed || 'cls' in parsed) {
+    console.log('📦 Single result object detected → wrapping into array');
+    parsed = [parsed];
+  }
+}
       if (!Array.isArray(parsed) || parsed.length === 0) {
         parsed = [{ rank: 1, title: lang === 'zh' ? '無分析結果' : 'No results', source: '', date: '', snippet: lang === 'zh' ? 'AI未返回有效結果。' : 'AI returned no valid results.', matchedKeywords: [], cls: 'NO_HIT', confidence: 1.0, reason: lang === 'zh' ? '返回空結果。' : 'Returned empty results.', riskCat: 'N/A' }];
       }
