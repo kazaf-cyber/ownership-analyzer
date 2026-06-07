@@ -2246,7 +2246,7 @@ You MUST identify the target's actual role inside the article body before assign
 
 You are a precision instrument operating under strict CDD rules.
 Both false positives AND false negatives harm the bank.
-A correctly classified TRUE_HIT is just as defensible as a correctly classified IRRELEVANT_MLTF.`.trim();
+A correctly classified TRUE_HIT is just as defensible as a correctly classified IRRELEVANT_MLTF.`.trim());
 };
 
 
