@@ -2242,9 +2242,19 @@ A correctly classified TRUE_HIT is just as defensible as a correctly classified 
       const pdf = await window.pdfjsLib.getDocument({ data: arrayBuf }).promise;
       let pdfText = '';
 
-     const embeddedUrls = new Set();   // 🆕 集中存所有 PDF embedded hyperlinks
+     const embeddedUrls = new Set();   // 集中存所有 PDF embedded hyperlinks
 
-for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
+// ============================================================
+// 📄 INPUT CONTRACT: One upload = ONE logical Google SERP page (10 results).
+//    Chrome's "Save as PDF" may auto-split that ONE logical page into
+//    multiple PDF physical pages because of A4/Letter print-height limit.
+//    We MUST concatenate them ALL into ONE text blob, with NO synthetic
+//    "PAGE BREAK" markers — otherwise extractResultAnchors() and the AI
+//    prompt would mis-read the marker as a real result boundary.
+// ============================================================
+console.log(`📄 PDF has ${pdf.numPages} physical page(s) — treating as ONE logical SERP page`);
+
+for (let i = 1; i <= pdf.numPages; i++) {
   const page = await pdf.getPage(i);
   const content = await page.getTextContent();
   let lastY = null;
@@ -2259,12 +2269,11 @@ for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
     lastY = y;
   }
 
-  // 🆕 抽取 PDF 內嵌嘅 hyperlink annotations(真正可按嘅 URL)
+  // 抽取 PDF 內嵌嘅 hyperlink annotations(真正可按嘅 URL)
   try {
     const annotations = await page.getAnnotations();
     for (const ann of annotations) {
       if (ann.subtype === 'Link' && ann.url) {
-        // 過濾 Google 自己嘅基礎設施
         const u = ann.url;
         if (u.startsWith('http') &&
             !u.includes('google.com/search') &&
@@ -2280,9 +2289,13 @@ for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
     console.warn(`Page ${i}: failed to read annotations`, annErr);
   }
 
-  pdfText += pageText + '\n\n--- PAGE BREAK ---\n\n';
+  // ⚠️ NO "--- PAGE BREAK ---" marker — Chrome physical pages are NOT
+  //    logical boundaries. Just join with a single newline so the text
+  //    flows continuously as ONE SERP page.
+  pdfText += pageText + '\n';
 }
 
+console.log(`📄 Merged PDF text length: ${pdfText.length} chars (single logical SERP page)`);
 // 🆕 將抽到嘅 hyperlinks 注入到 pdfText 末尾,等後續 extractResultAnchors 揾到佢哋
 if (embeddedUrls.size > 0) {
   console.log(`🔗 Extracted ${embeddedUrls.size} embedded hyperlink(s) from PDF annotations:`);
