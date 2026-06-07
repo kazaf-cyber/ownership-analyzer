@@ -3687,72 +3687,140 @@ if (dropped) {
       });
 
       // ═══════════════════════════════════════════════════════
-      // 🆕 PATCH #8a — FIX A: GENERIC REASONING REWRITER
-      // 偵測通用 plural template,從 entry snippet 抽 specific name
-      // 然後重寫 reasoning,強制 reference 真正內容。
-      // ═══════════════════════════════════════════════════════
-      {
-        const GENERIC_PLURAL_PHRASES = [
-          /\bthese\s+(?:distinct\s+|different\s+|various\s+|separate\s+)?individuals\b/i,
-          /\bseveral\s+different\s+(?:individuals|people|persons)\b/i,
-          /\bmultiple\s+(?:individuals|people|persons|entities|parties)\b/i,
-          /\bvarious\s+(?:individuals|people|persons|entities)\b/i,
-          /\bthese\s+(?:different|various|distinct|separate)\s+parties\b/i,
-        ];
+// 🆕 PATCH #8a v2 — GENERIC REASONING REWRITER (EXPANDED)
+// (1) 偵測 plural template:"these individuals" / "multiple parties"
+// (2) 🆕 偵測 singular vague evasion:"an unspecified party" /
+//     "an unidentified individual" — AI 用嚟避開 call target by name
+// (3) 從 entry 自身 title + snippet 抽 specific name,重寫 reasoning
+// ═══════════════════════════════════════════════════════
+{
+  const GENERIC_PLURAL_PHRASES = [
+    /\bthese\s+(?:distinct\s+|different\s+|various\s+|separate\s+)?individuals\b/i,
+    /\bseveral\s+different\s+(?:individuals|people|persons)\b/i,
+    /\bmultiple\s+(?:individuals|people|persons|entities|parties)\b/i,
+    /\bvarious\s+(?:individuals|people|persons|entities)\b/i,
+    /\bthese\s+(?:different|various|distinct|separate)\s+parties\b/i,
+  ];
 
-        const EXCLUDE_NAME_TOKENS = /^(The|This|That|These|Those|And|But|Or|For|With|From|Into|About|After|Before|During|Through|Under|Over|Above|Below|Limited|Holdings|Group|Company|Corporation|Inc|Ltd|Plc|Llc|United|States|Kingdom|Republic|Department|Office|Service|System|Report|Page|News|Information|Search|Results|Court|Bank|Center|Centre|January|February|March|April|May|June|July|August|September|October|November|December|Mr|Mrs|Ms|Dr|Sir|Prof)$/i;
+  // 🆕 NEW — Singular vague evasion phrases
+  const VAGUE_SINGULAR_PHRASES = [
+    /\ban?\s+unspecified\s+(party|individual|person|entity|director|officer|executive|appointee)\b/i,
+    /\ban?\s+unidentified\s+(party|individual|person|entity|director|officer)\b/i,
+    /\ban?\s+(unnamed|undisclosed|unknown)\s+(party|individual|person|entity|director|officer|appointee)\b/i,
+    /\bthe\s+(individual|party|person|entity|director|appointee)\s+(?:in question|mentioned|named|referenced|described|involved|cited)\b/i,
+    /\b(some|certain)\s+(individual|party|person|entity|director)\b/i,
+  ];
 
-        parsed = parsed.map(r => {
-          if (r._manualOverride || !r.reason) return r;
+  const EXCLUDE_NAME_TOKENS = /^(The|This|That|These|Those|And|But|Or|For|With|From|Into|About|After|Before|During|Through|Under|Over|Above|Below|Limited|Holdings|Group|Company|Corporation|Inc|Ltd|Plc|Llc|United|States|Kingdom|Republic|Department|Office|Service|System|Report|Page|News|Information|Search|Results|Court|Bank|Center|Centre|January|February|March|April|May|June|July|August|September|October|November|December|Mr|Mrs|Ms|Dr|Sir|Prof|HKEX|HKEXnews|SEC|SCMP|FT|Reuters|Bloomberg)$/i;
 
-          const usesGenericPlural = GENERIC_PLURAL_PHRASES.some(p => p.test(r.reason));
-          if (!usesGenericPlural) return r;
+  parsed = parsed.map(r => {
+    if (r._manualOverride || !r.reason) return r;
 
-          // 抽取 THIS entry 嘅 specific names(只睇自己 title + snippet)
-          const fullText = `${r.title || ''} ${r.snippet || ''}`;
-          const romanizedMatches = (fullText.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}\b/g) || []);
-          const chineseMatches = (fullText.match(/[\u4e00-\u9fa5]{2,4}/g) || []);
+    const usesGenericPlural = GENERIC_PLURAL_PHRASES.some(p => p.test(r.reason));
+    const usesVagueSingular = VAGUE_SINGULAR_PHRASES.some(p => p.test(r.reason));
+    if (!usesGenericPlural && !usesVagueSingular) return r;
 
-          const uniqueNames = [...new Set([...romanizedMatches, ...chineseMatches])]
-            .filter(n => !EXCLUDE_NAME_TOKENS.test(n))
-            .filter(n => n.length >= 3);
+    const fullText = `${r.title || ''} ${r.snippet || ''}`;
+    const fullTextLc = fullText.toLowerCase();
 
-          // 如果 entry 真係有 2+ 個人 → plural 合理,唔改
-          if (uniqueNames.length > 1) return r;
+    // 抽 capitalized name sequences(支援 hyphen + comma:"KWOK Kai-fai, Adam")
+    const romanizedMatches = (fullText.match(/\b[A-Z][A-Za-z]+(?:[-\s,]+[A-Z][A-Za-z]+){1,4}\b/g) || []);
+    const chineseMatches = (fullText.match(/[\u4e00-\u9fa5]{2,4}/g) || []);
+    const uniqueNames = [...new Set([...romanizedMatches, ...chineseMatches])]
+      .filter(n => !EXCLUDE_NAME_TOKENS.test(n))
+      .filter(n => n.length >= 3);
 
-          // Entry 只有 0 或 1 個 unique name → 確認係 template contamination
-          const specName = (r.actualSubjectName && r.actualSubjectName.trim()) || uniqueNames[0] || '';
-          if (!specName) {
-            // 連抽都抽唔到,至少改 plural → singular
-            let trimmedReason = r.reason
-              .replace(/\bthese\s+(?:distinct\s+|different\s+|various\s+|separate\s+)?individuals\b/gi, 'this individual')
-              .replace(/\bseveral\s+different\s+(?:individuals|people|persons)\b/gi, 'this individual')
-              .replace(/\bmultiple\s+(?:individuals|people|persons|parties)\b/gi, 'this individual')
-              .replace(/\bvarious\s+(?:individuals|people|persons)\b/gi, 'this individual')
-              .replace(/\bare\s+(?=distinct|different|separate|unrelated)/gi, 'is ');
-            console.log(`🔧 Patch #8a [#${r.rank}]: no specific name found → just fixed plural → singular`);
-            return { ...r, reason: trimmedReason.trim(), _pluralOnlyFixed: true };
-          }
+    // 判斷 target 係咪喺 entry 入面(用 token sequence match,容許 hyphen / comma)
+    const targetLc = String(searchEntity).toLowerCase().trim();
+    const targetTokens = targetLc.split(/\s+/).filter(t => t.length >= 2);
+    const targetInEntry = fullTextLc.includes(targetLc) ||
+      (targetTokens.length >= 2 && targetTokens.slice(0, -1).some((tok, i) =>
+        fullTextLc.includes(`${tok} ${targetTokens[i + 1]}`) ||
+        fullTextLc.includes(`${tok}-${targetTokens[i + 1]}`) ||
+        fullTextLc.includes(`${tok}, ${targetTokens[i + 1]}`)
+      ));
 
-          // 重寫 reasoning 用 specific name
-          let newReason;
-          if (r.cls === 'FALSE_HIT') {
-            newReason = `False Hit, because the article specifically concerns "${specName}", whose name or other identifiers differ from the screened subject. This is a single different individual, not the screened target.`;
-          } else if (r.cls === 'IRRELEVANT_MLTF') {
-            newReason = `Irrelevant ML/TF, because the article specifically concerns "${specName}" and contains no ML/TF subject matter affecting the screened target.`;
-          } else {
-            // TRUE_HIT / NO_HIT — 唔好亂改 label,只係 strip plural
-            let trimmedReason = r.reason
-              .replace(/\bthese\s+(?:distinct\s+|different\s+|various\s+|separate\s+)?individuals\b/gi, `this individual ("${specName}")`)
-              .replace(/\bseveral\s+different\s+(?:individuals|people|persons)\b/gi, `this individual ("${specName}")`);
-            console.log(`🔧 Patch #8a [#${r.rank}]: kept ${r.cls}, replaced plural with "${specName}"`);
-            return { ...r, reason: trimmedReason.trim(), _genericRewritten: true, _originalGenericReason: r.reason };
-          }
+    // ────────────────────────────────────────────────────
+    // 🚨 CASE 1: Vague Singular + Target IS in entry
+    //   AI 用 "unspecified party" 嚟避開 call target by name —
+    //   即 target 其實有出現,但 AI 唔肯認。強制 IRRELEVANT_MLTF。
+    // ────────────────────────────────────────────────────
+    if (usesVagueSingular && targetInEntry) {
+      const alternatePattern = /\b(?:alternate|substitute|deputy|acting)\s+director\b/i.test(fullText)
+                            || /\bbeing\s+his\s+(?:alternate|substitute|deputy)\b/i.test(fullText);
+      const successorPattern = /\b(?:succeed|replace|step\s+in\s+for|take\s+over\s+from|appointed?\s+to\s+replace)\b/i.test(fullText);
 
-          console.log(`🔧 Patch #8a [#${r.rank}]: rewrote generic reasoning → specific name "${specName}"`);
-          return { ...r, reason: newReason, _genericRewritten: true, _originalGenericReason: r.reason };
-        });
-      }
+      // 嘗試抽 actual subject(通常喺 "against Mr. X" / "charged Mr. Y" 之後)
+      const subjectMatch = fullText.match(
+        /\b(?:against|charged|laid against|investigation of|prosecution of|sanctions on|sanctioned)\s+(?:Mr\.?|Ms\.?|Mrs\.?|Dr\.?)?\s*([A-Z][A-Za-z\-]+(?:[\s,]+[A-Z][A-Za-z\-]+){1,3})/
+      );
+      const actualSubject = subjectMatch
+        ? subjectMatch[1].replace(/[,;]+$/, '').trim()
+        : (r.actualSubjectName && r.actualSubjectName.trim()) || '';
+
+      let roleDesc = 'a connected party';
+      if (alternatePattern) roleDesc = 'an Alternate Director';
+      else if (successorPattern) roleDesc = 'a successor';
+
+      const newReason = actualSubject
+        ? `Irrelevant ML/TF, because the wrongdoing applies to ${actualSubject}, not to ${searchEntity}, who appears in the article only in the role of ${roleDesc}. There is no ML/TF negative news.`
+        : `Irrelevant ML/TF, because although ${searchEntity} is named in the article, the actual subject of any wrongdoing described is a different party, and ${searchEntity} appears only as ${roleDesc}. There is no ML/TF negative news.`;
+
+      console.log(`🔧 Patch #8a v2 [#${r.rank}]: vague singular + target in entry → IRRELEVANT_MLTF (role=${roleDesc}, subject="${actualSubject || 'unknown'}")`);
+
+      return {
+        ...r,
+        cls: 'IRRELEVANT_MLTF',
+        riskCat: actualSubject ? `N/A (Subject = ${actualSubject})` : 'N/A',
+        identityMatch: 'PARTIAL_MATCH',
+        actualSubjectName: actualSubject || r.actualSubjectName || '',
+        reason: newReason,
+        _vagueRewritten: true,
+        _previousCls: r._previousCls || r.cls,
+      };
+    }
+
+    // ────────────────────────────────────────────────────
+    // CASE 2: Plural 但 entry 真係有 2+ 個人 → 合理,唔改
+    // ────────────────────────────────────────────────────
+    if (usesGenericPlural && uniqueNames.length > 1) return r;
+
+    // ────────────────────────────────────────────────────
+    // CASE 3: Entry 只有 0-1 unique name → template contamination
+    // ────────────────────────────────────────────────────
+    const specName = (r.actualSubjectName && r.actualSubjectName.trim()) || uniqueNames[0] || '';
+
+    if (!specName) {
+      let trimmedReason = r.reason
+        .replace(/\bthese\s+(?:distinct\s+|different\s+|various\s+|separate\s+)?individuals\b/gi, 'this individual')
+        .replace(/\bseveral\s+different\s+(?:individuals|people|persons)\b/gi, 'this individual')
+        .replace(/\bmultiple\s+(?:individuals|people|persons|parties)\b/gi, 'this individual')
+        .replace(/\bvarious\s+(?:individuals|people|persons)\b/gi, 'this individual')
+        .replace(/\bare\s+(?=distinct|different|separate|unrelated)/gi, 'is ')
+        .replace(/\ban?\s+unspecified\s+(?:party|individual|person|entity|director|appointee)\b/gi, 'the named party in this article')
+        .replace(/\ban?\s+(?:unnamed|undisclosed|unknown)\s+(?:party|individual|person|entity)\b/gi, 'the named party in this article');
+      console.log(`🔧 Patch #8a v2 [#${r.rank}]: no specific name → fixed plural/vague → singular`);
+      return { ...r, reason: trimmedReason.trim(), _pluralOnlyFixed: true };
+    }
+
+    let newReason;
+    if (r.cls === 'FALSE_HIT') {
+      newReason = `False Hit, because the article specifically concerns "${specName}", whose name or other identifiers differ from the screened subject. This is a single different individual, not the screened target.`;
+    } else if (r.cls === 'IRRELEVANT_MLTF') {
+      newReason = `Irrelevant ML/TF, because the article specifically concerns "${specName}" and contains no ML/TF subject matter affecting the screened target.`;
+    } else {
+      let trimmedReason = r.reason
+        .replace(/\bthese\s+(?:distinct\s+|different\s+|various\s+|separate\s+)?individuals\b/gi, `this individual ("${specName}")`)
+        .replace(/\bseveral\s+different\s+(?:individuals|people|persons)\b/gi, `this individual ("${specName}")`)
+        .replace(/\ban?\s+unspecified\s+(?:party|individual|person|entity|director|appointee)\b/gi, `"${specName}"`);
+      console.log(`🔧 Patch #8a v2 [#${r.rank}]: kept ${r.cls}, replaced plural/vague with "${specName}"`);
+      return { ...r, reason: trimmedReason.trim(), _genericRewritten: true, _originalGenericReason: r.reason };
+    }
+
+    console.log(`🔧 Patch #8a v2 [#${r.rank}]: rewrote → specific name "${specName}"`);
+    return { ...r, reason: newReason, _genericRewritten: true, _originalGenericReason: r.reason };
+  });
+}
        // ═══════════════════════════════════════════════════════
       // 🆕 PATCH #8b — FIX B: EVIDENCE + PLURAL VERIFICATION
       // (1) actualSubjectName 必須喺 entry snippet 入面真正出現
@@ -3924,86 +3992,127 @@ if (dropped) {
 
 
       // ═══════════════════════════════════════════════════════
-      // 🆕 PATCH #9 v2 — TARGET-IN-ENTRY HARD GUARD (preserves AI reason)
-      // 解決 SERP 全部結果明確 name 咗 target 但被誤標 FALSE_HIT 嘅情況。
-      // KEY: 保留 AI 原本 article-specific 嘅 reason,只將 label
-      //      由 "False Hit," 改為 "Irrelevant ML/TF," / "True Hit,"
-      // ═══════════════════════════════════════════════════════
-      {
-        const targetLc9 = String(searchEntity).toLowerCase().trim();
-        const targetTokens9 = targetLc9.split(/\s+/).filter(tok => tok.length >= 3);
+// 🆕 PATCH #9 v3 — TARGET-IN-ENTRY + ALTERNATE-DIRECTOR HARD GUARD
+//   (1) 🆕 ALTERNATE / SUBSTITUTE / SUCCESSOR DIRECTOR pattern detection
+//       — 即使 explicitlyDifferentEntity 為 true 都 override,因為呢個係
+//          結構性 false-positive(target 在 article 但只係 alternate role)。
+//   (2) 保留原本 fullMatch / tokenSeqMatch logic
+//   (3) 保留 AI 原本 article-specific reasoning
+// ═══════════════════════════════════════════════════════
+{
+  const targetLc9 = String(searchEntity).toLowerCase().trim();
+  const targetTokens9 = targetLc9.split(/\s+/).filter(tok => tok.length >= 3);
 
-        parsed = parsed.map(r => {
-          if (r._manualOverride) return r;
-          if (r.cls !== 'FALSE_HIT') return r;
-          if (r.identityMatch === 'CONTRADICTED') return r;
+  parsed = parsed.map(r => {
+    if (r._manualOverride) return r;
+    if (r.cls !== 'FALSE_HIT') return r;
+    if (r.identityMatch === 'CONTRADICTED') return r;
 
-          // Expanded entryText: 加 actualSubjectName + reason,
-          // catch AI 將 target 名只寫喺 reason 嘅情況
-          const entryText = `${r.title || ''} ${r.snippet || ''} ${r.nameInResult || ''} ${r.actualSubjectName || ''} ${r.reason || ''}`.toLowerCase();
+    const entryText = `${r.title || ''} ${r.snippet || ''} ${r.nameInResult || ''} ${r.actualSubjectName || ''} ${r.reason || ''}`.toLowerCase();
+    const articleText = `${r.title || ''} ${r.snippet || ''}`;
 
-          // 🚨 Guard: AI 明確話 "different entity" → 信佢,保持 FALSE_HIT
-          const reasonLcCheck = String(r.reason || '').toLowerCase();
-          const explicitlyDifferentEntity =
-            /\b(?:a |the )?different (person|individual|entity|party|company|organisation|organization)\b/.test(reasonLcCheck) ||
-            /\bnot the (same|screened) (target|subject|individual|person|entity)\b/.test(reasonLcCheck) ||
-            /\b(?:shares?|share) the same name\b/.test(reasonLcCheck) ||
-            /\bhappens to (share|have)\b/.test(reasonLcCheck) ||
-            /\bdistinct (from|to)\b/.test(reasonLcCheck);
+    // Token match(支援 hyphen / comma:"KWOK Kai-fai, Adam")
+    const fullMatch = entryText.includes(targetLc9);
+    const tokenSeqMatch = targetTokens9.length >= 2 &&
+      targetTokens9.slice(0, -1).some((tok, i) => {
+        const next = targetTokens9[i + 1];
+        return entryText.includes(`${tok} ${next}`)
+            || entryText.includes(`${tok}-${next}`)
+            || entryText.includes(`${tok}, ${next}`);
+      });
 
-          if (explicitlyDifferentEntity) {
-            console.log(`⏭️ Patch #9 [#${r.rank}]: skipped — AI explicitly stated different entity`);
-            return r;
-          }
+    // ────────────────────────────────────────────────────
+    // 🚨 NEW: ALTERNATE DIRECTOR HARD GATE
+    //   即使 AI 講 "different entity",只要 article 結構係
+    //   alternate / substitute / deputy / successor pattern
+    //   + target name 喺 entry 入面 → 強制 IRRELEVANT_MLTF
+    // ────────────────────────────────────────────────────
+    const alternatePattern =
+      /\b(?:alternate|substitute|deputy|acting)\s+director\b/i.test(articleText) ||
+      /\bbeing\s+his\s+(?:alternate|substitute|deputy|acting)\b/i.test(articleText) ||
+      /\bappoint(?:ed|ment)?\s+(?:as\s+)?(?:the\s+)?(?:alternate|substitute|deputy)\b/i.test(articleText) ||
+      /\bcease[sd]?\s+to\s+be\s+the\s+(?:alternate|substitute|deputy)\b/i.test(articleText);
 
-          // Strict: 完整 target 字串出現
-          const fullMatch = entryText.includes(targetLc9);
+    if (alternatePattern && (fullMatch || tokenSeqMatch)) {
+      // 抽 principal director(真正被告)
+      const principalMatch = articleText.match(
+        /\b(?:against|charged|laid against|investigation of|prosecution of|sanctions on|sanctioned)\s+(?:Mr\.?|Ms\.?|Mrs\.?|Dr\.?)?\s*([A-Z][A-Za-z\-]+(?:[\s,]+[A-Z][A-Za-z\-]+){1,3})/
+      );
+      const actualSubject = principalMatch
+        ? principalMatch[1].replace(/[,;]+$/, '').trim()
+        : (r.actualSubjectName && r.actualSubjectName.trim()) || '';
 
-          // Lenient: 2+ 連續 token 出現
-          const tokenSeqMatch = targetTokens9.length >= 2 &&
-            targetTokens9.slice(0, -1).some((tok, i) =>
-              entryText.includes(`${tok} ${targetTokens9[i + 1]}`)
-            );
+      const hasMLTFKeywords = r.matchedKeywords && r.matchedKeywords.length > 0;
+      const newReason = actualSubject
+        ? `Irrelevant ML/TF, because the wrongdoing applies to ${actualSubject}, not to ${searchEntity}, who appears in the article only in the role of Alternate Director. There is no ML/TF negative news.`
+        : `Irrelevant ML/TF, because although ${searchEntity} is named in this regulatory disclosure, the role described is solely as an Alternate Director, and the actual subject of any wrongdoing is a different party (the principal director). There is no ML/TF negative news.`;
 
-          if (!fullMatch && !tokenSeqMatch) {
-            console.log(`⚠️ Patch #9 [#${r.rank}]: target "${searchEntity}" NOT detected anywhere → leaving as FALSE_HIT`);
-            return r;
-          }
+      console.log(`🔒 Patch #9 v3 [#${r.rank}]: ALTERNATE DIRECTOR detected → IRRELEVANT_MLTF (subject="${actualSubject || 'principal director'}", hadKeywords=${hasMLTFKeywords})`);
 
-          // ✅ Target 確實喺 entry 入面 → FALSE_HIT 錯,要修正
-          const hasMLTFKeywords = r.matchedKeywords && r.matchedKeywords.length > 0;
-          const newCls = hasMLTFKeywords ? 'TRUE_HIT' : 'IRRELEVANT_MLTF';
-          const newLabel = newCls === 'TRUE_HIT' ? 'True Hit' : 'Irrelevant ML/TF';
+      return {
+        ...r,
+        cls: 'IRRELEVANT_MLTF',
+        identityMatch: 'PARTIAL_MATCH',
+        actualSubjectName: actualSubject || '',
+        riskCat: actualSubject ? `N/A (Subject = ${actualSubject})` : 'N/A',
+        reason: newReason,
+        _alternateDirectorForced: true,
+        _previousCls: r._previousCls || r.cls,
+      };
+    }
 
-          // 🎯 KEY FIX: 保留 AI 原本 article-specific reasoning
-          // 1) 剝走舊 label 前綴 (e.g. "False Hit, ")
-          // 2) 剝走可能存在嘅 "because " 前綴
-          // 3) 用新 label 重新組合,保留 AI 嘅具體論述
-          let originalBody = String(r.reason || '').trim();
-          originalBody = originalBody.replace(/^(False Hit|True Hit|No Hit|Irrelevant ML\/TF)\s*[,:]\s*/i, '');
-          originalBody = originalBody.replace(/^because\s+/i, '');
+    // ────────────────────────────────────────────────────
+    // 原本 explicitlyDifferentEntity guard
+    // ────────────────────────────────────────────────────
+    const reasonLcCheck = String(r.reason || '').toLowerCase();
+    const explicitlyDifferentEntity =
+      /\b(?:a |the )?different (person|individual|entity|party|company|organisation|organization)\b/.test(reasonLcCheck) ||
+      /\bnot the (same|screened) (target|subject|individual|person|entity)\b/.test(reasonLcCheck) ||
+      /\b(?:shares?|share) the same name\b/.test(reasonLcCheck) ||
+      /\bhappens to (share|have)\b/.test(reasonLcCheck) ||
+      /\bdistinct (from|to)\b/.test(reasonLcCheck);
 
-          // 如果 AI 原本 reason 夠詳細 → 保留;否則 fallback 至 generic template
-          const newReason = originalBody.length >= 30
-            ? `${newLabel}, because ${originalBody}`
-            : (hasMLTFKeywords
-                ? `${newLabel}, because "${searchEntity}" is explicitly named in this result and ML/TF-related keywords are present in the article concerning this entity.`
-                : `${newLabel}, because "${searchEntity}" is explicitly named in this result but no ML/TF-related content concerning the target is present.`);
+    if (explicitlyDifferentEntity) {
+      console.log(`⏭️ Patch #9 [#${r.rank}]: skipped — AI explicitly stated different entity`);
+      return r;
+    }
 
-          console.log(`🔒 Patch #9 [#${r.rank}]: FALSE_HIT → ${newCls} (preserved AI body: ${originalBody.length} chars)`);
+    if (!fullMatch && !tokenSeqMatch) {
+      console.log(`⚠️ Patch #9 [#${r.rank}]: target "${searchEntity}" NOT detected → leaving as FALSE_HIT`);
+      return r;
+    }
 
-          return {
-            ...r,
-            cls: newCls,
-            identityMatch: r.identityMatch === 'NO_INFO' ? 'PARTIAL_MATCH' : r.identityMatch,
-            actualSubjectName: '',
-            riskCat: hasMLTFKeywords ? r.riskCat : 'N/A',
-            reason: newReason,
-            _targetInSnippetForced: true,
-            _previousCls: r._previousCls || r.cls,
-          };
-        });
-      }
+    // Target 喺 entry 入面 → FALSE_HIT 錯
+    const hasMLTFKeywords = r.matchedKeywords && r.matchedKeywords.length > 0;
+    const newCls = hasMLTFKeywords ? 'TRUE_HIT' : 'IRRELEVANT_MLTF';
+    const newLabel = newCls === 'TRUE_HIT' ? 'True Hit' : 'Irrelevant ML/TF';
+
+    let originalBody = String(r.reason || '').trim();
+    originalBody = originalBody.replace(/^(False Hit|True Hit|No Hit|Irrelevant ML\/TF)\s*[,:]\s*/i, '');
+    originalBody = originalBody.replace(/^because\s+/i, '');
+    // 🆕 預先 strip suffix,避免重複拼接
+    originalBody = originalBody.replace(/\s*There\s+is\s+no\s+ML\/TF\s+negative\s+news\.?\s*$/i, '').trim();
+
+    const newReason = originalBody.length >= 30
+      ? `${newLabel}, because ${originalBody}`
+      : (hasMLTFKeywords
+          ? `${newLabel}, because "${searchEntity}" is explicitly named in this result and ML/TF-related keywords are present in the article concerning this entity.`
+          : `${newLabel}, because "${searchEntity}" is explicitly named in this result but no ML/TF-related content concerning the target is present.`);
+
+    console.log(`🔒 Patch #9 v3 [#${r.rank}]: FALSE_HIT → ${newCls} (preserved AI body: ${originalBody.length} chars)`);
+
+    return {
+      ...r,
+      cls: newCls,
+      identityMatch: r.identityMatch === 'NO_INFO' ? 'PARTIAL_MATCH' : r.identityMatch,
+      actualSubjectName: '',
+      riskCat: hasMLTFKeywords ? r.riskCat : 'N/A',
+      reason: newReason,
+      _targetInSnippetForced: true,
+      _previousCls: r._previousCls || r.cls,
+    };
+  });
+}
 
      // ═══════════════════════════════════════════════════════
       // 🆕 PATCH #10 v2 — TOKEN-COUNT SUPERSET FINAL ENFORCER
@@ -4226,6 +4335,52 @@ if (isSanction) {
   console.log(`🛡️ Sanction-mode normalization: scrubbed ML/TF wording from ${parsed.length} item(s)`);
 }
 
+// ═══════════════════════════════════════════════════════
+// 🆕 FIX C — RESIDUAL SUFFIX SANITISER
+// 當 label 由 IRRELEVANT_MLTF 改成 FALSE_HIT / TRUE_HIT / NO_HIT 時,
+// 原本嘅 mandatory suffix(" There is no ML/TF negative news." /
+// " There is no sanctions violations.")應該被 strip 走。
+// 必須喺 CENTRAL SUFFIX PASS 之前 run。
+// ═══════════════════════════════════════════════════════
+{
+  const SUFFIX_PATTERNS = [
+    /\s*There\s+is\s+no\s+ML\/TF\s+negative\s+news\.?\s*$/i,
+    /\s*There\s+is\s+no\s+sanctions\s+violations?\.?\s*$/i,
+    /\s*There\s+(?:is|are)\s+no\s+(?:relevant\s+)?(?:ML\/TF|sanctions|adverse|negative)\s+[^.]*\.?\s*$/i,
+  ];
+
+  let strippedCount = 0;
+  parsed = parsed.map(r => {
+    // IRRELEVANT_MLTF / IRRELEVANT_SANCTION 應該保留 suffix
+    if (r.cls === 'IRRELEVANT_MLTF') return r;
+
+    let cleaned = String(r.reason || '');
+    let didStrip = false;
+    for (const pat of SUFFIX_PATTERNS) {
+      if (pat.test(cleaned)) {
+        cleaned = cleaned.replace(pat, '').trim();
+        didStrip = true;
+      }
+    }
+
+    if (!didStrip) return r;
+
+    // 確保結尾有句號
+    if (cleaned && !/[.!?]$/.test(cleaned)) cleaned += '.';
+
+    strippedCount++;
+    console.log(`🧼 Fix C [#${r.rank}]: stripped residual IRRELEVANT suffix from ${r.cls} reason`);
+    return { ...r, reason: cleaned, _residualSuffixStripped: true };
+  });
+
+  if (strippedCount > 0) {
+    console.log(`🧼 Fix C summary: ${strippedCount} item(s) had residual suffix stripped`);
+  }
+}
+
+
+
+      
 // ═══════════════════════════════════════════════════════
 // 🆕 CENTRAL SUFFIX PASS — Mode-aware
 // 確保每條 IRRELEVANT_MLTF reason 末尾都有 mode-specific suffix:
