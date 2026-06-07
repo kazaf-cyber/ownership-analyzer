@@ -1416,9 +1416,14 @@ ${(articleBody || '').slice(0, 12000)}
   "nameMatch": "<one of: EXACT | VARIANT | SUPERSET | DIFFERENT | ABSENT>",
   "nameMatchReason": "<one short sentence justifying nameMatch>",
 
-  "kycContradiction": "<if KYC info EXPLICITLY contradicts the article's named party (different DOB, nationality, jurisdiction, etc.), describe in one sentence; else empty string>",
+  "kycContradiction": "<if KYC info EXPLICITLY contradicts the article's named party, describe in one sentence; else empty string>",
 
   "articleGenre": "<one of: news | regulatory_filing | academic | court_judgment | fiction | social_media | directory_profile | self_published | fraud_alert | violation_tracker | other>",
+
+  "articleDate": "<the publication or filing date of THIS article in YYYY-MM-DD; 'unknown' if not stated>",
+  "publisher": "<the issuing organisation, regulator, or news outlet for THIS article, e.g. 'HKEXnews', 'SEC', 'Reuters', 'Sun Hung Kai Properties (annual report)'; empty string if unknown>",
+  "specificEvent": "<ONE short phrase (max 15 words) describing the SPECIFIC event THIS article documents — must differentiate it from any other article about the same matter. Examples: 'appointment of Adam Kwok as Alternate Director following ICAC investigation of Thomas Kwok', 'cessation of Adam Kwok's Alternate Director role on 19 Dec 2014', 'proxy advisor's recommendation against Adam Kwok's re-election', 'mention in 2024/25 annual governance report'. Avoid generic phrases like 'governance disclosure'.>",
+  "targetActionInArticle": "<the SPECIFIC action/status the article attributes to the screened target in 5-10 words, e.g. 'appointed as Alternate Director', 'ceased to be Alternate Director', 'recommended against by ISS', 'listed in board composition table'>",
 
   "wrongdoingDescribed": <true if the article describes any wrongdoing, investigation, allegation, charge, conviction, or designation; false otherwise>,
   "wrongdoingType": "<one of: money_laundering | sanctions | bribery | fraud | tax_evasion | terrorist_financing | export_control | customs_fraud | civil_dispute | regulatory_violation | environmental | none | other>",
@@ -1434,19 +1439,16 @@ ${(articleBody || '').slice(0, 12000)}
 # DEFINITIONS
 
 nameMatch:
-  EXACT     — exact same name as target, OR same name with only hyphen/comma/case/space differences, OR trivial corporate-suffix variant (Ltd / Limited / Inc).
-              ✅ "Kwok Kai fai Adam" ↔ "KWOK Kai-fai, Adam" → EXACT
-              ✅ "Alpha Holdings Ltd" ↔ "Alpha Holdings Limited" → EXACT
-  VARIANT   — same person with surname-order swap (e.g. "Chan Tai Man" ↔ "Tai Man Chan").
-  SUPERSET  — article name has STRICTLY MORE name tokens than target (e.g. target="Steven Andrew", article="Steven Andrew Leach"). NOT a match.
-  DIFFERENT — shares some tokens but is clearly a different person/entity (different jurisdiction, industry, identifiers).
-  ABSENT    — target name does not appear in the body at all.
+  EXACT     — exact same name, OR same name with only hyphen/comma/case/space differences, OR trivial corporate-suffix variant (Ltd / Limited / Inc).
+  VARIANT   — same person with surname-order swap.
+  SUPERSET  — article name has STRICTLY MORE name tokens than target. NOT a match.
+  DIFFERENT — shares some tokens but is clearly a different person/entity.
+  ABSENT    — target name does not appear in the body.
 
 targetRole:
   subject              — target IS the wrongdoer / investigated / charged / sanctioned party.
-  successor            — target REPLACES the subject (e.g. "X appointed to replace Y, who was investigated").
+  successor            — target REPLACES the subject.
   alternate            — target is alternate / substitute / deputy director of the subject.
-                         e.g. "Mr. A charged; Mr. B being his Alternate Director" → B's role = alternate, subject = A.
   victim               — target is the victim.
   witness              — target is interviewee, commentator, or expert only.
   plaintiff            — target is the plaintiff / employer suing someone else.
@@ -1457,9 +1459,9 @@ targetRole:
 
 # CRITICAL RULES
 1. Trace pronouns to their antecedent. "He replaces X, who was charged" — "he" = target, "X" = subject. Target is SUCCESSOR.
-2. The actualSubjectName field MUST contain a name that literally appears in THIS article's body. If you cannot find one, leave it empty.
-3. Output JSON only.`;
-}
+2. actualSubjectName MUST contain a name that literally appears in THIS article's body.
+3. specificEvent and targetActionInArticle MUST be unique enough that two different articles about the same overall matter would still produce DIFFERENT phrasings.
+4. Output JSON only.`;
 
 async function extractArticleFacts({ targetName, kycInfo, article, apiKey }) {
   try {
@@ -1609,6 +1611,36 @@ function classifyFromFacts({ facts, targetName, mode }) {
     };
   }
 
+  // 🆕 Helper: build article-specific context clause
+  const buildContextClause = () => {
+    const parts = [];
+    if (facts.articleDate && facts.articleDate !== 'unknown' && facts.articleDate.trim()) {
+      parts.push(`dated ${facts.articleDate}`);
+    }
+    if (facts.publisher && facts.publisher.trim()) {
+      parts.push(`issued by ${facts.publisher}`);
+    }
+    return parts.length > 0 ? ` (${parts.join(', ')})` : '';
+  };
+
+  const buildEventClause = () => {
+    if (facts.specificEvent && facts.specificEvent.trim()) {
+      return ` Specifically, this article documents: ${facts.specificEvent}.`;
+    }
+    return '';
+  };
+
+  const buildTargetActionClause = () => {
+    if (facts.targetActionInArticle && facts.targetActionInArticle.trim()) {
+      return ` The target's role here is: ${facts.targetActionInArticle}.`;
+    }
+    return '';
+  };
+
+  const contextClause = buildContextClause();
+  const eventClause = buildEventClause();
+  const actionClause = buildTargetActionClause();
+
   // ── RULE 6 — No wrongdoing OR out of ML/TF scope → IRRELEVANT
   if (!facts.wrongdoingDescribed || !facts.wrongdoingInMLTFScope) {
     const scopeNote = facts.wrongdoingDescribed
@@ -1616,7 +1648,7 @@ function classifyFromFacts({ facts, targetName, mode }) {
       : ' The article does not describe any wrongdoing concerning the target.';
     return {
       cls: 'IRRELEVANT_MLTF',
-      reason: `${irrelevantLabel}, because ${genreText[facts.articleGenre]} and the screened target appears in the role of ${roleText[facts.targetRole] || 'a connected party'}.${scopeNote}${suffix}`,
+      reason: `${irrelevantLabel}, because ${genreText[facts.articleGenre]}${contextClause} and the screened target appears in the role of ${roleText[facts.targetRole] || 'a connected party'}.${actionClause}${eventClause}${scopeNote}${suffix}`,
       riskCat: 'N/A',
       identityMatch: 'PARTIAL_MATCH',
       actualSubjectName: '',
@@ -1631,7 +1663,7 @@ function classifyFromFacts({ facts, targetName, mode }) {
       : '';
     return {
       cls: 'IRRELEVANT_MLTF',
-      reason: `${irrelevantLabel}, because although the article describes ${wrongdoingText[facts.wrongdoingType] || 'wrongdoing'}, the screened target "${targetName}" appears only as ${roleText[facts.targetRole] || 'a connected party'}.${subjectClause}${suffix}`,
+      reason: `${irrelevantLabel}, because although the article${contextClause} describes ${wrongdoingText[facts.wrongdoingType] || 'wrongdoing'}, the screened target "${targetName}" appears only as ${roleText[facts.targetRole] || 'a connected party'}.${actionClause}${eventClause}${subjectClause}${suffix}`,
       riskCat: facts.actualSubjectName ? `N/A (Subject = ${facts.actualSubjectName})` : 'N/A',
       identityMatch: 'PARTIAL_MATCH',
       actualSubjectName: facts.actualSubjectName || '',
@@ -1645,13 +1677,12 @@ function classifyFromFacts({ facts, targetName, mode }) {
     : '';
   return {
     cls: 'TRUE_HIT',
-    reason: `True Hit, because the screened target "${targetName}" is the direct subject of ${wrongdoingText[facts.wrongdoingType] || 'wrongdoing'} described in this article.${ev}`,
+    reason: `True Hit, because the screened target "${targetName}" is the direct subject of ${wrongdoingText[facts.wrongdoingType] || 'wrongdoing'} described in this article${contextClause}.${actionClause}${eventClause}${ev}`,
     riskCat: mapRiskCat(),
     identityMatch: 'FULL_MATCH',
     actualSubjectName: '',
     _factsConfidence: facts.factsConfidence,
   };
-}
 
 /* ════════════════════════════════════════════════════════════════
    END TWO-PASS ARCHITECTURE
