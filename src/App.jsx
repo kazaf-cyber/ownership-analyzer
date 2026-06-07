@@ -1394,7 +1394,53 @@ It contains the title line + source + breadcrumb + snippet (often ending in "...
   ✅ "Kwok Kai fai Adam" ↔ "KWOK Kai-fai, Adam" → 4 tokens identical → nameMatch = EXACT
 • If the snippet shows target as "Alternate / Successor / Deputy / Replacing" the real subject,
   set targetRole = "alternate" or "successor", and actualSubjectName = the named real subject.
-• Lower factsConfidence (0.5 – 0.7) only when role is GENUINELY ambiguous in the snippet text.`;
+• Lower factsConfidence (0.5 – 0.7) only when role is GENUINELY ambiguous in the snippet text.
+
+🔑 MANDATORY FIELDS FROM SNIPPETS — these PREVENT identical reasons across results:
+
+(1) publisher — ALWAYS extract from the FIRST line of the snippet block (above the URL/breadcrumb).
+  Examples: "HKEXnews", "etnet 經濟通", "Sun Hung Kai Properties", "MarketScreener",
+  "iFAST Global Markets", "SEC.gov", "Reuters", "South China Morning Post".
+  The Source header above is only a hint — extract from the snippet body itself.
+
+(2) articleDate (YYYY-MM-DD) — Scan the snippet body for the FIRST date pattern:
+  - Chinese: "YYYY年MM月DD日" → convert (e.g. "2014年12月19日" → "2014-12-19")
+  - ISO:     "YYYY-MM-DD" or "YYYY/MM/DD"
+  - English: "Month DD, YYYY" → convert
+  NEVER return "unknown" if any date pattern is visible in the snippet.
+
+(3) specificEvent (≤15 words, MUST BE UNIQUE across results in this search)
+  Compose: <date if known> + <verb/event from snippet> + <target's role>.
+  ✅ GOOD (each is differentiating):
+   - "2014-12-19 cessation of Adam Kwok's Alternate Director role following ICAC matter"
+   - "2012-07-13 initial appointment of Adam Kwok as Alternate Director during Thomas Kwok's ICAC investigation"
+   - "Adam Kwok listed as Alternate Director in SHKP 2024/25 Corporate Governance Report"
+   - "ISS proxy advisor recommendation against Adam Kwok's executive director re-election"
+   - "Adam Kwok's 160,000-share long position disclosure on HKEXnews"
+  ❌ BAD (too generic, would collide with other results):
+   - "Adam Kwok mentioned in corporate document"
+   - "Director information disclosure"
+
+(4) targetActionInArticle (5-10 words — the SPECIFIC verb-phrase about the target)
+  Examples: "appointed as Alternate Director", "ceased to be Alternate Director",
+  "listed in shareholding table with 160,000 long position",
+  "voted against by ISS proxy advisor", "named in board composition disclosure".
+
+(5) wrongdoingDescribed + targetRole CONSISTENCY:
+  • If the snippet mentions "Bribery Ordinance", "ICAC", "Independent Commission Against Corruption",
+    "Prevention of Bribery", "fraud charges", "criminal prosecution", "released on bail",
+    → wrongdoingDescribed = true.
+  • If wrongdoingDescribed = true AND target is shown as Alternate/Successor of another NAMED person
+    (e.g. "KWOK Kai-fai, Adam being his Alternate Director" where "his" refers to KWOK Ping-luen),
+    → targetRole = "alternate"/"successor", and actualSubjectName = that other NAMED person.
+  • If target appears ONLY in a shareholding / voting / board-list table with NO wrongdoing context,
+    → targetRole = "passing_mention", wrongdoingDescribed = false.
+
+⚠️ ANTI-DUPLICATION RULE
+   No two results in the same search should produce IDENTICAL (publisher, articleDate, specificEvent) triples.
+   If two snippets cover the same underlying matter (e.g. Thomas Kwok's ICAC case), pick the
+   DIFFERENTIATING facet for specificEvent (appointment vs cessation vs annual report mention vs
+   shareholding disclosure vs proxy voting).`;
 
   return `# TARGET
 Name: "${targetName}"
@@ -1701,7 +1747,7 @@ function classifyFromFacts({ facts, targetName, mode }) {
     self_published: "this is the entity's own self-published content",
     fraud_alert: 'this is a fraud-alert warning issued by the named organisation against third-party impersonators',
     violation_tracker: 'this is a corporate violations tracker page',
-    other: 'this article',
+    other: 'this is a publicly accessible article',
   };
 
   const mapRiskCat = () => {
