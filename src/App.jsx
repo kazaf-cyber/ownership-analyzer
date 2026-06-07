@@ -2813,7 +2813,7 @@ const fullPrompt = buildAIPrompt(searchEntity, enrichedContent, resultCount, has
             { role: 'user', content: fullPrompt }
           ],
           temperature: 0.05,
-          max_tokens: 32768
+          max_tokens: 32768,
           response_format: { type: 'json_object' }
         })
       });
