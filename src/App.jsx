@@ -986,15 +986,71 @@ function cleanGooglePdfText(rawText) {
   return text.trim();
 }
 
-
 /**
- * Fallback when /api/scrape fails: slice the PDF text around a URL's
- * breadcrumb/anchor to give Pass 1 something to work with.
+ * 🆕 FIX B — Rank-aligned PDF segmentation for Google SERP PDFs.
  *
- * Google SERP PDF 結構:每個 result 大約佔 200~500 chars,
- * 由 publisher icon → title → URL/breadcrumb → snippet 組成。
- * 用 URL/breadcrumb 嘅位置做錨點,前後切一塊出嚟。
+ * PROBLEM: findArticleContextInPdf() probes the PDF text by URL path
+ *   fragments. When two results share the same domain (e.g. 3x HKEXnews,
+ *   2x SHKP.com), or when path probes fall back to bare hostname,
+ *   results 1, 4, 5, etc. all hit the SAME PDF position → all get the
+ *   same snippet → cross-contaminated reasons in the final output.
+ *
+ * SOLUTION: Pre-slice the PDF into N blocks ONCE, in display order.
+ *   Each block = [previous breadcrumb line .. next breadcrumb line - 1],
+ *   with a 6-line look-back to capture the title above the breadcrumb.
+ *   Articles then use pdfBlocks[rank - 1] — GUARANTEED unique per rank.
  */
+function sliceSerpPdfByResultBlocks(pdfText) {
+  if (!pdfText) return [];
+
+  const lines = pdfText.split('\n');
+  const anchorLineIndices = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (trimmed.length < 8 || trimmed.length > 250) continue;
+
+    // Anchor = line that looks like a breadcrumb ("domain.tld › path")
+    //          OR a bare http(s) URL inside a SERP result.
+    const hasBreadcrumb = /[a-z0-9][a-z0-9-]*\.[a-z]{2,}.*\s*›/i.test(trimmed);
+    const hasUrl = /https?:\/\/[a-z0-9]/i.test(trimmed);
+    if (!hasBreadcrumb && !hasUrl) continue;
+
+    // Skip Google infrastructure anchors (search results page UI)
+    const lc = trimmed.toLowerCase();
+    if (lc.includes('google.com/search') ||
+        lc.includes('googleadservices') ||
+        lc.includes('gstatic.com') ||
+        lc.includes('accounts.google') ||
+        lc.includes('support.google') ||
+        lc.includes('policies.google') ||
+        lc.includes('maps.google') ||
+        lc.includes('translate.google')) continue;
+
+    anchorLineIndices.push(i);
+  }
+
+  if (anchorLineIndices.length === 0) return [];
+
+  const blocks = [];
+  for (let k = 0; k < anchorLineIndices.length; k++) {
+    const anchorIdx = anchorLineIndices[k];
+    // Include up to 6 lines BEFORE this anchor (title sits above breadcrumb)
+    const lookbackFloor = k === 0 ? 0 : anchorLineIndices[k - 1] + 1;
+    const start = Math.max(lookbackFloor, anchorIdx - 6);
+    // Up to the line BEFORE the next anchor
+    const end = k < anchorLineIndices.length - 1 ? anchorLineIndices[k + 1] : lines.length;
+
+    const block = lines.slice(start, end).join('\n').trim();
+    if (block.length >= 20) blocks.push(block);
+  }
+
+  console.log(`📦 FIX B: SERP PDF sliced into ${blocks.length} per-rank blocks (${anchorLineIndices.length} breadcrumb anchors detected)`);
+  return blocks;
+}
+
+
+function findArticleContextInPdf(pdfText, url) {
 function findArticleContextInPdf(pdfText, url) {
   if (!pdfText || !url) return '';
   try {
@@ -1898,6 +1954,65 @@ function classifyFromFacts({ facts, targetName, mode }) {
    ════════════════════════════════════════════════════════════════ */
 
 
+/* ════════════════════════════════════════════════════════════════
+   🆕 FIX A — JS-LEVEL NAME-TOKEN OVERRIDE
+   
+   Hard rule (user requirement):
+     If all target name tokens literally appear in the article body
+     (case/hyphen/comma/space-insensitive), the result CANNOT be
+     FALSE_HIT. The AI sometimes returns targetMentioned=false even
+     when the snippet clearly shows "KWOK Kai-fai, Adam" — this
+     override patches that failure deterministically.
+   ════════════════════════════════════════════════════════════════ */
+
+function tokenizeName(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')   // strip punctuation (hyphens, commas, etc.)
+    .split(/\s+/)
+    .filter(t => t.length >= 2);
+}
+
+function preCheckTargetMentioned(facts, targetName, body) {
+  if (!facts || !targetName || !body) return facts;
+
+  const targetTokens = tokenizeName(targetName);
+  if (targetTokens.length < 2) return facts;     // need ≥2 tokens to be meaningful
+
+  const bodyLc = String(body)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ');          // normalise punctuation in body too
+
+  const allTokensPresent = targetTokens.every(tok => bodyLc.includes(tok));
+
+  // CASE 1 — AI said "not mentioned" / ABSENT but tokens ARE present → OVERRIDE
+  if (allTokensPresent && (!facts.targetMentioned || facts.nameMatch === 'ABSENT' || facts.targetRole === 'not_present')) {
+    console.log(`🔧 FIX A: Overriding targetMentioned=false → true (all ${targetTokens.length} tokens [${targetTokens.join(', ')}] present in body)`);
+    return {
+      ...facts,
+      targetMentioned: true,
+      nameMatch: 'EXACT',
+      nameInArticle: facts.nameInArticle || targetName,
+      targetRole: facts.targetRole === 'not_present' ? 'passing_mention' : (facts.targetRole || 'passing_mention'),
+      nameMatchReason: `JS-level token-equivalence override: all ${targetTokens.length} target name tokens (${targetTokens.join(', ')}) literally appear in the article body. ${facts.nameMatchReason || ''}`.trim(),
+    };
+  }
+
+  // CASE 2 — AI flagged SUPERSET/DIFFERENT but ALL tokens of the target are still present
+  //          → at minimum, prevent FALSE_HIT (downgrade to EXACT match, let Rule 6/7 take it to IRRELEVANT)
+  if (allTokensPresent && (facts.nameMatch === 'SUPERSET' || facts.nameMatch === 'DIFFERENT')) {
+    console.log(`🔧 FIX A: Overriding nameMatch=${facts.nameMatch} → EXACT (all target tokens present; strict rule forbids FALSE_HIT)`);
+    return {
+      ...facts,
+      targetMentioned: true,
+      nameMatch: 'EXACT',
+      nameMatchReason: `JS-level token-equivalence override: although AI flagged ${facts.nameMatch}, all ${targetTokens.length} target name tokens (${targetTokens.join(', ')}) are literally present in the body, so this CANNOT be a False Hit. ${facts.nameMatchReason || ''}`.trim(),
+    };
+  }
+
+  return facts;
+}
+
 
 /* ========== GENERIC SCREENING COMPONENT (shared by Adverse Media & Sanction) ========== */
 
@@ -2616,6 +2731,15 @@ if (embeddedUrls.size >= 3) {
 console.log(`🔗 Final anchor list (${resultUrls.length} item(s)):`);
 resultUrls.forEach((a, i) => console.log(`  [${String(i+1).padStart(2,'0')}] ${a}`));
 
+// 🆕 FIX B: Pre-slice PDF into per-rank snippet blocks (deterministic,
+//          no URL-fuzzy-probe collision across same-domain results)
+const pdfBlocks = sliceSerpPdfByResultBlocks(pdfText);
+if (pdfBlocks.length !== resultUrls.length) {
+  console.warn(`⚠️ FIX B: pdfBlocks=${pdfBlocks.length} ≠ anchors=${resultUrls.length} — will fall back to URL-probe for missing ranks`);
+} else {
+  console.log(`✅ FIX B: rank↔block alignment is 1:1`);
+}
+
  // ═══════════════════════════════════════════════════════════
 // 🔧 F.6+R: Resolve → Scrape pipeline (Option B)
 // ═══════════════════════════════════════════════════════════
@@ -2808,23 +2932,41 @@ PAGE-CONTENT SCRAPING:
       }
       console.log(`📚 Two-pass: have ${pageContentMap.size} full-page bodies`);
 
-      // Build per-article input list (1 article per URL/anchor)
+     // Build per-article input list (1 article per URL/anchor)
+      // 🆕 FIX B: body source priority is now:
+      //    (1) scraped full page  →  (2) rank-aligned PDF block  →  (3) URL-probed PDF context
+      //    Step (2) is the FIX — it guarantees each rank gets a UNIQUE snippet
+      //    even when multiple results share the same domain.
       const articles = resultUrls.map((url, i) => {
-  const scraped = pageContentMap.get(url) || '';
-  const hasFullBody = scraped.length >= 200;
-  // 🆕 Scrape 失敗時,fallback 去用 PDF snippet block
-  const snippet = hasFullBody ? '' : findArticleContextInPdf(pdfText, url);
+        const scraped = pageContentMap.get(url) || '';
+        const hasFullBody = scraped.length >= 200;
 
-  return {
-    rank: i + 1,
-    url,
-    title: '',
-    source: '',
-    body: hasFullBody ? scraped : (snippet || '(No content available for this URL)'),
-    hasFullBody,
-    bodySource: hasFullBody ? 'scraped' : (snippet ? 'pdf-snippet' : 'none'),
-  };
-});
+        let snippet = '';
+        let bodySource = 'none';
+
+        if (hasFullBody) {
+          bodySource = 'scraped';
+        } else if (pdfBlocks[i] && pdfBlocks[i].length >= 50) {
+          snippet = pdfBlocks[i];
+          bodySource = 'pdf-block-rank';                    // 🆕 deterministic per-rank
+        } else {
+          const probed = findArticleContextInPdf(pdfText, url) || '';
+          if (probed) {
+            snippet = probed;
+            bodySource = 'pdf-probe-fallback';
+          }
+        }
+
+        return {
+          rank: i + 1,
+          url,
+          title: '',
+          source: '',
+          body: hasFullBody ? scraped : (snippet || '(No content available for this URL)'),
+          hasFullBody,
+          bodySource,
+        };
+      });
 
 // 🆕 Debug log:確認 fallback 有 work
 const sources = articles.reduce((a, x) => { a[x.bodySource]++; return a; }, { scraped: 0, 'pdf-snippet': 0, none: 0 });
@@ -2881,7 +3023,8 @@ console.log(`📦 Article body sources:`, sources);
           };
         }
 
-        const facts = fr.value;
+        // 🆕 FIX A: name-token override BEFORE classification
+        const facts = preCheckTargetMentioned(fr.value, searchEntity, articles[i].body);
         const cls = classifyFromFacts({ facts, targetName: searchEntity, mode });
 
         return {
@@ -2964,8 +3107,11 @@ console.log(`📦 Article body sources:`, sources);
               console.warn(`   ⚠️ Re-extraction failed for rank ${item.rank} — keeping original`);
               return;
             }
-            const newFacts = r.value;
+           // 🆕 FIX A: name-token override BEFORE re-classification
+            const articleForBody = articles.find(a => a.rank === item.rank);
+            const newFacts = preCheckTargetMentioned(r.value, searchEntity, articleForBody?.body || '');
             const newCls = classifyFromFacts({ facts: newFacts, targetName: searchEntity, mode });
+            
             const idx = parsed.findIndex(p => p.rank === item.rank);
             if (idx !== -1) {
               parsed[idx] = {
