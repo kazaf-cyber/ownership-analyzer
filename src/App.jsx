@@ -1457,6 +1457,24 @@ function formatEntityContext(info) {
 function ScreeningModule({ entityName: initialEntityName, mode, onFlagSTR }) {
   const isAdverseMedia = mode === 'adverseMedia';
   const isSanction = mode === 'sanction';
+  // 🆕 Mode-aware terminology constants
+const IRRELEVANT_LABEL = isSanction ? 'Irrelevant sanction' : 'Irrelevant ML/TF';
+const IRRELEVANT_SUFFIX = isSanction ? 'There is no sanctions violations.' : 'There is no ML/TF negative news.';
+const IRRELEVANT_SUFFIX_REGEX = isSanction ? /no\s+sanctions\s+violations/i : /no\s+ML\/TF\s+negative\s+news/i;
+
+// 🆕 Component-local clsConfig — overrides CLS_CONFIG for UI label only
+const clsConfig = useMemo(() => ({
+  TRUE_HIT: CLS_CONFIG.TRUE_HIT,
+  FALSE_HIT: CLS_CONFIG.FALSE_HIT,
+  IRRELEVANT_MLTF: {
+    ...CLS_CONFIG.IRRELEVANT_MLTF,
+    label: IRRELEVANT_LABEL,
+    desc: isSanction
+      ? 'Name matches the target BUT no sanctions content concerning the target. Per CDD rule, no need to fully verify identity when there is no sanctions content.'
+      : CLS_CONFIG.IRRELEVANT_MLTF.desc,
+  },
+  NO_HIT: CLS_CONFIG.NO_HIT,
+}), [isSanction]);
   const SESSION_KEY = `${mode}_state_${initialEntityName || 'default'}`;
 
   const _loadSession = () => {
@@ -1901,8 +1919,28 @@ Start with [ and end with ]. No markdown fences. No commentary outside JSON.`;
 
 const buildSystemPrompt = () => {
   const moduleName = isSanction ? 'Sanctions List Screening' : 'Adverse Media Screening';
-  
-  return `You are a senior CDD (Customer Due Diligence) compliance analyst at a Hong Kong bank performing ${moduleName}.
+
+  // 🆕 Sanction-mode terminology override (HIGHEST PRIORITY)
+  const SANCTION_TERM_OVERRIDE = isSanction ? `
+# 🚨🚨🚨 SANCTION SCREENING MODE — TERMINOLOGY OVERRIDE (HIGHEST PRIORITY — READ FIRST)
+
+This screening is a SANCTIONS screening, NOT an adverse media / ML/TF screening.
+The following terminology rules OVERRIDE any conflicting wording in the rest of this prompt:
+
+1. The cls KEYS (TRUE_HIT / FALSE_HIT / IRRELEVANT_MLTF / NO_HIT) stay unchanged for internal compatibility.
+2. In your "reason" field text:
+   • Use "sanctions" — NEVER use "ML/TF", "money laundering", or "terrorist financing".
+   • For cls = IRRELEVANT_MLTF, "reason" MUST start with "Irrelevant sanction, because ..." (NOT "Irrelevant ML/TF, because ...").
+   • For cls = IRRELEVANT_MLTF, "reason" MUST end with the EXACT sentence: " There is no sanctions violations." (single space before "There", capital T, period at end).
+3. SCOPE for TRUE_HIT in this mode = OFAC SDN, EU sanctions, UN sanctions, HK / MAS sanctions, BIS Entity List, sanctions evasion, asset freezes, designated nationals, export control violations naming the target.
+4. SCOPE for IRRELEVANT_MLTF in this mode = name matches the target BUT no sanctions content concerning the target, OR target is not the actual subject of any sanctions designation.
+5. The "reason" field MUST NOT contain the strings "ML/TF", "money laundering", or "terrorist financing".
+
+These rules apply to ALL outputs without exception. Wherever the prompt below references "ML/TF", mentally substitute "sanctions".
+
+` : '';
+
+  return (SANCTION_TERM_OVERRIDE + `You are a senior CDD (Customer Due Diligence) compliance analyst at a Hong Kong bank performing ${moduleName}.
 
 # 🚨 ABSOLUTE OUTPUT CONTRACT
 - Output ONLY a valid JSON array. No markdown fences. No commentary.
@@ -4140,20 +4178,70 @@ if (dropped) {
       }
       
       // ═══════════════════════════════════════════════════════
-      // 🆕 CENTRAL SUFFIX PASS — 所有 IRRELEVANT_MLTF reason 末尾強制加
-      //    " There is no ML/TF negative news." (來源:AI / Stage 2 / Sanity 通通捕到)
-      //    Idempotent:重複跑唔會重複加。
-      // ═══════════════════════════════════════════════════════
-      const MLTF_SUFFIX = 'There is no ML/TF negative news.';
-      parsed = parsed.map(r => {
-        if (r.cls !== 'IRRELEVANT_MLTF') return r;
-        let reason = String(r.reason || '').trim();
-        if (/no\s+ML\/TF\s+negative\s+news/i.test(reason)) return r;   // 已經有 → skip
-        if (reason && !/[.!?]$/.test(reason)) reason += '.';            // 補返尾標點
-        reason = (reason ? reason + ' ' : '') + MLTF_SUFFIX;
-        return { ...r, reason };
-      });
-      console.log(`📝 Central suffix pass applied to ${parsed.filter(r => r.cls === 'IRRELEVANT_MLTF').length} IRRELEVANT_MLTF item(s)`);
+// 🆕 SANCTION-MODE COMPREHENSIVE NORMALIZATION
+// 喺 sanction 模式下,將 ALL results 入面所有 ML/TF 字眼
+// 統一改為 sanctions 字眼。覆蓋全部 4 個 cls,同所有 text field
+// (reason / riskCat / _stage1Original.reason)。
+// Adverse media 模式:no-op,保持原狀。
+// Idempotent — 重複 apply 唔會出 bug。
+// ═══════════════════════════════════════════════════════
+if (isSanction) {
+  const sanitizeMLTFToSanctions = (text) => {
+    if (!text || typeof text !== 'string') return text;
+    let s = text;
+
+    // Label prefix(case-sensitive — preserve sentence start)
+    s = s.replace(/^Irrelevant ML\/TF\s*,/, 'Irrelevant sanction,');
+    s = s.replace(/\bIrrelevant ML\/TF\b/g, 'Irrelevant sanction');
+
+    // Mandatory suffix
+    s = s.replace(/There\s+is\s+no\s+ML\/TF\s+negative\s+news\.?/gi, 'There is no sanctions violations.');
+
+    // Long compound phrases first
+    s = s.replace(/\bmoney\s+laundering\s*(?:and|or|\/)\s*terrorist\s+financing\b/gi, 'sanctions');
+    s = s.replace(/\bML\/TF[-\s]related\b/gi, 'sanctions-related');
+    s = s.replace(/\bML\/TF\s+(content|matter|concern|issue|context|nature|scope|wrongdoing|allegation|category|news|hit|finding|signal|element|keyword|keywords|predicate|predicates|subject\s+matter|behaviour|behavior|activity|activities)\b/gi, 'sanctions $1');
+
+    // Standalone ML or ML and TF
+    s = s.replace(/\bML\s+and\s+TF\b/gi, 'sanctions');
+
+    // Bare ML/TF — LAST (so compound phrases above already handled)
+    s = s.replace(/\bML\/TF\b/g, 'sanctions');
+
+    return s;
+  };
+
+  parsed = parsed.map(r => {
+    const out = { ...r };
+    if (out.reason)  out.reason  = sanitizeMLTFToSanctions(out.reason);
+    if (out.riskCat) out.riskCat = sanitizeMLTFToSanctions(out.riskCat);
+    if (out._stage1Original?.reason) {
+      out._stage1Original = {
+        ...out._stage1Original,
+        reason: sanitizeMLTFToSanctions(out._stage1Original.reason),
+      };
+    }
+    return out;
+  });
+  console.log(`🛡️ Sanction-mode normalization: scrubbed ML/TF wording from ${parsed.length} item(s)`);
+}
+
+// ═══════════════════════════════════════════════════════
+// 🆕 CENTRAL SUFFIX PASS — Mode-aware
+// 確保每條 IRRELEVANT_MLTF reason 末尾都有 mode-specific suffix:
+//   • Sanction mode      → "There is no sanctions violations."
+//   • Adverse media mode → "There is no ML/TF negative news."
+// Idempotent — 唔會重複加。
+// ═══════════════════════════════════════════════════════
+parsed = parsed.map(r => {
+  if (r.cls !== 'IRRELEVANT_MLTF') return r;
+  let reason = String(r.reason || '').trim();
+  if (IRRELEVANT_SUFFIX_REGEX.test(reason)) return r;
+  if (reason && !/[.!?]$/.test(reason)) reason += '.';
+  reason = (reason ? reason + ' ' : '') + IRRELEVANT_SUFFIX;
+  return { ...r, reason };
+});
+console.log(`📝 Suffix pass — "${IRRELEVANT_SUFFIX}" enforced on ${parsed.filter(r => r.cls === 'IRRELEVANT_MLTF').length} item(s)`);
       
       // ═══════════════════════════════════════════════════════
       // 🆕 F.3: COUNT VALIDATION — 警告 AI 是否漏掉結果
@@ -4224,9 +4312,8 @@ if (dropped) {
   const stripLabelPrefix = (reason) => {
   if (!reason) return '';
   let r = String(reason).trim();
-  r = r.replace(/^(true hit|false hit|no hit|irrelevant ml\/tf)\s*[,:]\s*/i, '');
-  r = r.replace(/^(真實命中|誤報|無命中|無關\s*ml\/tf)\s*[,:,:]\s*/i, '');
-  // 🆕 Force leading "Because" → "because"(視覺一致性)
+  r = r.replace(/^(true hit|false hit|no hit|irrelevant ml\/tf|irrelevant sanction)\s*[,:]\s*/i, '');
+  r = r.replace(/^(真實命中|誤報|無命中|無關\s*ml\/tf|無關制裁)\s*[,:,:]\s*/i, '');
   r = r.replace(/^Because\s/, 'because ');
   if (!/^because\s/i.test(r)) {
     r = `because ${r}`;
