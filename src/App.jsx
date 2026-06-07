@@ -8,7 +8,6 @@
  * ✅ 17. 結構圖升級：Zoom/Pan + Bezier 曲線 + Hover Tooltip
  * ✅ 18. 新增地理風險熱力圖 (Dashboard)
  */
-
 import React, { useState, useMemo, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom';
 import { PieChart, Pie, Cell, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer } from 'recharts';
@@ -1508,7 +1507,7 @@ targetRole:
 2. actualSubjectName MUST contain a name that literally appears in THIS article's body.
 3. specificEvent and targetActionInArticle MUST be unique enough that two different articles about the same overall matter would still produce DIFFERENT phrasings.
 4. Output JSON only.`;
-
+}
 async function extractArticleFacts({ targetName, kycInfo, article, apiKey }) {
   try {
     const userPrompt = buildPass1Prompt({
