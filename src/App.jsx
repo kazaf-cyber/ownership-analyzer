@@ -4088,7 +4088,7 @@ if (dropped) {
 
             // ───── CASE 1: cls 唔係 FALSE_HIT → 強制改 ─────
             if (r.cls !== 'FALSE_HIT') {
-              const _newReason = `False Hit, because the full name mentioned in this article is "${_superset}", not "${searchEntity}". The article refers to a different individual whose name does not exactly match the screened target.`;
+              const _improved = `False Hit, because the full name mentioned in this article is "${_superset}", not "${searchEntity}". The article refers to a different individual whose name does not exactly match the screened target.`;
               console.log(`🔒 Patch #10 [#${r.rank}]: ${r.cls} → FALSE_HIT (superset "${_superset}", extra: "${_extraStr}")`);
               return {
                 ...r,
@@ -4118,7 +4118,7 @@ if (dropped) {
               /the provided text\.?\s*$/i.test(r.reason || '');
 
             if (!_hasName || _isGeneric) {
-              const _improved = `False Hit, because the full name mentioned in this article is "${_superset}", not "${searchEntity}". This is a different individual whose name does not exactly match the screened target.`;
+              const _improved = `False Hit, because the full name mentioned in this article is "${_superset}", not "${searchEntity}". The article refers to a different individual whose name does not exactly match the screened target.`;
               console.log(`📝 Patch #10 [#${r.rank}]: FALSE_HIT reason improved with actual name "${_superset}"`);
               return {
                 ...r,
