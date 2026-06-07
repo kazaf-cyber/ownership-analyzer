@@ -1,12 +1,8 @@
 // api/scrape.js
 // ─────────────────────────────────────────────────────────────
-// Vercel serverless function — direct scraping, no Worker.
-// • Always returns HTTP 200 (graceful) — front-end 唔再見 502
-// • 8s timeout(留 buffer 喺 Vercel 10s hard limit)
-// • HTML → plain text(strip script/style/tags + decode entities)
-// • 自動偵測 charset(支援 Big5 / GB2312 / UTF-8)
-// • 接受 App.jsx 嘅 {url, maxLength} 同舊版 {url, maxChars}
+// Vercel serverless function — direct scraping with cheerio.
 // ─────────────────────────────────────────────────────────────
+import * as cheerio from 'cheerio';
 
 const DEFAULT_MAX_CHARS = 3000;
 const FETCH_TIMEOUT_MS = 8000;
@@ -21,66 +17,41 @@ const BROWSER_HEADERS = {
   'Cache-Control': 'no-cache',
 };
 
-// ─── Helpers ──────────────────────────────────────────────────
-
-function decodeEntities(s) {
-  return s
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, n) => {
-      try { return String.fromCodePoint(parseInt(n, 10)); } catch { return ''; }
-    })
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => {
-      try { return String.fromCodePoint(parseInt(n, 16)); } catch { return ''; }
-    });
-}
+// ─── HTML → Text (cheerio version) ──────────────────────────
 
 function htmlToText(html) {
-  let t = html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
-    .replace(/<iframe[\s\S]*?<\/iframe>/gi, ' ')
-    .replace(/<svg[\s\S]*?<\/svg>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ');
-
-  // Block tags → newline
-  t = t.replace(
-    /<\/?(p|div|br|h[1-6]|li|tr|td|th|article|section|header|footer|main|aside)\b[^>]*>/gi,
-    '\n'
-  );
-
-  // Strip remaining tags
-  t = t.replace(/<[^>]+>/g, ' ');
-
-  t = decodeEntities(t);
-
-  // Whitespace normalize
-  t = t
+  const $ = cheerio.load(html);
+  
+  // 移除唔要嘅 elements
+  $('script, style, noscript, iframe, svg, link, meta, head').remove();
+  
+  // Block tags 後加 newline 保留段落結構
+  $('p, div, br, h1, h2, h3, h4, h5, h6, li, tr, article, section, header, footer').each((_, el) => {
+    $(el).append('\n');
+  });
+  
+  let text = $('body').text() || $.root().text();
+  
+  // Normalize whitespace
+  text = text
     .replace(/\r/g, '')
     .replace(/[ \t\f\v]+/g, ' ')
     .replace(/ ?\n ?/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
-
-  return t;
+  
+  return text;
 }
 
 function extractTitle(html) {
-  const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  return m ? decodeEntities(m[1]).replace(/\s+/g, ' ').trim() : '';
+  const $ = cheerio.load(html);
+  return $('title').first().text().trim().replace(/\s+/g, ' ');
 }
 
 function detectCharset(contentType, buf) {
-  // 1. From Content-Type header
   const h = (contentType || '').match(/charset=([^;]+)/i);
   if (h) return h[1].toLowerCase().trim().replace(/['"]/g, '');
 
-  // 2. From <meta charset="..."> in first 4 KB
   try {
     const head = new TextDecoder('ascii', { fatal: false }).decode(buf.slice(0, 4096));
     const m =
@@ -101,12 +72,9 @@ export default async function handler(req, res) {
 
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') {
-    return res
-      .status(405)
-      .json({ success: false, error: 'Method not allowed; use POST' });
+    return res.status(405).json({ success: false, error: 'Method not allowed; use POST' });
   }
 
-  // Parse body
   let body = req.body;
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch { body = {}; }
@@ -116,16 +84,15 @@ export default async function handler(req, res) {
   const url = body.url;
   const maxChars = Number(body.maxChars || body.maxLength) || DEFAULT_MAX_CHARS;
 
-  // Validate URL
   if (!url || typeof url !== 'string') {
     return res.status(200).json({
       success: false, url: url || null, title: '', text: '',
       error: 'Missing or invalid url',
     });
   }
-  let parsed;
+
   try {
-    parsed = new URL(url);
+    const parsed = new URL(url);
     if (!['http:', 'https:'].includes(parsed.protocol)) {
       throw new Error('Only http/https allowed');
     }
@@ -136,7 +103,6 @@ export default async function handler(req, res) {
     });
   }
 
-  // Fetch with timeout
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
@@ -159,7 +125,6 @@ export default async function handler(req, res) {
 
     const ct = response.headers.get('content-type') || '';
 
-    // Reject binary content
     if (!/text\/html|application\/xhtml|text\/plain|application\/json|text\/xml/i.test(ct)) {
       return res.status(200).json({
         success: false, url, title: '', text: '',
