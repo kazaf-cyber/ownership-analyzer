@@ -800,7 +800,6 @@ const MOCK_ZH = [
 
 
 /* ========== SANCTION SCREENING MODULE (NEW) ========== */
-/* ========== SANCTION SCREENING MODULE ========== */
 
 /* ── 制裁篩查：國家關鍵字（3 Parts × 3 Languages）── */
 
@@ -2007,7 +2006,7 @@ const PUBLISHER_DOMAIN_MAP = {
 function extractBlockMetadata(block, url) {
   const result = { publisher: '', articleDate: '' };
 
-  // ── Publisher: from URL hostname (deterministic, can't be confused) ──
+  // ── Publisher: from URL hostname (deterministic) ──
   if (url) {
     try {
       const u = new URL(url);
@@ -2022,40 +2021,105 @@ function extractBlockMetadata(block, url) {
     } catch {}
   }
 
-  // ── articleDate: regex scan over THIS block only ──
+  // ── PATCH ⑤: articleDate — full-block scan + priority + future filter ──
   if (block && typeof block === 'string') {
-    // Pattern 1 — Chinese YYYY年MM月DD日 (works after cleanGooglePdfText NFKC)
-    const zh = block.match(/(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/);
-    if (zh) {
-      result.articleDate = `${zh[1]}-${zh[2].padStart(2,'0')}-${zh[3].padStart(2,'0')}`;
-    } else {
-      // Pattern 2 — ISO YYYY-MM-DD or YYYY/MM/DD
-      const iso = block.match(/\b(20\d{2}|19\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
-      if (iso) {
-        const m = parseInt(iso[2], 10), d = parseInt(iso[3], 10);
-        if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
-          result.articleDate = `${iso[1]}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-        }
-      } else {
-        // Pattern 3 — English "Month DD, YYYY" / "DD Month YYYY"
-        const monthMap = { jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06', jul:'07', aug:'08', sep:'09', oct:'10', nov:'11', dec:'12' };
-        let en = block.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2}),?\s+(20\d{2}|19\d{2})\b/i);
-        if (en) {
-          const mm = monthMap[en[1].toLowerCase().slice(0,3)];
-          if (mm) result.articleDate = `${en[3]}-${mm}-${en[2].padStart(2,'0')}`;
-        } else {
-          en = block.match(/\b(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(20\d{2}|19\d{2})\b/i);
-          if (en) {
-            const mm = monthMap[en[2].toLowerCase().slice(0,3)];
-            if (mm) result.articleDate = `${en[3]}-${mm}-${en[1].padStart(2,'0')}`;
-          }
-        }
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+
+    const candidates = [];
+    let m;
+
+    // Priority 0 (highest) — Chinese YYYY年M月D日
+    const zhRe = /(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/g;
+    while ((m = zhRe.exec(block)) !== null) {
+      candidates.push({ y: +m[1], mo: +m[2], d: +m[3], pos: m.index, fmt: 0, raw: m[0] });
+    }
+
+    // Priority 1 — English "Mon DD, YYYY"
+    const MONTHS = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
+    const enRe = /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2}),?\s+(20\d{2})\b/gi;
+    while ((m = enRe.exec(block)) !== null) {
+      candidates.push({ y: +m[3], mo: MONTHS[m[1].toLowerCase().slice(0,3)], d: +m[2], pos: m.index, fmt: 1, raw: m[0] });
+    }
+
+    // Priority 1 (same as English) — English "DD Mon YYYY"
+    const enRe2 = /\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(20\d{2})\b/gi;
+    while ((m = enRe2.exec(block)) !== null) {
+      candidates.push({ y: +m[3], mo: MONTHS[m[2].toLowerCase().slice(0,3)], d: +m[1], pos: m.index, fmt: 1, raw: m[0] });
+    }
+
+    // Priority 2 (lowest) — ISO YYYY-MM-DD / YYYY/MM/DD (PDF gen-stamps use this)
+    const isoRe = /\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/g;
+    while ((m = isoRe.exec(block)) !== null) {
+      candidates.push({ y: +m[1], mo: +m[2], d: +m[3], pos: m.index, fmt: 2, raw: m[0] });
+    }
+
+    // Validate + filter future dates
+    const valid = candidates.filter(c => {
+      if (c.mo < 1 || c.mo > 12 || c.d < 1 || c.d > 31) return false;
+      const dt = new Date(c.y, c.mo - 1, c.d);
+      if (isNaN(dt.getTime())) return false;
+      if (dt > today) {
+        console.log(`  🗓️  Patch ⑤ filtered future date: ${c.raw}`);
+        return false;
       }
+      return true;
+    });
+
+    if (valid.length > 0) {
+      // Sort: format priority first, then earliest position in block
+      valid.sort((a, b) => (a.fmt - b.fmt) || (a.pos - b.pos));
+      const pick = valid[0];
+      result.articleDate = `${pick.y}-${String(pick.mo).padStart(2,'0')}-${String(pick.d).padStart(2,'0')}`;
     }
   }
 
   return result;
 }
+
+// ============================================================================
+// PATCH ⑥ — Block-isolation verify (anti-hallucination)
+// ============================================================================
+function _normalizeForMatch(s) {
+  if (!s) return "";
+  return s
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[\s\-_.,'"·、,。:;()\[\]【】]/g, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "");
+}
+
+function verifyFactsAgainstBlock(facts, blockText, rank) {
+  if (!facts || !facts.actualSubjectName) return facts;
+
+  const normBlock = _normalizeForMatch(blockText);
+  const normName  = _normalizeForMatch(facts.actualSubjectName);
+  if (!normName) return facts;
+
+  // (a) Direct substring match
+  if (normBlock.includes(normName)) return facts;
+
+  // (b) Multi-token fallback
+  const tokens = facts.actualSubjectName
+    .split(/[\s\-]+/)
+    .map(_normalizeForMatch)
+    .filter(t => t.length >= 2);
+
+  if (tokens.length >= 2 && tokens.every(t => normBlock.includes(t))) {
+    return facts;
+  }
+
+  // FAIL → hallucination, clear it
+  console.warn(
+    `🚨 Patch ⑥ HALLUCINATION rank ${rank}: "${facts.actualSubjectName}" ` +
+    `not in block — clearing actualSubjectName + wrongdoingType`
+  );
+  facts.actualSubjectName     = "";
+  facts.wrongdoingType        = "";
+  facts._hallucinationCleared = true;
+  return facts;
+}
+
 
 function buildDeterministicSpecificEvent({ articleDate, publisher, targetActionInArticle, wrongdoingDescribed, wrongdoingType }) {
   const parts = [];
@@ -3091,11 +3155,13 @@ console.log(`📦 Article body sources:`, sources);
           };
         }
 
-       // 🆕 FIX A: name-token override BEFORE classification
+              // 🆕 FIX A: name-token override BEFORE classification
         const facts = preCheckTargetMentioned(fr.value, searchEntity, articles[i].body);
 
+        // 🆕 PATCH ⑥: verify AI-extracted subject name actually exists in this block  ⭐ 新加呢一行
+        verifyFactsAgainstBlock(facts, articles[i].body, articles[i].rank);          // ⭐
+
         // 🆕 GATE 3: JS-derive publisher / articleDate / specificEvent from THIS block only
-        //    (previously AI-extracted → caused result #9 to borrow #10's "ICAC bail" content)
         const blockMeta = extractBlockMetadata(articles[i].body, articles[i].url);
         facts.publisher = blockMeta.publisher;
         facts.articleDate = blockMeta.articleDate || 'unknown';
@@ -3192,6 +3258,9 @@ console.log(`📦 Article body sources:`, sources);
           // 🆕 FIX A: name-token override BEFORE re-classification
             const articleForBody = articles.find(a => a.rank === item.rank);
             const newFacts = preCheckTargetMentioned(r.value, searchEntity, articleForBody?.body || '');
+
+            // 🆕 PATCH ⑥: same anti-hallucination guard during re-extraction        ⭐ 新加呢一行
+            if (articleForBody) verifyFactsAgainstBlock(newFacts, articleForBody.body, item.rank);  // ⭐
 
             // 🆕 GATE 3: same JS metadata injection as Pass 2
             if (articleForBody) {
