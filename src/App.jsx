@@ -1426,15 +1426,11 @@ Your single task: extract verifiable facts from ONE article about ONE target. Re
 Output strict JSON only. No markdown, no commentary. Start with { end with }.`;
 
 function buildPass1Prompt({ targetName, kycInfo, articleTitle, articleSource, articleBody, articleUrl, hasFullBody }) {
-  //                                                                                                ^^^^^^^^^^^^^
-  //                                                                                                🆕 加新參數
   const hasKyc = kycInfo && Object.values(kycInfo).some(v => v && String(v).trim());
   const kycBlock = hasKyc
     ? `KYC-supplied identifiers:\n${formatEntityContext(kycInfo)}`
     : `KYC-supplied identifiers: (none provided)`;
 
-// 🆕 GATE 3: publisher / articleDate / specificEvent 已改由 JS 從 PDF block 直接抽
-  //   AI 唔再負責呢 3 個 field → 結構性消滅 cross-block fact contamination
   const bodyHeader = hasFullBody
     ? `Body (FULL article scraped from the URL):`
     : `Body ⚠️ NOTE — full article scrape was NOT available for this URL.
@@ -1445,34 +1441,15 @@ It contains the title line + source + breadcrumb + snippet (often ending in "...
 • If the snippet clearly names the target WITH role context (e.g. "X being his Alternate Director"),
   extract that role faithfully — DO NOT default to targetMentioned=false just because the body is short.
 • Hyphen / comma / case / space variants of the same name count as EXACT match.
-  ✅ "Kwok Kai fai Adam" ↔ "KWOK Kai-fai, Adam" → 4 tokens identical → nameMatch = EXACT
 • If the snippet shows target as "Alternate / Successor / Deputy / Replacing" the real subject,
   set targetRole = "alternate" or "successor", and actualSubjectName = the named real subject.
 • Lower factsConfidence (0.5 – 0.7) only when role is GENUINELY ambiguous in the snippet text.
 
-🔑 YOUR JOB — extract ONLY semantic facts (publisher / articleDate / specificEvent are JS-derived, NOT your job):
-
-(1) targetActionInArticle (5-15 words — the SPECIFIC verb-phrase about the target IN THIS BLOCK ONLY)
-  • Read ONLY this block. Do NOT use knowledge from training data or other blocks.
-  • Examples: "appointed as Alternate Director", "ceased to be Alternate Director on 19 Dec 2014",
-    "listed in shareholding table with 160,000 long position",
-    "voted against by ISS proxy advisor", "named in board composition disclosure".
-
-(2) wrongdoingDescribed + targetRole CONSISTENCY:
-  • If THIS BLOCK mentions "Bribery Ordinance", "ICAC", "Independent Commission Against Corruption",
-    "Prevention of Bribery", "fraud charges", "criminal prosecution", "released on bail",
-    → wrongdoingDescribed = true.
-  • If wrongdoingDescribed = true AND target is shown as Alternate/Successor of another NAMED person
-    (e.g. "KWOK Kai-fai, Adam being his Alternate Director" where "his" refers to KWOK Ping-luen),
-    → targetRole = "alternate"/"successor", and actualSubjectName = that other NAMED person.
-  • If target appears ONLY in a shareholding / voting / board-list table with NO wrongdoing context,
-    → targetRole = "passing_mention", wrongdoingDescribed = false.
-
 ⚠️ HARD CONSTRAINT — BLOCK ISOLATION
-   You only see ONE block. Your wrongdoingDescribed, targetRole, actualSubjectName, evidenceQuote
-   MUST come from THIS block's text alone. NEVER import facts (e.g. "ICAC bail", "Thomas Kwok")
-   that appear in a sibling's content but NOT literally in this block — those belong to a different result.`;
-  
+   You only see ONE block. Your wrongdoingDescribed, targetRole, actualSubjectName, evidenceQuote,
+   key_observation MUST come from THIS block's text alone. NEVER import facts that appear in a
+   sibling's content but NOT literally in this block.`;
+
   return `# TARGET
 Name: "${targetName}"
 ${kycBlock}
@@ -1488,32 +1465,61 @@ ${(articleBody || '').slice(0, 12000)}
 # EXTRACT THESE FACTS AS JSON
 
 {
-  "targetMentioned": <true if target name (full name or all its tokens) literally appears in the body above; false otherwise>,
+  "targetMentioned": <true if target name (full name or all its tokens) literally appears in the body; false otherwise>,
   "nameInArticle": "<exact party name as it appears in the article; empty string if target not mentioned>",
-  "nameMatch": "<one of: EXACT | VARIANT | SUPERSET | DIFFERENT | ABSENT>",
+  "nameMatch": "<EXACT | VARIANT | SUPERSET | DIFFERENT | ABSENT>",
   "nameMatchReason": "<one short sentence justifying nameMatch>",
-
   "kycContradiction": "<if KYC info EXPLICITLY contradicts the article's named party, describe in one sentence; else empty string>",
+  "articleGenre": "<news | regulatory_filing | academic | court_judgment | fiction | social_media | directory_profile | self_published | fraud_alert | violation_tracker | other>",
+  "targetActionInArticle": "<5-15 word phrase describing the target's role/action IN THIS BLOCK ONLY>",
 
- "articleGenre": "<one of: news | regulatory_filing | academic | court_judgment | fiction | social_media | directory_profile | self_published | fraud_alert | violation_tracker | other>",
+  "key_observation": "<🔑 REQUIRED — see definition + examples below>",
 
-  "targetActionInArticle": "<the SPECIFIC action/status THIS BLOCK attributes to the screened target in 5-15 words, e.g. 'appointed as Alternate Director', 'ceased to be Alternate Director', 'recommended against by ISS', 'listed in board composition table'. Use ONLY facts literally present in this block.>",
-
-  "wrongdoingDescribed": <true if the article describes any wrongdoing, investigation, allegation, charge, conviction, or designation; false otherwise>,
-  "wrongdoingType": "<one of: money_laundering | sanctions | bribery | fraud | tax_evasion | terrorist_financing | export_control | customs_fraud | civil_dispute | regulatory_violation | environmental | none | other>",
-  "wrongdoingInMLTFScope": <true if wrongdoingType is one of: money_laundering, sanctions, bribery, fraud, tax_evasion, terrorist_financing, export_control, customs_fraud; false otherwise>,
-
-  "targetRole": "<one of: subject | successor | alternate | victim | witness | plaintiff | colleague | passing_mention | unrelated_same_name | not_present>",
-  "actualSubjectName": "<if targetRole is NOT 'subject', the name of the actual wrongdoer AS IT APPEARS IN THIS ARTICLE'S BODY; empty string otherwise. NEVER copy a name from other articles or sources.>",
+  "wrongdoingDescribed": <true/false>,
+  "wrongdoingType": "<money_laundering | sanctions | bribery | fraud | tax_evasion | terrorist_financing | export_control | customs_fraud | civil_dispute | regulatory_violation | environmental | none | other>",
+  "wrongdoingInMLTFScope": <true/false>,
+  "targetRole": "<subject | successor | alternate | victim | witness | plaintiff | colleague | passing_mention | unrelated_same_name | not_present>",
+  "actualSubjectName": "<if targetRole is NOT 'subject', the name of the actual wrongdoer AS IT APPEARS IN THIS ARTICLE'S BODY; empty string otherwise>",
   "evidenceQuote": "<the single most decisive ≤25-word verbatim quote from the body supporting targetRole>",
-
   "factsConfidence": <0.0 to 1.0>
 }
 
-# DEFINITIONS
+# 🔑 key_observation — DEFINITION
+
+A 8-20 word phrase, drawn VERBATIM or NEAR-VERBATIM from THIS article's body, that UNIQUELY identifies what THIS article specifically says about the screened target.
+
+REQUIREMENTS:
+✅ Must be substantively different from any other article about the same general topic.
+✅ Must include article-specific details such as: dates, regulator names, dollar amounts, role descriptions, court references, share counts, jurisdiction-specific terms.
+✅ Must be a phrase that LITERALLY appears in THIS block (or is a faithful paraphrase using THIS block's words).
+
+FORBIDDEN:
+❌ Generic phrases that could apply to ANY article (e.g. "appointed as director", "subject of investigation").
+❌ Copying phrases from sibling articles or from training data.
+❌ Hallucinating facts not in this block.
+
+# key_observation — EXAMPLES
+
+✅ GOOD (article-specific, drawn from body):
+  • "appointed as Alternate Director on 13 Jul 2012 by his uncle KWOK Ping-luen"
+  • "released on HK$1 million bail by ICAC on 19 Mar 2014"
+  • "voted against by Glass Lewis for re-election at the 2024 AGM"
+  • "fined US$280 million by SEC for accounting violations in Aug 2023"
+  • "listed at #6 in the 2024/25 annual report board composition table holding 160,000 long position"
+  • "ceased to be Alternate Director effective 19 December 2014"
+  • "pleaded guilty to 14 counts of money laundering totalling HK$280 million"
+
+❌ BAD (too generic, indistinguishable from siblings):
+  • "appointed as alternate director"
+  • "named in shareholding disclosure"
+  • "subject of investigation"
+  • "company director"
+  • "involved in the matter"
+
+# DEFINITIONS — same as before
 
 nameMatch:
-  EXACT     — exact same name, OR same name with only hyphen/comma/case/space differences, OR trivial corporate-suffix variant (Ltd / Limited / Inc).
+  EXACT     — same name, OR same name with only hyphen/comma/case/space differences, OR trivial corporate-suffix variant (Ltd / Limited / Inc).
   VARIANT   — same person with surname-order swap.
   SUPERSET  — article name has STRICTLY MORE name tokens than target. NOT a match.
   DIFFERENT — shares some tokens but is clearly a different person/entity.
@@ -1532,11 +1538,13 @@ targetRole:
   not_present          — target name does not appear in the body.
 
 # CRITICAL RULES
-1. Trace pronouns to their antecedent. "He replaces X, who was charged" — "he" = target, "X" = subject. Target is SUCCESSOR.
+1. Trace pronouns to their antecedent.
 2. actualSubjectName MUST contain a name that literally appears in THIS article's body.
-3. specificEvent and targetActionInArticle MUST be unique enough that two different articles about the same overall matter would still produce DIFFERENT phrasings.
-4. Output JSON only.`;
+3. key_observation MUST be unique enough that two different articles would NEVER produce identical phrasing.
+4. key_observation MUST appear (verbatim or near-verbatim) in THIS block's body.
+5. Output JSON only. Start with { end with }.`;
 }
+
 async function extractArticleFacts({ targetName, kycInfo, article, apiKey }) {
   try {
     const userPrompt = buildPass1Prompt({
@@ -1625,7 +1633,8 @@ function buildPass1BPrompt({ targetName, kycInfo, article, siblingsInfo }) {
     ? siblingsInfo.map((s, i) =>
         `[Sibling ${i + 1}]\n` +
         `  URL: ${s.url || '(unknown)'}\n` +
-        `  Previous targetActionInArticle: "${s.targetActionInArticle || '(empty)'}"`
+        `  Previous targetActionInArticle: "${s.targetActionInArticle || '(empty)'}"\n` +
+        `  Previous key_observation:       "${s.key_observation || '(empty)'}"`
       ).join('\n\n')
     : '(none)';
 
@@ -1645,16 +1654,24 @@ ${(article.body || '').slice(0, 12000)}
 ${siblingBlock}
 
 # YOUR TASK
-Re-extract facts for THIS article. Your output for targetActionInArticle MUST be CLEARLY DIFFERENT from every sibling above. (publisher / articleDate / specificEvent are now JS-derived from THIS block — NOT your responsibility.)
+Re-extract facts for THIS article. BOTH targetActionInArticle AND key_observation MUST be CLEARLY DIFFERENT from every sibling above.
 
-REQUIREMENT:
+PRIORITY: key_observation is the MAIN differentiator. It MUST be a phrase that:
+• Literally appears (verbatim or near-verbatim) in THIS block's body.
+• Uses article-specific details (date / regulator / amount / share count / etc.) that NO sibling can have.
+• Is substantively distinguishable from sibling key_observations.
 
-1. targetActionInArticle — Target's SPECIFIC status / role / action IN THIS BLOCK ONLY (5-15 words). MUST differ from siblings.
-   ❌ Bad (generic, copies sibling): "alternate director"
-   ✅ Good (uses date / setting unique to this block): "newly appointed as Alternate Director on 13 Jul 2012"
-   ✅ Good: "ceased to serve as Alternate Director effective 19 Dec 2014"
-   ✅ Good: "listed in 2024/25 annual report board composition table"
-   ✅ Good: "voted against by ISS proxy advisor for re-election"
+✅ Examples of WINNING key_observations (each one carries article-specific anchors):
+  • "newly appointed as Alternate Director on 13 Jul 2012"
+  • "ceased to serve as Alternate Director effective 19 Dec 2014"
+  • "listed in 2024/25 annual report board composition table holding 160,000 long position"
+  • "voted against by ISS proxy advisor for re-election at 2024 AGM"
+  • "named on HKEX disclosure of interests form on 18 Mar 2014"
+
+❌ Examples of LOSING key_observations (will not distinguish):
+  • "alternate director" (generic)
+  • "named in disclosure" (no anchor)
+  • copy of sibling's phrase
 
 ⚠️ BLOCK ISOLATION
    Use ONLY facts that are LITERALLY in THIS block. NEVER copy a fact (e.g. "ICAC bail",
@@ -1668,7 +1685,8 @@ REQUIREMENT:
   "nameMatchReason": "<string>",
   "kycContradiction": "<string>",
   "articleGenre": "<news | regulatory_filing | academic | court_judgment | fiction | social_media | directory_profile | self_published | fraud_alert | violation_tracker | other>",
-  "targetActionInArticle": "<UNIQUE phrase, 5-15 words, from THIS block only>",
+  "targetActionInArticle": "<UNIQUE 5-15 word phrase, from THIS block only>",
+  "key_observation": "<🔑 UNIQUE 8-20 word phrase, must differ from siblings AND appear in THIS block's body>",
   "wrongdoingDescribed": <true/false>,
   "wrongdoingType": "<money_laundering | sanctions | bribery | fraud | tax_evasion | terrorist_financing | export_control | customs_fraud | civil_dispute | regulatory_violation | environmental | none | other>",
   "wrongdoingInMLTFScope": <true/false>,
@@ -1684,9 +1702,10 @@ Output JSON only. Start with { end with }.`;
 async function reExtractWithDistinguishing({ targetName, kycInfo, article, siblings, apiKey }) {
   try {
     const siblingsInfo = siblings.map(s => ({
-      url: s.url,
-      targetActionInArticle: s._facts?.targetActionInArticle || '',
-    }));
+  url: s.url,
+  targetActionInArticle: s._facts?.targetActionInArticle || '',
+  key_observation: s._facts?.key_observation || '',
+}));
 
     const userPrompt = buildPass1BPrompt({ targetName, kycInfo, article, siblingsInfo });
 
@@ -1771,11 +1790,34 @@ function classifyFromFacts({ facts, targetName, mode }) {
     return m[facts.wrongdoingType] || 'Other ML/TF';
   };
 
+  // ════════════════════════════════════════════════════════════════
+  // 🆕 PATCH ⑦ — case-specific injection
+  //   Prefer key_observation (AI-supplied verbatim phrase from body);
+  //   fall back to targetActionInArticle if missing or cleared by validator.
+  // ════════════════════════════════════════════════════════════════
+  const ko = (facts.key_observation || '').trim();
+  const ac = (facts.targetActionInArticle || '').trim();
+  const distinguishingClause = ko
+    ? ` The case-specific observation from this article: "${ko}".`
+    : (ac ? ` The target's role here is described as: ${ac}.` : '');
+
+  const buildContextClause = () => {
+    const parts = [];
+    if (facts.articleDate && facts.articleDate !== 'unknown' && facts.articleDate.trim()) {
+      parts.push(`dated ${facts.articleDate}`);
+    }
+    if (facts.publisher && facts.publisher.trim()) {
+      parts.push(`issued by ${facts.publisher}`);
+    }
+    return parts.length > 0 ? ` (${parts.join(', ')})` : '';
+  };
+  const contextClause = buildContextClause();
+
   // ── RULE 1 — Target absent in body → FALSE_HIT
   if (!facts.targetMentioned || facts.nameMatch === 'ABSENT' || facts.targetRole === 'not_present') {
     return {
       cls: 'FALSE_HIT',
-      reason: `False Hit, because the screened target "${targetName}" is not mentioned in this article. ${facts.nameMatchReason || ''}`.trim(),
+      reason: `False Hit, because the screened target "${targetName}" is not mentioned in this article${contextClause}. ${facts.nameMatchReason || ''}${distinguishingClause}`.trim(),
       riskCat: 'N/A',
       identityMatch: 'NO_INFO',
       actualSubjectName: '',
@@ -1787,7 +1829,7 @@ function classifyFromFacts({ facts, targetName, mode }) {
   if (facts.nameMatch === 'SUPERSET') {
     return {
       cls: 'FALSE_HIT',
-      reason: `False Hit, because the article refers to "${facts.nameInArticle || 'a different party'}", whose name contains additional tokens beyond the screened target "${targetName}". This indicates a different individual or entity. ${facts.nameMatchReason || ''}`.trim(),
+      reason: `False Hit, because the article${contextClause} refers to "${facts.nameInArticle || 'a different party'}", whose name contains additional tokens beyond the screened target "${targetName}". This indicates a different individual or entity.${distinguishingClause} ${facts.nameMatchReason || ''}`.trim(),
       riskCat: 'N/A',
       identityMatch: 'CONTRADICTED',
       actualSubjectName: facts.nameInArticle || '',
@@ -1799,7 +1841,7 @@ function classifyFromFacts({ facts, targetName, mode }) {
   if (facts.nameMatch === 'DIFFERENT' || facts.targetRole === 'unrelated_same_name') {
     return {
       cls: 'FALSE_HIT',
-      reason: `False Hit, because the article concerns "${facts.nameInArticle || 'a party with the same name'}", which is a different individual or entity from the screened target "${targetName}". ${facts.nameMatchReason || ''}`.trim(),
+      reason: `False Hit, because the article${contextClause} concerns "${facts.nameInArticle || 'a party with the same name'}", which is a different individual or entity from the screened target "${targetName}".${distinguishingClause} ${facts.nameMatchReason || ''}`.trim(),
       riskCat: 'N/A',
       identityMatch: 'CONTRADICTED',
       actualSubjectName: facts.nameInArticle || '',
@@ -1811,7 +1853,7 @@ function classifyFromFacts({ facts, targetName, mode }) {
   if (facts.kycContradiction && facts.kycContradiction.trim()) {
     return {
       cls: 'FALSE_HIT',
-      reason: `False Hit, because the KYC-supplied identifying information contradicts the article's named party: ${facts.kycContradiction}`,
+      reason: `False Hit, because the KYC-supplied identifying information contradicts the article${contextClause}'s named party: ${facts.kycContradiction}${distinguishingClause}`,
       riskCat: 'N/A',
       identityMatch: 'CONTRADICTED',
       actualSubjectName: facts.nameInArticle || '',
@@ -1823,43 +1865,13 @@ function classifyFromFacts({ facts, targetName, mode }) {
   if (['fiction', 'fraud_alert', 'self_published'].includes(facts.articleGenre)) {
     return {
       cls: 'IRRELEVANT_MLTF',
-      reason: `${irrelevantLabel}, because ${genreText[facts.articleGenre]}.${suffix}`,
+      reason: `${irrelevantLabel}, because ${genreText[facts.articleGenre]}${contextClause}.${distinguishingClause}${suffix}`,
       riskCat: 'N/A',
       identityMatch: 'PARTIAL_MATCH',
       actualSubjectName: '',
       _factsConfidence: facts.factsConfidence,
     };
   }
-
-  // 🆕 Helper: build article-specific context clause
-  const buildContextClause = () => {
-    const parts = [];
-    if (facts.articleDate && facts.articleDate !== 'unknown' && facts.articleDate.trim()) {
-      parts.push(`dated ${facts.articleDate}`);
-    }
-    if (facts.publisher && facts.publisher.trim()) {
-      parts.push(`issued by ${facts.publisher}`);
-    }
-    return parts.length > 0 ? ` (${parts.join(', ')})` : '';
-  };
-
-  const buildEventClause = () => {
-    if (facts.specificEvent && facts.specificEvent.trim()) {
-      return ` Specifically, this article documents: ${facts.specificEvent}.`;
-    }
-    return '';
-  };
-
-  const buildTargetActionClause = () => {
-    if (facts.targetActionInArticle && facts.targetActionInArticle.trim()) {
-      return ` The target's role here is: ${facts.targetActionInArticle}.`;
-    }
-    return '';
-  };
-
-  const contextClause = buildContextClause();
-  const eventClause = buildEventClause();
-  const actionClause = buildTargetActionClause();
 
   // ── RULE 6 — No wrongdoing OR out of ML/TF scope → IRRELEVANT
   if (!facts.wrongdoingDescribed || !facts.wrongdoingInMLTFScope) {
@@ -1868,7 +1880,7 @@ function classifyFromFacts({ facts, targetName, mode }) {
       : ' The article does not describe any wrongdoing concerning the target.';
     return {
       cls: 'IRRELEVANT_MLTF',
-      reason: `${irrelevantLabel}, because ${genreText[facts.articleGenre]}${contextClause} and the screened target appears in the role of ${roleText[facts.targetRole] || 'a connected party'}.${actionClause}${eventClause}${scopeNote}${suffix}`,
+      reason: `${irrelevantLabel}, because ${genreText[facts.articleGenre]}${contextClause} and the screened target appears in the role of ${roleText[facts.targetRole] || 'a connected party'}.${scopeNote}${distinguishingClause}${suffix}`,
       riskCat: 'N/A',
       identityMatch: 'PARTIAL_MATCH',
       actualSubjectName: '',
@@ -1883,7 +1895,7 @@ function classifyFromFacts({ facts, targetName, mode }) {
       : '';
     return {
       cls: 'IRRELEVANT_MLTF',
-      reason: `${irrelevantLabel}, because although the article${contextClause} describes ${wrongdoingText[facts.wrongdoingType] || 'wrongdoing'}, the screened target "${targetName}" appears only as ${roleText[facts.targetRole] || 'a connected party'}.${actionClause}${eventClause}${subjectClause}${suffix}`,
+      reason: `${irrelevantLabel}, because although the article${contextClause} describes ${wrongdoingText[facts.wrongdoingType] || 'wrongdoing'}, the screened target "${targetName}" appears only as ${roleText[facts.targetRole] || 'a connected party'}.${subjectClause}${distinguishingClause}${suffix}`,
       riskCat: facts.actualSubjectName ? `N/A (Subject = ${facts.actualSubjectName})` : 'N/A',
       identityMatch: 'PARTIAL_MATCH',
       actualSubjectName: facts.actualSubjectName || '',
@@ -1893,11 +1905,11 @@ function classifyFromFacts({ facts, targetName, mode }) {
 
   // ── RULE 8 — TRUE_HIT: target IS subject of in-scope wrongdoing
   const ev = facts.evidenceQuote && facts.evidenceQuote.trim()
-    ? ` Evidence from the article: "${facts.evidenceQuote}".`
+    ? ` Evidence: "${facts.evidenceQuote}".`
     : '';
   return {
     cls: 'TRUE_HIT',
-    reason: `True Hit, because the screened target "${targetName}" is the direct subject of ${wrongdoingText[facts.wrongdoingType] || 'wrongdoing'} described in this article${contextClause}.${actionClause}${eventClause}${ev}`,
+    reason: `True Hit, because the screened target "${targetName}" is the direct subject of ${wrongdoingText[facts.wrongdoingType] || 'wrongdoing'} described in this article${contextClause}.${distinguishingClause}${ev}`,
     riskCat: mapRiskCat(),
     identityMatch: 'FULL_MATCH',
     actualSubjectName: '',
@@ -2119,7 +2131,67 @@ function verifyFactsAgainstBlock(facts, blockText, rank) {
   facts._hallucinationCleared = true;
   return facts;
 }
+// ============================================================================
+// PATCH ⑦ — key_observation ground-truth verifier
+//   Ensure AI-supplied key_observation literally exists (or is a faithful
+//   paraphrase of) the article body. If not → clear the field so it cannot
+//   leak hallucinated content into the reason text.
+// ============================================================================
+function verifyKeyObservation(facts, body, rank) {
+  if (!facts || !facts.key_observation || !body) return facts;
 
+  const ko = String(facts.key_observation).trim();
+  if (ko.length < 8) {
+    console.warn(`⚠️ P7 rank ${rank}: key_observation too short ("${ko}") — clearing`);
+    facts.key_observation = '';
+    facts._koGrounded = 'too-short';
+    return facts;
+  }
+
+  const koLc = ko.toLowerCase();
+  const bodyLc = String(body).toLowerCase();
+
+  // (a) Direct verbatim substring match
+  if (bodyLc.includes(koLc)) {
+    facts._koGrounded = 'verbatim';
+    return facts;
+  }
+
+  // (b) Token-level match: ≥60% of significant tokens (length ≥3, non-stopword) must be present
+  const STOPWORDS = new Set([
+    'the', 'and', 'for', 'with', 'that', 'this', 'from', 'their', 'being',
+    'was', 'were', 'are', 'has', 'have', 'had', 'her', 'his', 'its', 'will',
+    'would', 'could', 'should', 'about', 'into', 'onto', 'also', 'who', 'whom',
+    'which', 'when', 'where', 'while', 'than', 'then', 'these', 'those',
+    'only', 'such', 'between', 'within', 'against', 'because'
+  ]);
+  const tokens = koLc
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter(t => t.length >= 3 && !STOPWORDS.has(t));
+
+  if (tokens.length < 2) {
+    facts._koGrounded = 'few-tokens';
+    return facts;       // keep — too short to verify
+  }
+
+  const matched = tokens.filter(t => bodyLc.includes(t));
+  const ratio = matched.length / tokens.length;
+
+  if (ratio >= 0.6) {
+    facts._koGrounded = `paraphrase (${matched.length}/${tokens.length})`;
+    return facts;
+  }
+
+  // FAIL → hallucination — clear
+  console.warn(
+    `🚨 P7 rank ${rank}: key_observation FAILED ground-truth check ` +
+    `(${matched.length}/${tokens.length} tokens, ratio=${ratio.toFixed(2)}): "${ko}" — clearing`
+  );
+  facts.key_observation = '';
+  facts._koGrounded = `failed (${matched.length}/${tokens.length})`;
+  return facts;
+}
 
 function buildDeterministicSpecificEvent({ articleDate, publisher, targetActionInArticle, wrongdoingDescribed, wrongdoingType }) {
   const parts = [];
@@ -3160,7 +3232,8 @@ console.log(`📦 Article body sources:`, sources);
 
         // 🆕 PATCH ⑥: verify AI-extracted subject name actually exists in this block  ⭐ 新加呢一行
         verifyFactsAgainstBlock(facts, articles[i].body, articles[i].rank);          // ⭐
-
+        // 🆕 PATCH ⑦: verify key_observation is grounded in this block (else clear it)
+        verifyKeyObservation(facts, articles[i].body, articles[i].rank);
         // 🆕 GATE 3: JS-derive publisher / articleDate / specificEvent from THIS block only
         const blockMeta = extractBlockMetadata(articles[i].body, articles[i].url);
         facts.publisher = blockMeta.publisher;
@@ -3261,7 +3334,8 @@ console.log(`📦 Article body sources:`, sources);
 
             // 🆕 PATCH ⑥: same anti-hallucination guard during re-extraction        ⭐ 新加呢一行
             if (articleForBody) verifyFactsAgainstBlock(newFacts, articleForBody.body, item.rank);  // ⭐
-
+            // 🆕 PATCH ⑦: same key_observation ground-truth check during re-extraction
+            if (articleForBody) verifyKeyObservation(newFacts, articleForBody.body, item.rank);
             // 🆕 GATE 3: same JS metadata injection as Pass 2
             if (articleForBody) {
               const blockMeta = extractBlockMetadata(articleForBody.body, articleForBody.url);
