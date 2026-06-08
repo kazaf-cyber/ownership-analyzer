@@ -1001,50 +1001,46 @@ function cleanGooglePdfText(rawText) {
  */
 function sliceSerpPdfByResultBlocks(pdfText) {
   if (!pdfText) return [];
-
   const lines = pdfText.split('\n');
   const anchorLineIndices = [];
 
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (trimmed.length < 8 || trimmed.length > 250) continue;
-
-    // Anchor = line that looks like a breadcrumb ("domain.tld › path")
-    //          OR a bare http(s) URL inside a SERP result.
     const hasBreadcrumb = /[a-z0-9][a-z0-9-]*\.[a-z]{2,}.*\s*›/i.test(trimmed);
     const hasUrl = /https?:\/\/[a-z0-9]/i.test(trimmed);
     if (!hasBreadcrumb && !hasUrl) continue;
-
-    // Skip Google infrastructure anchors (search results page UI)
     const lc = trimmed.toLowerCase();
-    if (lc.includes('google.com/search') ||
-        lc.includes('googleadservices') ||
-        lc.includes('gstatic.com') ||
-        lc.includes('accounts.google') ||
-        lc.includes('support.google') ||
-        lc.includes('policies.google') ||
-        lc.includes('maps.google') ||
-        lc.includes('translate.google')) continue;
-
+    if (lc.includes('google.com/search') || lc.includes('googleadservices') ||
+        lc.includes('gstatic.com') || lc.includes('accounts.google') ||
+        lc.includes('support.google') || lc.includes('policies.google') ||
+        lc.includes('maps.google') || lc.includes('translate.google')) continue;
     anchorLineIndices.push(i);
   }
-
   if (anchorLineIndices.length === 0) return [];
 
+  // 🔑 KEY FIX: 為下一 rank 嘅 TITLE 預留 lookback 空間
+  //   舊版 end = nextAnchorIdx → 包含咗下一 rank 嘅 title(係 title contamination)
+  //   新版 end = nextAnchorIdx - TITLE_LOOKBACK → 唔包到下一 rank 嘅 title
+  const TITLE_LOOKBACK = 6;
   const blocks = [];
   for (let k = 0; k < anchorLineIndices.length; k++) {
     const anchorIdx = anchorLineIndices[k];
-    // Include up to 6 lines BEFORE this anchor (title sits above breadcrumb)
-    const lookbackFloor = k === 0 ? 0 : anchorLineIndices[k - 1] + 1;
-    const start = Math.max(lookbackFloor, anchorIdx - 6);
-    // Up to the line BEFORE the next anchor
-    const end = k < anchorLineIndices.length - 1 ? anchorLineIndices[k + 1] : lines.length;
+    const prevAnchorIdx = k > 0 ? anchorLineIndices[k - 1] : -1;
 
-    const block = lines.slice(start, end).join('\n').trim();
+    // Title 喺 anchor 上面 1–6 行,但唔可以爬過上一個 anchor
+    const titleStart = Math.max(prevAnchorIdx + 1, anchorIdx - TITLE_LOOKBACK);
+
+    // Snippet 喺 anchor 下面,但唔可以蓋過下一 rank 嘅 title zone
+    const snippetEnd = k < anchorLineIndices.length - 1
+      ? Math.max(anchorIdx + 1, anchorLineIndices[k + 1] - TITLE_LOOKBACK)
+      : lines.length;
+
+    const block = lines.slice(titleStart, snippetEnd).join('\n').trim();
     if (block.length >= 20) blocks.push(block);
   }
 
-  console.log(`📦 FIX B: SERP PDF sliced into ${blocks.length} per-rank blocks (${anchorLineIndices.length} breadcrumb anchors detected)`);
+  console.log(`📦 P8: SERP PDF sliced into ${blocks.length} per-rank blocks (TITLE_LOOKBACK=${TITLE_LOOKBACK})`);
   return blocks;
 }
 
@@ -1594,9 +1590,17 @@ function normalizeReasonForCompare(reason) {
   if (!reason) return '';
   return String(reason)
     .toLowerCase()
+    // 全部引號內容 → "X"(KO / evidence / quote 留俾 P10 驗)
     .replace(/"[^"]+"/g, '"X"')
-    .replace(/\b\d{4}-\d{2}-\d{2}\b/g, 'DATE')
-    .replace(/\b\d{1,2}\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s*\d{2,4}\b/gi, 'DATE')
+    .replace(/「[^」]+」/g, '「X」')
+    // 各種日期格式 → __DATE__
+    .replace(/\b\d{4}[-年\/]\s*\d{1,2}\s*[-月\/]\s*\d{1,2}\s*日?/g, '__DATE__')
+    .replace(/\b\d{1,2}\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s*\d{2,4}\b/gi, '__DATE__')
+    .replace(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s*\d{1,2},?\s*\d{4}\b/gi, '__DATE__')
+    // 大數字 → __NUM__
+    .replace(/\b\d{2,}(?:,\d{3})+\b/g, '__NUM__')
+    // 標點 / 空白 normalisation
+    .replace(/[.,;:!?()()【】\[\]]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -1618,7 +1622,57 @@ function findDuplicateReasonGroups(parsed) {
   }
   return dupes;
 }
+/* ════════════════════════════════════════════════════════════════
+   🆕 PATCH P10 — Strong-fact dup verifier
+   Removes false-positive duplicate groups (e.g. Rank 1 vs 10 that
+   share signature but cite DISJOINT dates / amounts / IDs).
+   ════════════════════════════════════════════════════════════════ */
+function extractStrongFacts(text) {
+  if (!text) return { dates: [], numbers: [], ids: [] };
+  return {
+    dates: [...new Set(
+      [...String(text).matchAll(/\b20\d{2}[-年\/]\s*\d{1,2}\s*[-月\/]\s*\d{1,2}/g)]
+        .map(m => m[0].replace(/\s/g, ''))
+    )],
+    numbers: [...new Set(
+      [...String(text).matchAll(/\b\d{2,}(?:,\d{3})+\b/g)].map(m => m[0])
+    )],
+    ids: [...new Set(
+      [...String(text).matchAll(/\b[A-Z]{2,}\d{3,}\b/g)].map(m => m[0])
+    )],
+  };
+}
 
+function isLikelyRealDuplicate(reasonA, reasonB) {
+  const fA = extractStrongFacts(reasonA);
+  const fB = extractStrongFacts(reasonB);
+  // 若雙方都列出日期但完全唔重疊 → 唔係真重複
+  if (fA.dates.length && fB.dates.length && !fA.dates.some(d => fB.dates.includes(d))) return false;
+  // 若雙方都有大數字但完全唔重疊 → 唔係真重複
+  if (fA.numbers.length && fB.numbers.length && !fA.numbers.some(n => fB.numbers.includes(n))) return false;
+  // 若雙方都有 case ID 但完全唔重疊 → 唔係真重複
+  if (fA.ids.length && fB.ids.length && !fA.ids.some(i => fB.ids.includes(i))) return false;
+  return true;
+}
+
+function verifyRealDuplicates(candidateGroups) {
+  const verified = [];
+  for (const g of candidateGroups) {
+    const items = g.items;
+    const allPairsReallyMatch = items.every((a, i) =>
+      items.slice(i + 1).every(b => isLikelyRealDuplicate(a.reason, b.reason))
+    );
+    if (allPairsReallyMatch) {
+      verified.push(g);
+    } else {
+      console.log(`🛡️ P10: dropped false-positive dup group [ranks ${g.ranks.join(', ')}] — strong facts disjoint`);
+    }
+  }
+  return verified;
+}
+/* ════════════════════════════════════════════════════════════════
+   END P10
+   ════════════════════════════════════════════════════════════════ */
 const PASS1B_SYSTEM_PROMPT = `You are a fact extractor for KYC/AML screening. Your previous extraction produced facts that resulted in a reason indistinguishable from another article. You must now re-extract WITH DELIBERATE EMPHASIS on what makes THIS article UNIQUE compared to its siblings.
 
 You do NOT classify. You do NOT judge risk. Output strict JSON only.`;
@@ -1740,6 +1794,52 @@ async function reExtractWithDistinguishing({ targetName, kycInfo, article, sibli
 /* ════════════════════════════════════════════════════════════════
    END SIMILARITY GUARD
    ════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════
+   🆕 PATCH P11 — Strip article-date from text
+   If the reason opening already contains "(dated YYYY-MM-DD, ...)",
+   the same date inside the key_observation quote becomes visual
+   noise. This helper removes the date in all common formats.
+   ════════════════════════════════════════════════════════════════ */
+function stripArticleDateFromText(text, articleDateISO) {
+  if (!text || !articleDateISO || articleDateISO === 'unknown') return text;
+  const m = String(articleDateISO).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return text;
+  const [, y, mo, d] = m;
+  const yI = +y, moI = +mo, dI = +d;
+  const M = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const month = M[moI - 1];
+  const short = month.slice(0, 3);
+
+  const forms = [
+    `${y}-${mo}-${d}`,     `${y}-${moI}-${dI}`,
+    `${y}/${mo}/${d}`,     `${y}/${moI}/${dI}`,
+    `${yI}年${moI}月${dI}日`,
+    `${y}年${mo}月${d}日`,
+    `${month} ${dI}, ${y}`, `${month} ${dI} ${y}`,
+    `${short} ${dI}, ${y}`, `${short}. ${dI}, ${y}`,
+    `${dI} ${month} ${y}`,  `${dI} ${short} ${y}`,
+  ];
+
+  let r = text;
+  for (const p of forms) {
+    const esc = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    r = r
+      .replace(new RegExp(`\\s+(?:on|at|dated|effective)\\s+${esc}\\b`, 'gi'), '')
+      .replace(new RegExp(`\\s*,\\s*${esc}\\b`, 'g'), '')
+      .replace(new RegExp(`\\(${esc}\\)`, 'g'), '')
+      .replace(new RegExp(`\\b${esc}\\b`, 'g'), '');
+  }
+  return r
+    .replace(/\s+,/g, ',')
+    .replace(/,\s*,/g, ',')
+    .replace(/\(\s*\)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+/* ════════════════════════════════════════════════════════════════
+   END P11 util
+   ════════════════════════════════════════════════════════════════ */
+
 
   
 function classifyFromFacts({ facts, targetName, mode }) {
@@ -1791,12 +1891,14 @@ function classifyFromFacts({ facts, targetName, mode }) {
   };
 
   // ════════════════════════════════════════════════════════════════
-  // 🆕 PATCH ⑦ — case-specific injection
+  // 🆕 PATCH ⑦ + P11 — case-specific injection (with date-strip)
   //   Prefer key_observation (AI-supplied verbatim phrase from body);
   //   fall back to targetActionInArticle if missing or cleared by validator.
+  //   P11: strip article date so it doesn't appear TWICE in the reason
+  //   (once in "(dated …, issued by …)" + once inside the KO quote).
   // ════════════════════════════════════════════════════════════════
-  const ko = (facts.key_observation || '').trim();
-  const ac = (facts.targetActionInArticle || '').trim();
+  const ko = stripArticleDateFromText((facts.key_observation || '').trim(), facts.articleDate);          // 🆕 P11
+  const ac = stripArticleDateFromText((facts.targetActionInArticle || '').trim(), facts.articleDate);   // 🆕 P11
   const distinguishingClause = ko
     ? ` The case-specific observation from this article: "${ko}".`
     : (ac ? ` The target's role here is described as: ${ac}.` : '');
@@ -3289,7 +3391,10 @@ console.log(`📦 Article body sources:`, sources);
       setProgress(92);
       setStage('檢查 reasons 是否唯一...');
 
-      const dupeGroups = findDuplicateReasonGroups(parsed);
+      const dupeCandidates = findDuplicateReasonGroups(parsed);
+      const dupeGroups = verifyRealDuplicates(dupeCandidates);     // 🛡️ P10
+      console.log(`🛡️ P10 filtered ${dupeCandidates.length - dupeGroups.length} false-positive group(s)`);
+
 
       if (dupeGroups.length > 0) {
         const totalDupeItems = dupeGroups.reduce((s, g) => s + g.items.length, 0);
@@ -3392,7 +3497,147 @@ console.log(`📦 Article body sources:`, sources);
       // ═══════════════════════════════════════════════════════
       // END PASS 1B
       // ═══════════════════════════════════════════════════════
-      
+
+      /* ============================================================
+   PIPELINE SELF-CHECK — runs after Pass 1B re-extraction
+   Verifies all 4 patches (P8 block / P9 catch / P10 verify /
+   P11 date-dedup) actually held. Pure logging, does NOT throw,
+   does NOT mutate `parsed`.
+   ============================================================ */
+function runPipelineSelfCheck({ parsed, articles, pdfBlocks }) {
+  const report = { passed: 0, failed: 0, warnings: [] };
+  const log = (level, msg) => {
+    const tag = level === 'PASS' ? '✅' : level === 'FAIL' ? '❌' : '⚠️';
+    console.log(`${tag} [SelfCheck] ${msg}`);
+    if (level === 'PASS') report.passed++;
+    else if (level === 'FAIL') { report.failed++; report.warnings.push(msg); }
+  };
+
+  console.group('🧪 PIPELINE SELF-CHECK');
+
+  // ─────────────────────────────────────────────────
+  // ① P8 — Block isolation:
+  //   key_observation 入面引用嘅大數字(e.g. "160,000")
+  //   一定要喺自己 block 入面搵到,唔可以淨係喺隔籬
+  //   rank 嘅 block 出現。
+  // ─────────────────────────────────────────────────
+  console.group('① P8 — Block isolation');
+  let p8fail = 0;
+  for (let i = 0; i < articles.length; i++) {
+    const me = articles[i];
+    const myKO = (parsed[i]?._facts?.key_observation || '').toLowerCase();
+    if (!myKO) continue;
+
+    const myNums = new Set([...(me.body.matchAll(/\b\d{2,3}(?:,\d{3})+\b/g))].map(m => m[0]));
+
+    for (let j = 0; j < articles.length; j++) {
+      if (i === j) continue;
+      const sib = articles[j];
+      const sibNums = [...(sib.body.matchAll(/\b\d{2,3}(?:,\d{3})+\b/g))].map(m => m[0]);
+
+      for (const n of sibNums) {
+        if (myNums.has(n)) continue;                // also in my body → OK
+        if (myKO.includes(n)) {
+          log('FAIL', `Rank ${me.rank} KO cites "${n}" but that number lives only in Rank ${sib.rank}'s block (cross-block contamination)`);
+          p8fail++;
+          break;
+        }
+      }
+    }
+  }
+  if (p8fail === 0) log('PASS', `All ${articles.length} ranks have isolated key_observations`);
+  console.groupEnd();
+
+  // ─────────────────────────────────────────────────
+  // ② P9 — Real duplicates resolved:
+  //   跑完 Pass 1B 之後,findDuplicateReasonGroups()
+  //   應該返 0(冇任何重複 reason 殘留)。
+  // ─────────────────────────────────────────────────
+  console.group('② P9 — All real duplicates resolved');
+  const remaining = findDuplicateReasonGroups(parsed);
+  if (remaining.length === 0) {
+    log('PASS', 'No duplicate reasons remain in final output');
+  } else {
+    for (const g of remaining) {
+      log('FAIL', `Duplicate reason survived: ranks [${g.ranks.join(', ')}]`);
+    }
+  }
+  console.groupEnd();
+
+  // ─────────────────────────────────────────────────
+  // ③ P10 — No false-positive dup flags:
+  //   兩條 reason signature 相同,但有截然不同嘅日期 /
+  //   大數字 / ID → 即係 P10 verify 漏咗。
+  // ─────────────────────────────────────────────────
+  console.group('③ P10 — No false-positive duplicates');
+  const extractFacts = (txt) => ({
+    dates: [...new Set([...(txt || '').matchAll(/\b20\d{2}[-年\/]\d{1,2}[-月\/]\d{1,2}/g)].map(m => m[0]))],
+    nums:  [...new Set([...(txt || '').matchAll(/\b\d{2,}(?:,\d{3})+\b/g)].map(m => m[0]))],
+  });
+  let p10fail = 0;
+  for (let i = 0; i < parsed.length; i++) {
+    for (let j = i + 1; j < parsed.length; j++) {
+      const a = parsed[i], b = parsed[j];
+      if (a.cls === 'NO_HIT' || b.cls === 'NO_HIT') continue;
+      if (normalizeReasonForCompare(a.reason) !== normalizeReasonForCompare(b.reason)) continue;
+
+      const fa = extractFacts(a.reason), fb = extractFacts(b.reason);
+      const dateOverlap = !fa.dates.length || !fb.dates.length || fa.dates.some(d => fb.dates.includes(d));
+      const numOverlap  = !fa.nums.length  || !fb.nums.length  || fa.nums.some(n => fb.nums.includes(n));
+
+      if (!dateOverlap || !numOverlap) {
+        log('FAIL', `Rank ${a.rank} & ${b.rank}: same signature but ${!dateOverlap ? 'dates' : 'numbers'} disjoint`);
+        p10fail++;
+      }
+    }
+  }
+  if (p10fail === 0) log('PASS', 'No false-positive duplicate flags');
+  console.groupEnd();
+
+  // ─────────────────────────────────────────────────
+  // ④ P11 — No duplicate date in reason:
+  //   開頭 "(dated YYYY-MM-DD, issued by …)" 已寫過嘅
+  //   日期,唔可以再喺 key_observation 引號入面出現。
+  // ─────────────────────────────────────────────────
+  console.group('④ P11 — No duplicate date inside reason');
+  let p11fail = 0;
+  for (const r of parsed) {
+    if (!r.reason || r.cls === 'NO_HIT') continue;
+    const iso = r._facts?.articleDate;
+    if (!iso || iso === 'unknown') continue;
+    const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) continue;
+    const [, y, mo, d] = m;
+    const yI = +y, moI = +mo, dI = +d;
+    const forms = [
+      `${y}-${mo}-${d}`, `${y}/${mo}/${d}`,
+      `${yI}年${moI}月${dI}日`, `${y}年${mo}月${d}日`,
+    ];
+
+    const obs = r.reason.match(/case[- ]specific observation[^:]*:\s*["'"「『]([^"'"」』]+)["'"」』]/i);
+    if (!obs) continue;
+    const inner = obs[1];
+    const hit = forms.find(f => inner.includes(f));
+    if (hit) {
+      log('FAIL', `Rank ${r.rank}: date "${hit}" appears in BOTH opening "(dated ${iso}, …)" AND in observation quote`);
+      p11fail++;
+    }
+  }
+  if (p11fail === 0) log('PASS', 'No article-date duplicated inside observation quotes');
+  console.groupEnd();
+
+  // ── Summary
+  console.log(
+    `\n🧪 SELF-CHECK RESULT\n` +
+    `   ✅ Passed : ${report.passed}\n` +
+    `   ❌ Failed : ${report.failed}\n` +
+    `   Status   : ${report.failed === 0 ? '🟢 ALL CLEAR' : '🔴 ATTENTION NEEDED'}`
+  );
+  console.groupEnd();
+  return report;
+}
+
+
       setProgress(100);
       timerIdsRef.current.push(setTimeout(() => {
         setIsAnalyzing(false);
