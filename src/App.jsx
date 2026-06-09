@@ -551,6 +551,8 @@ const i18n = {
     selectPart: 'Select Part:',
     previewAllQueries: 'Preview All Query Strings',
     addRelationship: '+ Add Rel',
+    demandListTab: 'Demand List',                   
+    demandListTitle: 'KYC Demand-List Compliance Card', 
   },
   zh: {
     appTitle: 'KYC/AML', appSub: '合規管理系統', dashboard: '儀表板', workspace: '實體與結構', search: '搜尋', snapshots: '快照', settings: '設定', report: '報告',
@@ -685,6 +687,8 @@ const i18n = {
     selectPart: '選擇 Part：',
     previewAllQueries: '預覽全部查詢字串',
     addRelationship: '+ 新增關係',
+    demandListTab: '需求清單',                   
+    demandListTitle: 'KYC 需求清單合規卡', 
   }
 };
 
@@ -4870,6 +4874,582 @@ function SanctionScreening({ entityName, onFlagSTR }) {
   return <ScreeningModule entityName={entityName} mode="sanction" onFlagSTR={onFlagSTR} />;
 }
 
+/* ========== DEMAND-LIST KYC MODULE (Phase 1: Aggregator) ========== */
+
+const DEMAND_LIST_FIELDS = [
+  {
+    id: 'legal_identity',
+    icon: '🏛️',
+    titleEn: 'Legal Identity',
+    titleZh: '法律身分',
+    descEn: 'Legal name, jurisdiction, registration number, incorporation date',
+    descZh: '法律名稱、註冊地、登記號碼、註冊日期',
+    priority: 'critical',
+    fields: ['legal_name', 'jurisdiction', 'registration_number', 'incorporation_date'],
+    autoSourceRef: 'entity_record',
+  },
+  {
+    id: 'listed_status',
+    icon: '📈',
+    titleEn: 'Listed Status & Ticker',
+    titleZh: '上市狀態與股票代號',
+    descEn: 'Stock exchange listing, ticker, ISIN',
+    descZh: '上市交易所、股票代號、ISIN',
+    priority: 'high',
+    fields: ['is_listed', 'exchange', 'ticker'],
+    autoSourceRef: 'entity_record',
+  },
+  {
+    id: 'ubo',
+    icon: '👑',
+    titleEn: 'Ultimate Beneficial Owners (≥25%)',
+    titleZh: '最終受益人 (≥25%)',
+    descEn: 'Natural persons owning/controlling ≥25%',
+    descZh: '直接或間接持有 ≥25% 嘅自然人',
+    priority: 'critical',
+    fields: ['ubos'],
+    autoSourceRef: 'graph_traversal',
+  },
+  {
+    id: 'directors',
+    icon: '👔',
+    titleEn: 'Board of Directors',
+    titleZh: '董事會',
+    descEn: 'Current directors and executive officers',
+    descZh: '現任董事與行政人員',
+    priority: 'critical',
+    fields: ['directors'],
+    autoSourceRef: 'relationship_graph',
+  },
+  {
+    id: 'sanctions',
+    icon: '🚫',
+    titleEn: 'Sanctions Screening',
+    titleZh: '制裁篩查',
+    descEn: 'OFAC / UN / EU / HK sanctions lists',
+    descZh: 'OFAC / 聯合國 / 歐盟 / 香港制裁名單',
+    priority: 'critical',
+    fields: ['hit', 'lists_checked', 'hit_details'],
+    autoSourceRef: 'screening_logs',
+  },
+  {
+    id: 'pep',
+    icon: '🏛️',
+    titleEn: 'PEP Exposure',
+    titleZh: 'PEP 暴露',
+    descEn: 'Politically Exposed Persons among UBOs / directors',
+    descZh: 'UBO 或董事中嘅政治敏感人物',
+    priority: 'high',
+    fields: ['has_pep', 'pep_persons'],
+    autoSourceRef: 'pep_flag',
+  },
+  {
+    id: 'adverse_media',
+    icon: '📰',
+    titleEn: 'Adverse Media (last 24 months)',
+    titleZh: '不良媒體 (近 24 個月)',
+    descEn: 'ML/TF, fraud, corruption-related news',
+    descZh: '洗錢/恐融、欺詐、貪腐相關新聞',
+    priority: 'high',
+    fields: ['has_adverse', 'categories', 'summary'],
+    autoSourceRef: 'screening_logs',
+  },
+  {
+    id: 'industry',
+    icon: '🏭',
+    titleEn: 'Industry & Operations',
+    titleZh: '行業與營運',
+    descEn: 'Primary business, industry classification',
+    descZh: '主營業務、行業分類',
+    priority: 'medium',
+    fields: ['primary_industry', 'operating_jurisdictions'],
+    autoSourceRef: 'entity_record',
+  },
+  {
+    id: 'documents',
+    icon: '📄',
+    titleEn: 'Required KYC Documents',
+    titleZh: '所需 KYC 文件',
+    descEn: 'Document checklist completion',
+    descZh: '文件清單完成度',
+    priority: 'high',
+    fields: ['received', 'pending', 'expired'],
+    autoSourceRef: 'documents',
+  },
+  {
+    id: 'risk_rating',
+    icon: '⚠️',
+    titleEn: 'CRR Risk Rating',
+    titleZh: 'CRR 風險評級',
+    descEn: 'Effective risk rating with breakdown',
+    descZh: '有效風險評級與分解',
+    priority: 'critical',
+    fields: ['rating', 'score', 'override'],
+    autoSourceRef: 'risk_engine',
+  },
+];
+
+const STATUS_CONFIG = {
+  verified:  { color: 'green',  icon: '✅', labelEn: 'Verified',     labelZh: '已驗證' },
+  partial:   { color: 'amber',  icon: '⚠️', labelEn: 'Partial',      labelZh: '部分' },
+  pending:   { color: 'gray',   icon: '⏳', labelEn: 'Pending',      labelZh: '待處理' },
+  hit:       { color: 'red',    icon: '🚨', labelEn: 'Hit / Flagged', labelZh: '命中 / 標記' },
+  clean:     { color: 'green',  icon: '✓',  labelEn: 'Clean',        labelZh: '清白' },
+  exposed:   { color: 'amber',  icon: '⚡', labelEn: 'Exposed',      labelZh: '已暴露' },
+  conflict:  { color: 'red',    icon: '⚔️', labelEn: 'Conflict',     labelZh: '衝突' },
+};
+
+function DemandListKYC({ entity, entities, relationships, findUBOs, threshold, calcCRR, getEffectiveRating, lang, t, today }) {
+  const STORAGE_KEY = `demand_list_${entity.id}`;
+
+  const [fieldResults, setFieldResults] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem(STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {};
+  });
+
+  const [editingField, setEditingField] = useState(null);
+  const [editDraft, setEditDraft] = useState({});
+
+  /* ── Auto-populate from internal entity data ── */
+  const autoData = useMemo(() => {
+    const data = {};
+
+    // 1. Legal Identity
+    data.legal_identity = {
+      value: {
+        legal_name: entity.name,
+        jurisdiction: entity.jurisdiction,
+        registration_number: '',
+        incorporation_date: '',
+      },
+      confidence: 0.6,
+      sources: ['Internal KYC record'],
+      asOf: entity.lastReviewDate || today,
+      status: (entity.name && entity.jurisdiction) ? 'partial' : 'pending',
+    };
+
+    // 2. Listed Status
+    const listed = entity.companyCategory === 'listed';
+    data.listed_status = {
+      value: {
+        is_listed: listed,
+        exchange: listed ? '(unknown — please add)' : 'N/A',
+        ticker: '',
+      },
+      confidence: listed ? 0.5 : 0.9,
+      sources: ['Internal KYC record'],
+      asOf: today,
+      status: listed ? 'partial' : 'verified',
+    };
+
+    // 3. UBOs (graph traversal)
+    if (entity.type === 'company') {
+      const ubos = findUBOs(entity.id, threshold);
+      data.ubo = {
+        value: {
+          ubos: ubos.map(u => ({
+            name: u.entity.name,
+            ownership_pct: u.percentage,
+            control_basis: u.direct ? 'direct' : u.viaControl ? 'control' : 'indirect',
+            jurisdiction: u.entity.jurisdiction,
+            is_pep: u.entity.isPEP,
+          })),
+        },
+        confidence: ubos.length > 0 ? 0.85 : 0.4,
+        sources: ['Internal ownership graph'],
+        asOf: entity.lastReviewDate || today,
+        status: ubos.length > 0 ? 'verified' : 'pending',
+      };
+    } else {
+      data.ubo = { value: { ubos: [] }, confidence: 1, sources: ['N/A'], asOf: today, status: 'verified' };
+    }
+
+    // 4. Directors (rels with subType=Director or rel.type=control person)
+    const directorRels = relationships.filter(r =>
+      (r.targetId === entity.id || r.sourceId === entity.id) &&
+      (r.type === 'control' || r.type === 'rca')
+    );
+    const directors = directorRels.map(r => {
+      const person = entities.find(e => e.id === (r.sourceId === entity.id ? r.targetId : r.sourceId));
+      return person && person.type === 'person' ? {
+        name: person.name,
+        role: person.subType || 'Director',
+        nationality: person.jurisdiction,
+        is_pep: person.isPEP,
+      } : null;
+    }).filter(Boolean);
+    data.directors = {
+      value: { directors },
+      confidence: directors.length > 0 ? 0.7 : 0.3,
+      sources: ['Internal relationship graph'],
+      asOf: entity.lastReviewDate || today,
+      status: directors.length > 0 ? 'partial' : 'pending',
+    };
+
+    // 5. Sanctions
+    const sanctionLogs = (entity.screeningLogs || []).filter(l => l.type === 'Sanctions');
+    const lastSanction = sanctionLogs[sanctionLogs.length - 1];
+    data.sanctions = {
+      value: {
+        hit: entity.isSanctioned || (lastSanction && !lastSanction.result.startsWith('Clear')),
+        lists_checked: lastSanction ? [lastSanction.system] : [],
+        hit_details: entity.isSanctioned ? '(flagged in entity record)' : (lastSanction && !lastSanction.result.startsWith('Clear') ? lastSanction.result : ''),
+      },
+      confidence: lastSanction ? 0.9 : 0.4,
+      sources: lastSanction ? [`Screening log ${lastSanction.id} (${lastSanction.date})`] : ['No screening on file'],
+      asOf: lastSanction ? lastSanction.date : 'N/A',
+      status: entity.isSanctioned ? 'hit' : (lastSanction ? 'clean' : 'pending'),
+    };
+
+    // 6. PEP
+    const pepUbos = (data.ubo.value.ubos || []).filter(u => u.is_pep);
+    const pepDirs = directors.filter(d => d.is_pep);
+    const allPep = [
+      ...(entity.isPEP ? [{ name: entity.name, role: entity.subType, pep_category: entity.pepCategory || 'unknown' }] : []),
+      ...pepUbos.map(u => ({ name: u.name, role: 'UBO', pep_category: 'unknown' })),
+      ...pepDirs.map(d => ({ name: d.name, role: d.role, pep_category: 'unknown' })),
+    ];
+    data.pep = {
+      value: { has_pep: allPep.length > 0, pep_persons: allPep },
+      confidence: 0.75,
+      sources: ['Internal PEP flags'],
+      asOf: entity.lastReviewDate || today,
+      status: allPep.length > 0 ? 'exposed' : 'clean',
+    };
+
+    // 7. Adverse Media
+    const adverseLogs = (entity.screeningLogs || []).filter(l =>
+      l.type === 'Negative News' || l.type === 'Adverse Media'
+    );
+    const lastAdv = adverseLogs[adverseLogs.length - 1];
+    data.adverse_media = {
+      value: {
+        has_adverse: entity.negativeNews || (lastAdv && !lastAdv.result.startsWith('Clear')),
+        categories: [],
+        summary: lastAdv ? lastAdv.result : '',
+      },
+      confidence: lastAdv ? 0.85 : 0.4,
+      sources: lastAdv ? [`Screening log ${lastAdv.id} (${lastAdv.date})`] : ['No screening on file'],
+      asOf: lastAdv ? lastAdv.date : 'N/A',
+      status: entity.negativeNews ? 'hit' : (lastAdv ? 'clean' : 'pending'),
+    };
+
+    // 8. Industry
+    data.industry = {
+      value: {
+        primary_industry: entity.industry || '(not set)',
+        operating_jurisdictions: [entity.jurisdiction].filter(Boolean),
+      },
+      confidence: entity.industry ? 0.7 : 0.2,
+      sources: ['Internal KYC record'],
+      asOf: today,
+      status: entity.industry ? 'verified' : 'pending',
+    };
+
+    // 9. Documents
+    const docs = entity.documents || [];
+    data.documents = {
+      value: {
+        received: docs.filter(d => d.status === 'received').length,
+        pending: docs.filter(d => d.status === 'pending').length,
+        expired: docs.filter(d => d.status === 'expired' || (d.expiry && d.expiry < today)).length,
+        total: docs.length,
+      },
+      confidence: 1,
+      sources: ['Internal document register'],
+      asOf: today,
+      status: docs.length === 0 ? 'pending'
+        : docs.filter(d => d.status === 'expired').length > 0 ? 'partial'
+        : docs.every(d => d.status === 'received') ? 'verified' : 'partial',
+    };
+
+    // 10. Risk Rating (CRR)
+    const eff = getEffectiveRating(entity);
+    data.risk_rating = {
+      value: {
+        rating: eff.rating,
+        score: eff.score,
+        override: eff.overridden,
+        auto_high_risk: eff.autoHighRisk || false,
+      },
+      confidence: 1,
+      sources: ['CRR engine'],
+      asOf: today,
+      status: eff.rating === 'High' ? 'hit' : eff.rating === 'Medium' ? 'partial' : 'verified',
+    };
+
+    return data;
+  }, [entity, entities, relationships, findUBOs, threshold, today, getEffectiveRating]);
+
+  // Merge auto + user overrides
+  const mergedResults = useMemo(() => {
+    const merged = {};
+    DEMAND_LIST_FIELDS.forEach(f => {
+      const auto = autoData[f.id];
+      const userOverride = fieldResults[f.id];
+      merged[f.id] = userOverride && userOverride._userEdited ? userOverride : auto;
+    });
+    return merged;
+  }, [autoData, fieldResults]);
+
+  // Persist user edits
+  React.useEffect(() => {
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(fieldResults)); } catch {}
+  }, [fieldResults, STORAGE_KEY]);
+
+  // Completion %
+  const completion = useMemo(() => {
+    const total = DEMAND_LIST_FIELDS.length;
+    const done = DEMAND_LIST_FIELDS.filter(f => {
+      const r = mergedResults[f.id];
+      return r && (r.status === 'verified' || r.status === 'clean' || r.status === 'hit');
+    }).length;
+    return Math.round(done / total * 100);
+  }, [mergedResults]);
+
+  const startEdit = (fieldId) => {
+    setEditingField(fieldId);
+    setEditDraft({ ...mergedResults[fieldId] });
+  };
+
+  const saveEdit = () => {
+    if (!editingField) return;
+    setFieldResults(prev => ({
+      ...prev,
+      [editingField]: { ...editDraft, _userEdited: true, asOf: today },
+    }));
+    setEditingField(null);
+    setEditDraft({});
+  };
+
+  const resetField = (fieldId) => {
+    setFieldResults(prev => {
+      const next = { ...prev };
+      delete next[fieldId];
+      return next;
+    });
+  };
+
+  const exportMarkdown = () => {
+    const lines = [
+      `# KYC Compliance Report — ${entity.name}`,
+      `Generated: ${today} | Completion: ${completion}%`,
+      ``,
+    ];
+    DEMAND_LIST_FIELDS.forEach((f, i) => {
+      const r = mergedResults[f.id];
+      const sc = STATUS_CONFIG[r.status] || STATUS_CONFIG.pending;
+      lines.push(`## ${i + 1}. ${f.icon} ${lang === 'zh' ? f.titleZh : f.titleEn}`);
+      lines.push(`**Status:** ${sc.icon} ${lang === 'zh' ? sc.labelZh : sc.labelEn} | **Confidence:** ${Math.round(r.confidence * 100)}%`);
+      lines.push(`**As of:** ${r.asOf}`);
+      lines.push(``);
+      lines.push('```json');
+      lines.push(JSON.stringify(r.value, null, 2));
+      lines.push('```');
+      lines.push(`**Sources:** ${r.sources.join(', ')}`);
+      lines.push(``);
+    });
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `KYC_Report_${entity.name.replace(/[^a-z0-9]/gi, '_')}_${today}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Header with progress */}
+      <div className="bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-200 rounded-2xl p-4">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-md shadow-indigo-500/30">
+              <span className="text-white text-base">📋</span>
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">
+                {lang === 'zh' ? 'KYC 需求清單' : 'KYC Demand-List'}
+              </h3>
+              <p className="text-[11px] text-slate-500">
+                {lang === 'zh' ? '結構化合規清單 · 10 個關鍵欄位' : 'Structured compliance checklist · 10 key fields'}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={exportMarkdown}
+            className="text-xs bg-gradient-to-r from-indigo-500 to-purple-600 text-white px-3 py-1.5 rounded-lg font-bold shadow-md shadow-indigo-500/20"
+          >
+            📥 {lang === 'zh' ? '匯出 MD' : 'Export MD'}
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex-1 h-2 bg-white/70 rounded-full overflow-hidden shadow-inner">
+            <div
+              className="h-full rounded-full transition-all duration-500 bg-gradient-to-r from-indigo-400 to-purple-500"
+              style={{ width: `${completion}%` }}
+            />
+          </div>
+          <span className="text-sm font-black text-indigo-700">{completion}%</span>
+        </div>
+      </div>
+
+      {/* Demand fields */}
+      <div className="space-y-2">
+        {DEMAND_LIST_FIELDS.map((f, idx) => {
+          const r = mergedResults[f.id];
+          const sc = STATUS_CONFIG[r.status] || STATUS_CONFIG.pending;
+          const isEditing = editingField === f.id;
+          const isUserEdited = fieldResults[f.id]?._userEdited;
+
+          return (
+            <div key={f.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden hover:shadow-sm transition-shadow">
+              <div className="p-3">
+                <div className="flex items-start justify-between gap-2 mb-2 flex-wrap">
+                  <div className="flex items-start gap-2 flex-1 min-w-0">
+                    <span className="text-slate-400 font-mono text-xs mt-0.5">{String(idx + 1).padStart(2, '0')}</span>
+                    <span className="text-base">{f.icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-bold text-slate-900">
+                        {lang === 'zh' ? f.titleZh : f.titleEn}
+                        {f.priority === 'critical' && <span className="ml-1.5 text-[9px] font-black text-red-600 bg-red-50 px-1.5 py-0.5 rounded border border-red-200">CRITICAL</span>}
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">{lang === 'zh' ? f.descZh : f.descEn}</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <BadgeC color={sc.color} dot>{sc.icon} {lang === 'zh' ? sc.labelZh : sc.labelEn}</BadgeC>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {Math.round(r.confidence * 100)}%
+                    </span>
+                  </div>
+                </div>
+
+                {/* Value display */}
+                <div className="bg-slate-50 rounded-lg p-2.5 text-xs mb-2 border border-slate-100">
+                  <pre className="whitespace-pre-wrap font-mono text-slate-700 text-[11px] leading-relaxed">
+                    {JSON.stringify(r.value, null, 2)}
+                  </pre>
+                </div>
+
+                {/* Sources + As of */}
+                <div className="flex items-center gap-3 text-[10px] text-slate-500 flex-wrap">
+                  <span><b>Sources:</b> {r.sources.join(', ') || 'None'}</span>
+                  <span>•</span>
+                  <span><b>As of:</b> {r.asOf}</span>
+                  {isUserEdited && (
+                    <>
+                      <span>•</span>
+                      <span className="text-indigo-600 font-bold">✏️ User-edited</span>
+                    </>
+                  )}
+                </div>
+
+                {/* Action buttons */}
+                <div className="flex gap-1.5 mt-2">
+                  <button
+                    onClick={() => startEdit(f.id)}
+                    className="text-[11px] px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold"
+                  >
+                    ✏️ {lang === 'zh' ? '修改' : 'Edit'}
+                  </button>
+                  {isUserEdited && (
+                    <button
+                      onClick={() => resetField(f.id)}
+                      className="text-[11px] px-2.5 py-1 rounded bg-amber-100 hover:bg-amber-200 text-amber-700 font-semibold"
+                    >
+                      ↺ {lang === 'zh' ? '還原自動值' : 'Reset to auto'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Edit panel */}
+              {isEditing && (
+                <div className="border-t border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 uppercase">Value (JSON)</label>
+                    <textarea
+                      value={JSON.stringify(editDraft.value, null, 2)}
+                      onChange={e => {
+                        try { setEditDraft({ ...editDraft, value: JSON.parse(e.target.value) }); }
+                        catch { /* invalid JSON — keep raw */ }
+                      }}
+                      rows={6}
+                      className="w-full text-[11px] font-mono border border-slate-200 rounded p-2 bg-white"
+                    />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase">Status</label>
+                      <select
+                        value={editDraft.status || 'pending'}
+                        onChange={e => setEditDraft({ ...editDraft, status: e.target.value })}
+                        className="w-full text-xs border border-slate-200 rounded px-2 py-1 bg-white"
+                      >
+                        {Object.entries(STATUS_CONFIG).map(([k, v]) => (
+                          <option key={k} value={k}>{v.icon} {lang === 'zh' ? v.labelZh : v.labelEn}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase">Confidence</label>
+                      <input
+                        type="number" min={0} max={1} step={0.05}
+                        value={editDraft.confidence ?? 0.7}
+                        onChange={e => setEditDraft({ ...editDraft, confidence: parseFloat(e.target.value) })}
+                        className="w-full text-xs border border-slate-200 rounded px-2 py-1 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase">As of</label>
+                      <input
+                        type="date"
+                        value={editDraft.asOf || today}
+                        onChange={e => setEditDraft({ ...editDraft, asOf: e.target.value })}
+                        className="w-full text-xs border border-slate-200 rounded px-2 py-1 bg-white"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 uppercase">Sources (comma-separated)</label>
+                    <input
+                      type="text"
+                      value={(editDraft.sources || []).join(', ')}
+                      onChange={e => setEditDraft({ ...editDraft, sources: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+                      className="w-full text-xs border border-slate-200 rounded px-2 py-1 bg-white"
+                      placeholder="e.g., HKEXnews 2024 annual report, OFAC SDN list"
+                    />
+                  </div>
+                  <div className="flex gap-2 justify-end pt-1">
+                    <button
+                      onClick={() => { setEditingField(null); setEditDraft({}); }}
+                      className="text-[11px] px-3 py-1 rounded border border-slate-300 text-slate-600"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={saveEdit}
+                      className="text-[11px] px-3 py-1 rounded bg-indigo-600 text-white font-bold"
+                    >
+                      Save
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
+
 
 /* =============== MAIN COMPONENT =============== */
 export default function KYCSystem() {
@@ -5749,6 +6329,7 @@ export default function KYCSystem() {
     const tabs = [
       { id: 'overview', label: t.overview },
       { id: 'cdd', label: `📋 ${t.cddTab}` },
+      { id: 'demandList', label: `🎯 ${t.demandListTab}` },
       { id: 'ubo', label: t.uboTab },
       { id: 'adverseMedia', label: '🔎 ' + (t.adverseMediaTab || 'Media') },
       { id: 'sanctionScreening', label: '🛡️ ' + (t.sanctionScreeningTab || 'Sanction') },
@@ -5854,7 +6435,23 @@ export default function KYCSystem() {
             showToast(lang === 'zh' ? '🚨 已標記 STR 並新增備註' : '🚨 STR flagged & note added');
           }} />
         </div>
-
+        
+    
+        <div className={detailTab === 'demandList' ? 'pb-2' : 'hidden'}>
+          <DemandListKYC
+            entity={ent}
+            entities={entities}
+            relationships={relationships}
+            findUBOs={findUBOs}
+            threshold={settings.uboThreshold}
+            calcCRR={calcCRR}
+            getEffectiveRating={getEffectiveRating}
+            lang={lang}
+            t={t}
+            today={today}
+          />
+        </div>
+        
         {detailTab === 'documents' && (<div>
           <div className="flex items-center justify-between mb-2"><div className="text-xs text-gray-500">{t.completion}: <span className={`font-bold ${docComp === 100 ? 'text-green-600' : 'text-amber-600'}`}>{docComp}%</span></div><button onClick={() => openModal('addDoc', { name: '', expiry: '' })} className="bg-blue-600 text-white px-2 py-1 rounded text-xs">{t.addDocument}</button></div>
           <div className="w-full bg-gray-200 rounded-full h-1.5 mb-3"><div className="h-1.5 rounded-full bg-green-500" style={{ width: `${docComp}%` }} /></div>
