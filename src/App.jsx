@@ -2063,15 +2063,17 @@ function classifyFromFacts({ facts, targetName, mode }) {
 
   // ── RULE 7 — ML/TF wrongdoing exists but target NOT the subject → IRRELEVANT
   if (facts.targetRole !== 'subject') {
-    const subjectClause = facts.actualSubjectName && facts.actualSubjectName.trim()
-      ? ` The actual subject of the wrongdoing is "${facts.actualSubjectName}", not the screened target.`
-      : '';
+    // 🆕 P16: gracefully handle cleared actualSubjectName
+    const cleanSubject = (facts.actualSubjectName || '').trim();
+    const subjectClause = cleanSubject
+      ? ` The actual subject of the wrongdoing is "${cleanSubject}", not the screened target.`
+      : ` The actual subject of the wrongdoing is a separate party (name not confirmed from the visible search-result snippet), not the screened target.`;
     return {
       cls: 'IRRELEVANT_MLTF',
       reason: `${irrelevantLabel}, because although the article${contextClause} describes ${wrongdoingText[facts.wrongdoingType] || 'wrongdoing'}, the screened target "${targetName}" appears only as ${roleText[facts.targetRole] || 'a connected party'}.${subjectClause}${distinguishingClause}${suffix}`,
-      riskCat: facts.actualSubjectName ? `N/A (Subject = ${facts.actualSubjectName})` : 'N/A',
+      riskCat: cleanSubject ? `N/A (Subject = ${cleanSubject})` : 'N/A',
       identityMatch: 'PARTIAL_MATCH',
-      actualSubjectName: facts.actualSubjectName || '',
+      actualSubjectName: cleanSubject,
       _factsConfidence: facts.factsConfidence,
     };
   }
@@ -2463,26 +2465,66 @@ function verifyKOAgainstSerp(facts, serpSnippet, rank) {
 
   const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '');
   const serpNorm = norm(serpSnippet);
+  const serpRaw = String(serpSnippet).toLowerCase();
+
+  // 🆕 P16: Expanded strong-fact extractor
+  const extractStrongFactsFromText = (text) => {
+    if (!text || typeof text !== 'string') return [];
+    const facts = new Set();
+
+    // (1) Large comma-numbers: "160,000" / "523,502,486"
+    for (const m of text.matchAll(/\b\d{2,3}(?:,\d{3})+(?:\.\d+)?\b/g)) facts.add(m[0]);
+
+    // (2) Decimals: "97.154" / "HKD 97.154"
+    for (const m of text.matchAll(/\b\d{1,4}\.\d{2,4}\b/g)) facts.add(m[0]);
+
+    // (3) Ratios / fractions: "4/4" / "12/14" (small numbers with slash)
+    for (const m of text.matchAll(/\b\d{1,3}\/\d{1,3}\b/g)) facts.add(m[0]);
+
+    // (4) Regulator IDs: "DA20130711000183" / "LTN20141219648"
+    for (const m of text.matchAll(/\b[A-Z]{2,}\d{4,}\b/g)) facts.add(m[0]);
+
+    // (5) ISO dates: "2022-06-30" / "2022/06/30"
+    for (const m of text.matchAll(/\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b/g)) facts.add(m[0]);
+
+    // (6) US dates: "06/30/2022"
+    for (const m of text.matchAll(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/g)) facts.add(m[0]);
+
+    // (7) Text dates "30 June 2022" / "June 30, 2022" / "June 30 2022"
+    const MONTH = '(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)';
+    for (const m of text.matchAll(new RegExp(`\\b\\d{1,2}\\s+${MONTH}\\s+\\d{4}\\b`, 'gi'))) facts.add(m[0]);
+    for (const m of text.matchAll(new RegExp(`\\b${MONTH}\\s+\\d{1,2}\\s*,?\\s*\\d{4}\\b`, 'gi'))) facts.add(m[0]);
+
+    // (8) Chinese dates: "2022年6月30日" / "30 June 2022年"
+    for (const m of text.matchAll(/\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/g)) facts.add(m[0]);
+
+    // (9) Month+Year phrases "June 2022" (only when paired with month name — too risky for bare year)
+    for (const m of text.matchAll(new RegExp(`\\b${MONTH}\\s+\\d{4}\\b`, 'gi'))) facts.add(m[0]);
+
+    // (10) Fiscal-year phrases "year ended 30 June 2022" → already covered by (7)
+    //      but ALSO catch "year ended YYYY" style citations
+    for (const m of text.matchAll(/\byear\s+ended\s+[^,.;]{4,40}\d{4}\b/gi)) facts.add(m[0]);
+
+    return [...facts];
+  };
 
   const checkField = (fieldName) => {
     const text = facts[fieldName];
     if (!text || typeof text !== 'string') return;
 
-    // Extract STRONG facts cited inside this field
-    const numbers = [...text.matchAll(/\b\d{2,3}(?:,\d{3})+(?:\.\d+)?\b/g)].map(m => m[0]);
-    const ids = [...text.matchAll(/\b[A-Z]{2,}\d{4,}\b/g)].map(m => m[0]);
-    const dates = [
-      ...[...text.matchAll(/\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b/g)].map(m => m[0]),
-      ...[...text.matchAll(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/g)].map(m => m[0]),
-    ];
-    const strong = [...new Set([...numbers, ...ids, ...dates])];
+    const strong = extractStrongFactsFromText(text);
     if (strong.length === 0) return;
 
-    const ungrounded = strong.filter(f => !serpNorm.includes(norm(f)));
+    const ungrounded = strong.filter(f => {
+      const fNorm = norm(f);
+      // Allow if found in SERP either as normalised substring OR as raw lowercase
+      return !serpNorm.includes(fNorm) && !serpRaw.includes(String(f).toLowerCase());
+    });
+
     if (ungrounded.length > 0) {
       console.warn(
-        `🚨 P14 rank ${rank}: ${fieldName} cites ${JSON.stringify(ungrounded)} ` +
-        `NOT in SERP snippet → likely hallucinated → CLEARING`
+        `🚨 P14+P16 rank ${rank}: ${fieldName} cites ${JSON.stringify(ungrounded)} ` +
+        `NOT in SERP snippet → hallucinated → CLEARING`
       );
       facts[fieldName] = '';
       facts._p14Cleared = (facts._p14Cleared || []).concat(
@@ -2493,6 +2535,34 @@ function verifyKOAgainstSerp(facts, serpSnippet, rank) {
 
   checkField('key_observation');
   checkField('targetActionInArticle');
+
+  // 🆕 P16: Also verify actualSubjectName against SERP
+  //   PATCH ⑥ already checks scraped body, but body can contain ANY name
+  //   from sibling filings. SERP is the authoritative source for "who is
+  //   the article actually about".
+  const subj = (facts.actualSubjectName || '').trim();
+  if (subj && subj.length >= 4) {
+    // Tokenise subject name (e.g. "KWOK Ping-sheung, Walter" → ["kwok","ping","sheung","walter"])
+    const subjTokens = subj
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .split(/\s+/)
+      .filter(t => t.length >= 3);
+
+    if (subjTokens.length >= 2) {
+      // Require at least 60% of distinctive subject tokens to appear in SERP
+      const matched = subjTokens.filter(t => serpRaw.includes(t));
+      const ratio = matched.length / subjTokens.length;
+      if (ratio < 0.6) {
+        console.warn(
+          `🚨 P16 rank ${rank}: actualSubjectName "${subj}" only ${matched.length}/${subjTokens.length} tokens in SERP → likely wrong subject → CLEARING`
+        );
+        facts.actualSubjectName = '';
+        facts._p16SubjectCleared = subj;
+      }
+    }
+  }
+
   return facts;
 }
 
