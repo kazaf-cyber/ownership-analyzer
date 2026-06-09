@@ -115,7 +115,7 @@ const MOCK_EN = [
   { rank: 5, cls: 'NO_HIT', reason: 'because the Bloomberg article (2026-03-01) is general regulatory news about Hong Kong\'s new AML framework and does not mention the screened target at all.' },
 ];
 
-const MOCK_ZH = MOCK_EN; // Same English output regardless of input language
+const MOCK_ZH = MOCK_EN;
 
 /* ════════════════════════════════════════════════════════════════
    HELPERS
@@ -163,82 +163,32 @@ function formatEntityContext(info) {
   return parts.join('\n');
 }
 
-function cleanGooglePdfText(rawText) {
-  let text = rawText.normalize('NFKC');
-  // Remove AI overview block
-  const aiStart = Math.max(text.indexOf('AI 概覽'), text.indexOf('AI Overview'));
-  if (aiStart !== -1) {
-    const searchMarker = Math.max(text.indexOf('的搜尋結果', aiStart), text.indexOf('search results', aiStart));
-    if (searchMarker !== -1 && searchMarker > aiStart) {
-      text = text.substring(0, aiStart) + '\n' + text.substring(searchMarker);
-    }
-  }
-  // Strip UI noise
-  text = text
-    .replace(/AI 模式\s*全部\s*新聞\s*圖片\s*購物\s*短片\s*影片\s*更多\s*工具/g, '\n')
-    .replace(/AI mode\s*All\s*News\s*Images\s*Shopping/gi, '\n')
-    .replace(/顯示更多\s*[∨vV>↓]?/g, '\n')
-    .replace(/翻譯這個網頁/g, '\n')
-    .replace(/說明\s+發送意見\s+私隱權政策\s+條款/g, '\n')
-    .replace(/About\s+Send feedback\s+Privacy\s+Terms/gi, '\n')
-    .replace(/\n{4,}/g, '\n\n\n');
-  return text.trim();
-}
-
-async function loadPdfJs() {
-  if (window.pdfjsLib) return;
-  await new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-    s.onload = () => {
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-      resolve();
-    };
-    s.onerror = () => reject(new Error('Failed to load PDF.js'));
-    document.head.appendChild(s);
-  });
-}
-
-async function extractPdfText(file) {
-  await loadPdfJs();
-  const arrayBuf = await new Promise((resolve, reject) => {
+/* ── NEW v2.3: File → base64 (for multimodal PDF upload) ── */
+async function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = ev => resolve(ev.target.result);
-    reader.onerror = () => reject(new Error('Cannot read PDF'));
-    reader.readAsArrayBuffer(file);
+    reader.onload = () => {
+      const result = reader.result;
+      const base64 = result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error('Cannot read file as base64'));
+    reader.readAsDataURL(file);
   });
-  const pdf = await window.pdfjsLib.getDocument({ data: arrayBuf }).promise;
-  let fullText = '';
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    let lastY = null;
-    let pageText = '';
-    for (const item of content.items) {
-      if (!item.str || !item.str.trim()) continue;
-      const y = item.transform ? item.transform[5] : null;
-      if (lastY !== null && y !== null && Math.abs(y - lastY) > 3) pageText += '\n';
-      pageText += item.str + ' ';
-      lastY = y;
-    }
-    fullText += pageText + '\n';
-  }
-  return cleanGooglePdfText(fullText);
 }
 
 /* ════════════════════════════════════════════════════════════════
-   PROMPT — Single-shot Poe Chat style
+   PROMPT v2.3 — Multimodal, Gold-Standard Aligned
    ════════════════════════════════════════════════════════════════ */
 
-function buildPrompt({ entityName, entityContext, pdfText, mode }) {
+function buildPrompt({ entityName, entityContext, mode }) {
   const ctxStr = formatEntityContext(entityContext);
   const hasContext = ctxStr.trim().length > 0;
   const isSanction = mode === 'sanction';
   const scopeLabel = isSanction ? 'sanction' : 'ML/TF';
   const irrelevantLabel = isSanction ? 'Irrelevant sanction' : 'Irrelevant ML/TF';
 
-  return `You are a senior KYC/AML compliance analyst. You are reviewing a Google search results PDF for a single screened target.
+  return `You are a senior KYC/AML compliance analyst. You are reviewing the ATTACHED PDF, which contains a Google search results page for adverse media / ${scopeLabel} screening on a single target.
 
 ═══════════════════════════════════════════════════════
 SCREENED TARGET
@@ -249,83 +199,125 @@ ${hasContext ? `Supplementary KYC identifiers (use to disambiguate same-name par
 ${ctxStr}` : 'Supplementary KYC identifiers: (none provided)'}
 
 ═══════════════════════════════════════════════════════
+PDF STRUCTURE — WHAT YOU CAN SEE
+═══════════════════════════════════════════════════════
+The attached PDF contains a Google Search Results page with:
+- Typically 10 numbered search results, each with: publisher icon/logo, publisher name, URL breadcrumb, blue title, date, and snippet
+- RED-HIGHLIGHTED keywords show which Google search term triggered the match
+  (common triggers: "bribery", "corruption", "ML", "AML", "penalty", "fraud",
+   "investigation", "Disciplinary Sanctions", "criminal", etc.)
+- You can directly read the visual layout — which keywords are highlighted in red,
+  which publisher logo appears, and whether keywords sit in body text vs sidebar/nav
+
+USE BOTH the visual layout AND the snippet text to analyze each result.
+
+═══════════════════════════════════════════════════════
 YOUR TASK
 ═══════════════════════════════════════════════════════
-Read the Google search results PDF text below. It contains N numbered search results (typically 5-10). For EACH result in order, classify it into EXACTLY ONE of these 4 labels:
+For EACH numbered result, classify it into EXACTLY ONE of 4 labels:
 
-  • True Hit          — the screened target is the DIRECT SUBJECT of ${scopeLabel}-related
-                        wrongdoing (named as accused, charged, investigated, sanctioned, etc.)
-  • False Hit         — the named party in the article is a DIFFERENT person/entity from the
-                        target (different jurisdiction, industry, identifiers, or KYC info
-                        clearly contradicts the article)
-  • ${irrelevantLabel}  — target IS mentioned but the content is outside ${scopeLabel} scope
-                        OR the wrongdoing is against a THIRD PARTY and target is only
-                        mentioned in passing (e.g. as colleague, relative, alternate director)
+  • True Hit          — target is the DIRECT SUBJECT of ${scopeLabel}-related wrongdoing
+                        (named as accused/charged/investigated/sanctioned/convicted)
+  • False Hit         — the named party is a DIFFERENT person/entity from the target
+                        (different jurisdiction, industry, or KYC info contradicts)
+  • ${irrelevantLabel}  — target IS mentioned but content is outside ${scopeLabel} scope,
+                        OR the wrongdoing belongs to a THIRD PARTY (target is only
+                        mentioned in passing — relative, colleague, alternate director)
   • No Hit            — target is not mentioned in this result at all
 
 ═══════════════════════════════════════════════════════
-OUTPUT FORMAT — STRICT RULES
+OUTPUT TEMPLATE — STRICT (one line per result)
 ═══════════════════════════════════════════════════════
-1. ENGLISH ONLY. Do not output any Chinese.
+\`<N>. <LABEL>: because <SOURCE_DESCRIPTION> <CONTEXT_EXPLANATION>, <EXONERATION_CLAUSE>.\`
 
-2. One line per result: \`<N>. <LABEL>: because <reason>\`
+──────────── COMPONENT 1 — SOURCE_DESCRIPTION (required) ────────────
+Always identify the publisher + document type from what you SEE in the PDF:
+  • "the HKEXnews announcement dated 19 December 2014"
+  • "the etnet article dated 16 July 2012"
+  • "the Sun Hung Kai Properties Corporate Governance Report"
+  • "the MarketScreener announcement"
+  • "the SEC.gov proxy voting record"
+  • "the Hong Kong Baptist University academic paper on elite sport development"
+ALWAYS include the date if visible. Convert Chinese dates to English:
+  "2014年12月19日" → "dated 19 December 2014"
+  "2012年7月13日" → "dated 13 July 2012"
 
-3. Allowed labels (case-sensitive, copy exactly):
-   "True Hit"  |  "False Hit"  |  "${irrelevantLabel}"  |  "No Hit"
+──────────── COMPONENT 2 — CONTEXT_EXPLANATION (pick applicable type) ────────────
 
-4. Reason MUST start with "because".
+(a) THIRD-PARTY-ACCUSED — wrongdoing belongs to someone OTHER than target:
+    Name the actual accused party explicitly. If unnamed in snippet, say
+    "another unnamed individual" or "other unnamed parties".
+    Examples:
+    • "refers to a bribery offence appeal by another unnamed individual, while
+       the target is only mentioned as ceasing to be an Alternate Director"
+    • "details Bribery Ordinance charges laid against Mr. KWOK Ping-luen,
+       while the target is mentioned only as his Alternate Director"
+    • "mentions board appointments during an Independent Commission Against
+       Corruption investigation involving other unnamed parties"
 
-5. Every reason MUST be UNIQUE. Anchor each with article-specific detail
-   (publication date, publisher, named party, amount, regulator, etc.).
+(b) KEYWORD-IN-CONTEXT — search trigger keyword appears in non-substantive context:
+    LOOK at the red-highlighted text to identify which keyword triggered the match.
+    Then determine if the keyword is substantive or cosmetic:
 
-6. Do NOT repeat the same date twice in the same reason.
+    • Navigation/sidebar/footer link
+      → "contains the term 'Disciplinary Sanctions' as a website navigation link
+         rather than a substantive regulatory action"
+    • HTML/CSS class artifact (e.g. "ml-5 txt-link txt-s1")
+      → "the highlighted 'ml' is part of an HTML class name, not money laundering"
+    • Item label / form code (e.g. "ML 2.1 RE-ELECTION OF...")
+      → "uses the term 'ML' as an alphanumeric item code rather than referring
+         to money laundering"
+    • Academic / research consent boilerplate
+      → "the word 'penalty' is used in the context of study participation
+         guidelines (no penalty for withdrawing from the research)"
+    • Statute / framework name only
+      → "mentions 'Prevention of Bribery Ordinance' only as a statutory framework
+         reference, with no specific allegation against the target"
 
-7. Do NOT echo the label inside the reason.
+(c) CORPORATE-GOVERNANCE-MENTION — target listed in routine board/director context:
+    • "mentions the target as a director in a general section discussing
+       anti-corruption training provided to the board"
+    • "mentions the target in a table within a general regulatory disclosure
+       section discussing potential remediation orders or prosecution"
 
-8. KYC-disambiguation rule: if the article's named party has identifying details
-   that CLEARLY CONTRADICT the KYC info above → False Hit.
+(d) NEUTRAL-DISCLOSURE — routine regulatory filing with target name:
+    • "merely lists share transaction details for the target"
+    • "merely lists a vote regarding the target's election as executive director"
+
+──────────── COMPONENT 3 — EXONERATION_CLAUSE (required, ROTATE between 3) ────────────
+For every "${irrelevantLabel}", "False Hit", and "No Hit", END the reason with ONE of:
+  • "with no allegations against the target"
+  • "the target is not implicated"
+  • "the target is not the subject of any wrongdoing"
+DO NOT use the same exoneration clause more than 4 times in a 10-result output.
+(For "True Hit" results, do NOT add an exoneration clause.)
 
 ═══════════════════════════════════════════════════════
-REASONING QUALITY RULES (CRITICAL — read carefully)
+GOLD-STANDARD REFERENCE EXAMPLES (target: KWOK KAI FAI ADAM)
 ═══════════════════════════════════════════════════════
-9. THIRD-PARTY-ACCUSED rule: If the wrongdoing in an article is attributed to a
-   NAMED PARTY who is NOT the screened target (e.g. target's relative, colleague,
-   or person with same surname), you MUST:
-     (a) Name the actual accused party EXPLICITLY
-         e.g. "the bribery charges were laid against Thomas Kwok and Raymond Kwok"
-     (b) State the target's incidental role
-         e.g. "the target is mentioned only as alternate director"
-   Classify as "${irrelevantLabel}" (NOT "True Hit", NOT "False Hit").
+Match the tone, density, and structure of these examples EXACTLY:
 
-10. KEYWORD-IN-CONTEXT rule: Search keywords may appear in the PDF as:
-    • Website navigation / boilerplate (e.g. "Disciplinary Sanctions" as sidebar link)
-    • Abbreviations or codes (e.g. "ML" as fund ticker, not money laundering)
-    • Legal framework references (e.g. "Prevention of Bribery Ordinance" as statute name)
-    When the keyword appears in such non-substantive context, classify as
-    "${irrelevantLabel}" or "No Hit" and EXPLICITLY note the keyword's true role.
-    Example: "the term 'ML' here is a fund abbreviation, not money laundering"
-
-11. GROUND-TRUTH rule: Your reason MUST be based ONLY on text actually present
-    in the PDF snippet. Do NOT invent article topics, publishers, or facts.
-    If a snippet is too brief, say "snippet too brief to determine substantive
-    context" rather than guessing.
-
-12. EXONERATION SUFFIX rule: For every "${irrelevantLabel}", "False Hit", and
-    "No Hit", the reason MUST end with an explicit statement that the target
-    is not accused. Use one of:
-      • "...with no allegations against the target."
-      • "...the target is not implicated."
-      • "...the target is not the subject of any wrongdoing."
-
-13. NO extra commentary. NO headers. NO markdown. ONLY the numbered list.
+1. Irrelevant ML/TF: because the HKEXnews announcement dated 19 December 2014 refers to a bribery offence appeal by another unnamed individual, while the target is only mentioned as ceasing to be an Alternate Director, with no allegations against the target.
+2. Irrelevant ML/TF: because the HKEXnews Disclosure of Interests filing contains the term "Disciplinary Sanctions" as a website navigation link rather than a substantive regulatory action, and merely lists share transaction details for the target, the target is not implicated.
+3. Irrelevant ML/TF: because the etnet article dated 16 July 2012 discusses appointments of alternate directors in the context of Bribery Ordinance investigations against other unnamed parties, the target is not the subject of any wrongdoing.
+6. Irrelevant ML/TF: because the MarketScreener announcement details Bribery Ordinance charges laid against Mr. KWOK Ping-luen, while the target is mentioned only as his Alternate Director, the target is not the subject of any wrongdoing.
+9. Irrelevant ML/TF: because the SEC.gov proxy voting record uses the term "ML" as an alphanumeric item code rather than referring to money laundering, and merely lists a vote regarding the target's election as executive director, the target is not the subject of any wrongdoing.
+10. Irrelevant ML/TF: because the Hong Kong Baptist University academic paper on elite sport development mentions the target's role in promoting sports, while the word "penalty" is used in the context of study participation guidelines, with no allegations against the target.
 
 ═══════════════════════════════════════════════════════
-GOOGLE SEARCH RESULTS PDF TEXT
+FINAL FORMAT RULES
 ═══════════════════════════════════════════════════════
-${pdfText.slice(0, 30000)}
+1. ENGLISH ONLY. No Chinese in output.
+2. Allowed labels (case-sensitive): "True Hit" | "False Hit" | "${irrelevantLabel}" | "No Hit"
+3. Every reason MUST start with "because" and be UNIQUE (no copy-paste between lines).
+4. KYC-disambiguation: if article's named party CLEARLY CONTRADICTS the KYC info above → False Hit.
+5. GROUND-TRUTH: reason MUST be based ONLY on what you actually see in the PDF.
+   If a snippet is too brief, say "snippet too brief to determine substantive context"
+   rather than inventing facts.
+6. NO extra commentary, headers, markdown, or bullet points. ONLY the numbered list.
 
 ═══════════════════════════════════════════════════════
-NOW OUTPUT THE NUMBERED CLASSIFICATION LIST (English only):
+NOW ANALYZE THE ATTACHED PDF AND OUTPUT THE NUMBERED LIST:
 ═══════════════════════════════════════════════════════`;
 }
 
@@ -335,7 +327,6 @@ NOW OUTPUT THE NUMBERED CLASSIFICATION LIST (English only):
 
 function parseAiResponse(text, mode) {
   const isSanction = mode === 'sanction';
-  const irrelevantStr = isSanction ? 'Irrelevant sanction' : 'Irrelevant ML/TF';
 
   const labelMap = {
     'true hit': 'TRUE_HIT',
@@ -348,10 +339,6 @@ function parseAiResponse(text, mode) {
 
   const results = [];
   const lines = text.split(/\n/);
-
-  // Match patterns like:  "1. True Hit: because ..."
-  //                       "1) False Hit — because ..."
-  //                       "1. **True Hit**: because ..."
   const lineRe = /^\s*(\d+)[.)\]]\s*\**\s*([^*:—\-]+?)\s*\**\s*[:：\-—]\s*(.+)$/;
 
   for (const ln of lines) {
@@ -363,7 +350,6 @@ function parseAiResponse(text, mode) {
 
     let cls = labelMap[rawLabel];
     if (!cls) {
-      // Try partial match
       if (rawLabel.includes('true')) cls = 'TRUE_HIT';
       else if (rawLabel.includes('false')) cls = 'FALSE_HIT';
       else if (rawLabel.includes('no hit') || rawLabel.includes('not hit')) cls = 'NO_HIT';
@@ -371,7 +357,6 @@ function parseAiResponse(text, mode) {
       else continue;
     }
 
-    // Strip leading "Because" → "because"
     reason = reason.replace(/^Because\s/, 'because ');
     if (!/^because\s/i.test(reason)) reason = `because ${reason}`;
 
@@ -452,7 +437,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
     [results, filterType]
   );
 
-  /* ── Run Analysis (SINGLE Poe API call) ── */
+  /* ── Run Analysis (MULTIMODAL Poe API call) ── */
   const runAnalysis = async () => {
     if (!pdfFile) { setErrorMsg('請先上傳搜尋結果 PDF 文件'); return; }
     if (!apiKey.trim()) { setErrorMsg('請輸入 POE API Key'); return; }
@@ -467,24 +452,22 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
     setExpandedId(null);
 
     try {
-      // ── Step 1: PDF → text ──
-      setProgress(20); setStage('正在讀取 PDF...');
-      const pdfText = await extractPdfText(pdfFile);
-      if (!pdfText.trim()) throw new Error('PDF 無法提取文字(可能是掃描圖片)');
-      console.log(`📄 PDF text extracted: ${pdfText.length} chars`);
+      // ── Step 1: PDF → base64 (NO text extraction — Gemini reads PDF directly) ──
+      setProgress(20); setStage('正在編碼 PDF (base64)...');
+      const base64Pdf = await fileToBase64(pdfFile);
+      console.log(`📄 PDF base64 encoded: ${base64Pdf.length} chars (${(pdfFile.size / 1024).toFixed(1)} KB)`);
 
-      // ── Step 2: Build prompt ──
-      setProgress(40); setStage('正在組建 prompt...');
+      // ── Step 2: Build prompt (multimodal — no pdfText needed) ──
+      setProgress(40); setStage('正在組建 multimodal prompt...');
       const userPrompt = buildPrompt({
         entityName: searchEntity,
         entityContext,
-        pdfText,
         mode,
       });
       console.log(`📝 Prompt length: ${userPrompt.length} chars`);
 
-      // ── Step 3: SINGLE Poe API call ──
-      setProgress(55); setStage('正在呼叫 Poe AI (gemini-3.5-flash)...');
+      // ── Step 3: MULTIMODAL Poe API call (PDF attached as file) ──
+      setProgress(55); setStage('正在呼叫 Poe AI (Gemini-3.5-Flash, multimodal PDF)...');
       const res = await fetch('https://api.poe.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -492,10 +475,21 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
           'Authorization': `Bearer ${apiKey.trim()}`,
         },
         body: JSON.stringify({
-          model: 'gemini-3.5-flash',
-          messages: [
-            { role: 'user', content: userPrompt }
-          ],
+          model: 'Gemini-3.5-Flash',
+          stream: false,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'text', text: userPrompt },
+              {
+                type: 'file',
+                file: {
+                  filename: pdfFile.name || 'google_search.pdf',
+                  file_data: `data:application/pdf;base64,${base64Pdf}`
+                }
+              }
+            ]
+          }],
           temperature: 0.3,
           max_tokens: 4000,
         }),
@@ -503,7 +497,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
 
       if (!res.ok) {
         const errText = await res.text();
-        throw new Error(`Poe API HTTP ${res.status}: ${errText.slice(0, 200)}`);
+        throw new Error(`Poe API HTTP ${res.status}: ${errText.slice(0, 300)}`);
       }
 
       const data = await res.json();
@@ -540,9 +534,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
 
   /* ── Manual override actions ── */
   const updateResultCls = (rank, newCls, note) => {
-    const labelStr = isSanction && newCls === 'IRRELEVANT_MLTF'
-      ? 'Irrelevant sanction'
-      : CLS_CONFIG[newCls].label;
     setResults(prev => prev.map(r => {
       if (r.rank !== rank) return r;
       const prevLabel = CLS_CONFIG[r.cls]?.label || r.cls;
@@ -665,11 +656,11 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
             <h1 className="text-lg font-bold tracking-tight flex items-center gap-2">
               {isSanction ? 'Sanction Screening' : 'Adverse Media Screening'}
               <span className="text-[10px] font-bold bg-emerald-400/30 text-white border border-emerald-300/50 px-2 py-0.5 rounded-full">
-                v2 · Poe Chat Port
+                v2.3 · Multimodal PDF
               </span>
             </h1>
             <p className="text-[11px] mt-0.5 text-white/80">
-              🚀 Single Poe API call · ~3-5 seconds · English-only output
+              🚀 Single Poe API call · PDF sent directly to Gemini · Gold-standard prompt
             </p>
           </div>
         </div>
@@ -764,7 +755,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
               </div>
             </div>
 
-            {/* ── STEP 2: Supplementary ID Info (FULL FORM — same as legacy) ── */}
+            {/* ── STEP 2: Supplementary ID Info ── */}
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
               <div className="flex items-start gap-3 mb-4 flex-wrap">
                 <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-lg">
@@ -784,7 +775,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {/* DOB */}
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
                     📅 Date of Birth
@@ -797,7 +787,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   />
                 </div>
 
-                {/* Nationality */}
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
                     🏳️ Nationality / Region
@@ -816,7 +805,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   </select>
                 </div>
 
-                {/* Gender */}
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
                     ⚧ Gender
@@ -843,7 +831,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   </div>
                 </div>
 
-                {/* Company */}
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
                     🏢 Company / Title
@@ -857,7 +844,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   />
                 </div>
 
-                {/* ID Number */}
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
                     🆔 ID Number
@@ -871,7 +857,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   />
                 </div>
 
-                {/* Address */}
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
                     📍 Address
@@ -885,7 +870,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   />
                 </div>
 
-                {/* Other Notes */}
                 <div className="md:col-span-2">
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
                     📝 Other Notes
@@ -912,7 +896,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg ${isSanction ? 'bg-gradient-to-br from-orange-500 to-red-600' : 'bg-gradient-to-br from-emerald-500 to-teal-600'}`}>2</div>
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">上傳搜尋結果 PDF</h2>
-                  <p className="text-[11px] text-slate-500 mt-0.5">將 Google 搜尋頁面儲存為 PDF 後上傳</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">PDF 會直接送俾 Gemini multimodal 解析(包括紅字 highlight / logo / layout)</p>
                 </div>
               </div>
               <div className="flex flex-col sm:flex-row gap-3 items-stretch">
@@ -950,12 +934,12 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg ${isSanction ? 'bg-gradient-to-br from-orange-500 to-red-600' : 'bg-gradient-to-br from-emerald-500 to-teal-600'}`}>3</div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h2 className="text-sm font-bold text-slate-900">AI 分析 (Single Call)</h2>
+                    <h2 className="text-sm font-bold text-slate-900">AI 分析 (Multimodal)</h2>
                     <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                      ⚡ 1 Poe API call · ~3-5s
+                      🖼️ Gemini 直接睇 PDF
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5">使用 gemini-3.5-flash · single-shot · English output</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">Gemini-3.5-Flash · base64 PDF attachment · Gold-standard few-shot prompt</p>
                 </div>
               </div>
 
@@ -988,8 +972,8 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                 )}
                 <p className="text-[10px] text-slate-500 mt-2 flex items-center gap-1 flex-wrap">
                   <span>使用</span>
-                  <span className="inline-block px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-bold text-[9px]">gemini-3.5-flash</span>
-                  <span>via Poe API</span>
+                  <span className="inline-block px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-bold text-[9px]">Gemini-3.5-Flash</span>
+                  <span>via Poe API (multimodal)</span>
                   <a href="https://poe.com/api_key" target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline ml-auto font-semibold">
                     取得 API Key →
                   </a>
@@ -1010,7 +994,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
               >
                 {isAnalyzing
                   ? <><Loader className="w-4 h-4 animate-spin" />AI 分析中...</>
-                  : <><Brain className="w-4 h-4" />開始 AI 分析 (Single Call)</>
+                  : <><Brain className="w-4 h-4" />開始 AI 分析 (Multimodal)</>
                 }
               </button>
             </div>
@@ -1034,7 +1018,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
             {/* ── RESULTS ── */}
             {analysisComplete && (
               <>
-                {/* Stats */}
                 <div className="grid grid-cols-5 gap-2.5">
                   <div className="bg-white rounded-2xl border border-slate-200 p-3 text-center">
                     <div className="text-2xl font-black text-slate-900">{results.length}</div>
@@ -1054,7 +1037,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   })}
                 </div>
 
-                {/* Filter tabs */}
                 <div className="bg-white rounded-2xl border border-slate-200 p-2">
                   <div className="flex gap-1 flex-wrap">
                     {[
@@ -1080,7 +1062,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   </div>
                 </div>
 
-                {/* Result cards */}
                 <div className="space-y-2">
                   {filteredResults.length === 0
                     ? <div className="text-center py-8 text-sm text-slate-400">No results</div>
@@ -1088,7 +1069,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   }
                 </div>
 
-                {/* Reset */}
                 <button
                   onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); setRawResponse(''); }}
                   className="w-full py-2 rounded-lg text-xs text-slate-500 border border-dashed hover:border-slate-400 hover:text-slate-700"
@@ -1096,7 +1076,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   🔄 Re-analyze (clear results)
                 </button>
 
-                {/* Copy summary */}
                 <div className="bg-slate-50 rounded-xl border p-4">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-sm font-bold text-slate-700">📋 Analysis Summary (Copy & Paste)</h3>
@@ -1117,7 +1096,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   </pre>
                 </div>
 
-                {/* Raw AI Response (debug) */}
                 {rawResponse && (
                   <details className="bg-slate-100 rounded-xl border p-3">
                     <summary className="text-xs font-bold text-slate-600 cursor-pointer">🔬 Raw AI Response (debug)</summary>
@@ -1127,7 +1105,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
               </>
             )}
 
-            {/* ── Demo mock (before analysis) ── */}
             {!analysisComplete && !isAnalyzing && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
                 <div className="flex items-center gap-2 mb-3">
@@ -1148,43 +1125,53 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
         {activeTab === 'arch' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div>
-              <h2 className="text-base font-bold text-slate-900">🏗️ v2 架構說明 (Poe Chat Port)</h2>
-              <p className="text-xs text-slate-500 mt-1">Single-shot 設計 · 對比 legacy 嘅 multi-stage pipeline</p>
+              <h2 className="text-base font-bold text-slate-900">🏗️ v2.3 架構說明 (Multimodal + Gold-Standard)</h2>
+              <p className="text-xs text-slate-500 mt-1">Multimodal PDF · Few-shot prompt · 直接複製 Poe Chat 嘅效果</p>
             </div>
 
             <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-4">
-              <div className="text-xs font-bold text-emerald-800 mb-2">⚡ v2 流程 (4 steps · 1 API call)</div>
+              <div className="text-xs font-bold text-emerald-800 mb-2">⚡ v2.3 流程 (4 steps · 1 multimodal API call)</div>
               <ol className="text-xs text-emerald-900 space-y-2 list-decimal list-inside">
                 <li><b>輸入實體名稱</b> → 自動生成 Google 查詢字串</li>
                 <li><b>填寫 Supplementary ID Info</b>(選填但強烈推薦) → 用嚟排除同名誤報</li>
-                <li><b>上傳 Google SERP PDF</b> → pdf.js 抽取文字 → 清理 noise</li>
-                <li><b>單一 Poe API call</b>(gemini-3.5-flash) → 收到結構化 numbered list → 即時解析 + 顯示</li>
+                <li><b>上傳 Google SERP PDF</b> → base64 編碼(無需 pdf.js 抽 text)</li>
+                <li><b>單一 Multimodal Poe API call</b>(Gemini-3.5-Flash) → PDF 作為 file attachment 直接送俾 Gemini → Gemini 真正「睇」PDF 嘅紅字 / logo / layout → 即時解析輸出</li>
               </ol>
             </div>
 
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
-              <div className="text-xs font-bold text-slate-700 mb-2">📊 v2 vs Legacy 對比</div>
+              <div className="text-xs font-bold text-slate-700 mb-2">📊 v2.3 vs v2.0 vs Legacy 對比</div>
               <table className="w-full text-xs border-collapse">
                 <thead>
                   <tr className="bg-white">
                     <th className="p-2 text-left border">指標</th>
-                    <th className="p-2 text-center border text-emerald-700">v2</th>
+                    <th className="p-2 text-center border text-emerald-700">v2.3 (Multimodal)</th>
+                    <th className="p-2 text-center border text-blue-700">v2.0 (Text-only)</th>
                     <th className="p-2 text-center border text-amber-700">Legacy</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td className="p-2 border">API calls</td><td className="p-2 border text-center font-bold text-emerald-700">1</td><td className="p-2 border text-center font-bold text-amber-700">11-25</td></tr>
-                  <tr><td className="p-2 border">分析時間</td><td className="p-2 border text-center font-bold text-emerald-700">~3-5s</td><td className="p-2 border text-center font-bold text-amber-700">~30-60s</td></tr>
-                  <tr><td className="p-2 border">Code 行數</td><td className="p-2 border text-center font-bold text-emerald-700">~900</td><td className="p-2 border text-center font-bold text-amber-700">~2000</td></tr>
-                  <tr><td className="p-2 border">Patches 數量</td><td className="p-2 border text-center font-bold text-emerald-700">0</td><td className="p-2 border text-center font-bold text-amber-700">17</td></tr>
-                  <tr><td className="p-2 border">輸出格式</td><td className="p-2 border text-center text-emerald-700">Point-form English</td><td className="p-2 border text-center text-amber-700">Per-article facts → JS rules</td></tr>
-                  <tr><td className="p-2 border">Hallucination 防護</td><td className="p-2 border text-center text-slate-600">靠 Prompt 約束</td><td className="p-2 border text-center text-slate-600">靠 P6-P16 patches</td></tr>
+                  <tr><td className="p-2 border">API calls</td><td className="p-2 border text-center font-bold text-emerald-700">1</td><td className="p-2 border text-center font-bold text-blue-700">1</td><td className="p-2 border text-center font-bold text-amber-700">11-25</td></tr>
+                  <tr><td className="p-2 border">PDF 處理</td><td className="p-2 border text-center text-emerald-700">Gemini 直讀</td><td className="p-2 border text-center text-blue-700">pdf.js 抽 text</td><td className="p-2 border text-center text-amber-700">pdf.js 抽 text</td></tr>
+                  <tr><td className="p-2 border">紅字 highlight 識別</td><td className="p-2 border text-center text-emerald-700">✅ 直接睇到</td><td className="p-2 border text-center text-blue-700">❌ 丟失</td><td className="p-2 border text-center text-amber-700">❌ 丟失</td></tr>
+                  <tr><td className="p-2 border">Logo / Layout 理解</td><td className="p-2 border text-center text-emerald-700">✅ 視覺識別</td><td className="p-2 border text-center text-blue-700">⚠️ 靠 URL</td><td className="p-2 border text-center text-amber-700">⚠️ 靠 URL</td></tr>
+                  <tr><td className="p-2 border">vs Poe Chat 對齊度</td><td className="p-2 border text-center font-bold text-emerald-700">~95-100%</td><td className="p-2 border text-center font-bold text-blue-700">~85-90%</td><td className="p-2 border text-center font-bold text-amber-700">~70%</td></tr>
+                  <tr><td className="p-2 border">Prompt 策略</td><td className="p-2 border text-center text-emerald-700">Few-shot gold std</td><td className="p-2 border text-center text-blue-700">Rule-based</td><td className="p-2 border text-center text-amber-700">17 patches</td></tr>
                 </tbody>
               </table>
             </div>
 
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
-              <b>💡 點解 v2 work:</b> Single-shot prompt 入面已經包含所有約束(English only / 4 labels / 唯一 reason / 唔重複日期),AI 喺一次 call 內見到所有文章上下文,反而比 multi-call pipeline 更加 consistent。
+              <b>💡 點解 v2.3 work:</b> (1) Multimodal — Gemini 直接「睇」PDF,可以分辨紅字 trigger keyword 喺正文定 sidebar nav;(2) Few-shot — prompt 內嵌 5 條 Poe Chat 實測 gold-standard output 做 in-context examples,model 直接 mimic 個 tone/structure;(3) Component template — Source + Context + Exoneration 三段式強制 schema,output 一致性極高。
+            </div>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800">
+              <b>⚠️ 注意事項:</b>
+              <ul className="list-disc list-inside mt-1 space-y-1">
+                <li>Multimodal call 嘅 cost 比純文字高(file tokens 比 text tokens 貴)</li>
+                <li>PDF 太大(&gt;10MB)可能會被 Poe API 拒收 — Google SERP PDF 通常 &lt;1MB,冇問題</li>
+                <li>Gemini-3.5-Flash 屬於 paid model,API key owner 需要有 Poe subscription 或 add-on points</li>
+              </ul>
             </div>
           </div>
         )}
