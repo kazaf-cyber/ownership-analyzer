@@ -363,32 +363,56 @@ function parseAiResponse(text, mode) {
   //                       "1. **True Hit**: because ..."
   const lineRe = /^\s*(\d+)[.)\]]\s*\**\s*([^*:—\-]+?)\s*\**\s*[:：\-—]\s*(.+)$/;
 
-  for (const ln of lines) {
-    const m = ln.match(lineRe);
-    if (!m) continue;
-    const rank = parseInt(m[1], 10);
-    const rawLabel = m[2].trim().toLowerCase().replace(/\s+/g, ' ');
-    let reason = m[3].trim();
+  const malformed = [];
 
-    let cls = labelMap[rawLabel];
-    if (!cls) {
-      // Try partial match
-      if (rawLabel.includes('true')) cls = 'TRUE_HIT';
-      else if (rawLabel.includes('false')) cls = 'FALSE_HIT';
-      else if (rawLabel.includes('no hit') || rawLabel.includes('not hit')) cls = 'NO_HIT';
-      else if (rawLabel.includes('irrelevant')) cls = 'IRRELEVANT_MLTF';
-      else continue;
-    }
+for (const ln of lines) {
+  // Step 1: 先抽 rank number (寬鬆 match)
+  const rankMatch = ln.match(/^\s*(\d+)\s*[.\):\-]\s*(.*)$/);
+  if (!rankMatch) continue;
 
-    // Strip leading "Because" → "because"
-    reason = reason.replace(/^Because\s/, 'because ');
-    if (!/^because\s/i.test(reason)) reason = `because ${reason}`;
+  const rank = +rankMatch[1];
+  const rest = rankMatch[2].trim();
 
-    results.push({ rank, cls, reason, _raw: ln });
+  // Step 2: 試 match 完整格式
+  const fullMatch = rest.match(/^(TRUE HIT|NO HIT|FALSE HIT|Irrelevant ML\/TF|Irrelevant)\s*[:\-]\s*(.+)$/i);
+
+  if (fullMatch) {
+    const [, cls, reason] = fullMatch;
+    results.push({
+      rank,
+      cls: normaliseCls(cls),
+      reason: reason.trim(),
+      _raw: ln,
+      _malformed: false,
+    });
+  } else {
+    // ── 有 rank 但格式唔啱 → 記低,唔好 drop ──
+    console.warn(`⚠️ Malformed line for rank ${rank}: "${ln}"`);
+    malformed.push(rank);
+    results.push({
+      rank,
+      cls: 'MALFORMED',
+      reason: `⚠️ AI returned incomplete output: "${ln}". Needs retry.`,
+      _raw: ln,
+      _malformed: true,
+    });
   }
-
-  return results;
 }
+
+// Sort + dedup (keep non-malformed if duplicate)
+results.sort((a, b) => a.rank - b.rank || (a._malformed ? 1 : -1));
+const seen = new Set();
+const deduped = results.filter(r => {
+  if (seen.has(r.rank)) return false;
+  seen.add(r.rank);
+  return true;
+});
+
+if (malformed.length) {
+  console.warn(`⚠️ Malformed ranks needing retry: ${malformed.join(', ')}`);
+}
+
+return deduped;
 
 /* ════════════════════════════════════════════════════════════════
    POST-PROCESSING — Enforce mandatory suffix on Irrelevant entries
