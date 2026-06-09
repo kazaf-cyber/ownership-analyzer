@@ -6766,28 +6766,79 @@ export default function KYCSystem() {
           {ent.type === 'company' ? (<>{ubos.length > 0 ? (<div className="bg-amber-50 rounded-lg p-3 border border-amber-200"><div className="text-xs font-semibold text-amber-700 mb-2">{t.detectedUBOs}: {ubos.length}</div>{ubos.map((u, i) => (<div key={i} className="bg-white rounded-lg p-3 border mb-2 last:mb-0"><div className="flex items-center gap-2 mb-1.5 flex-wrap"><span className="text-sm">👤</span><span className="font-bold text-sm">{u.entity.name}</span><BadgeC color="blue">{u.percentage}%</BadgeC>{u.entity.isPEP && <BadgeC color="purple">PEP</BadgeC>}<BadgeC color={u.direct ? 'green' : u.mixed ? 'indigo' : 'amber'}>{u.direct ? t.directOwnership : u.mixed ? t.mixedOwnership : t.indirectOwnership}</BadgeC></div>{u.paths.map((p, j) => (<div key={j} className="text-xs text-gray-500 ml-5">{p.direct ? '📍' : '🔗'} {p.chain.join(' → ')} → {ent.name} <span className="text-gray-400">({p.percentage}%)</span></div>))}</div>))}</div>) : (<div className="text-center py-10 text-gray-400"><div className="text-4xl mb-2">✅</div><div className="text-sm">{t.noUBOs}</div></div>)}</>) : (<div className="text-center py-8 text-gray-400 text-sm">{lang === 'zh' ? 'UBO 偵測僅適用於公司實體。' : 'UBO detection only for company entities.'}</div>)}
         </div>)}
 
-        {/* ✅ Adverse Media Tab */}
-          <div className={detailTab === 'adverseMedia' ? 'pb-2' : 'hidden'}>
-         <AdverseMediaScreening key={`ams-${ent.id}`} entityName={ent.name} onFlagSTR={(info) => {
-  updateEntity(ent.id, {
-    str: {
-      flagged: true,
-      submittedDate: null,
-      mlroApproved: false,
-      mlroDate: null,
-      _source: info.source,
-      _detail: `${info.title} | Risk: ${info.riskCat} | Confidence: ${Math.round(info.confidence * 100)}%`,
-    },
-    notes: [...ent.notes, {
-      id: gid(),
-      text: `🚨 STR flagged via ${info.source}: "${info.title}" (${info.riskCat}, ${Math.round(info.confidence * 100)}% confidence)`,
-      date: today,
-      author: 'System',
-    }],
-  });
-  showToast(lang === 'zh' ? '🚨 已標記 STR 並新增備註' : '🚨 STR flagged & note added');
-}} />
-        </div>
+        {/* ✅ Adverse Media Tab — v2 (Poe Chat port) vs legacy toggle */}
+<div className={detailTab === 'adverseMedia' ? 'pb-2' : 'hidden'}>
+  {/* Toggle bar — only shows on this tab */}
+  <div className="flex items-center justify-between mb-3 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+    <div className="text-xs text-slate-600">
+      <b>Engine:</b> {useV2
+        ? <span className="text-emerald-700">🟢 v2 · Poe Chat port (~250 lines, 1 API call)</span>
+        : <span className="text-amber-700">🟡 Legacy · 17-patch pipeline (~2000 lines, 11-25 API calls)</span>}
+    </div>
+    <button
+      onClick={() => setUseV2(!useV2)}
+      className={`text-xs px-3 py-1.5 rounded-lg font-bold transition shadow-sm ${
+        useV2
+          ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+          : 'bg-amber-500 text-white hover:bg-amber-600'
+      }`}
+    >
+      {useV2 ? '→ Switch to Legacy' : '→ Switch to v2'}
+    </button>
+  </div>
+
+  {/* Conditional render */}
+  {useV2 ? (
+    <ScreeningModuleV2
+      key={`v2-am-${ent.id}`}
+      entityName={ent.name}
+      mode="adverseMedia"
+      onFlagSTR={(info) => {
+        updateEntity(ent.id, {
+          str: {
+            flagged: true,
+            submittedDate: null,
+            mlroApproved: false,
+            mlroDate: null,
+            _source: info.source,
+            _detail: `${info.title} | Risk: ${info.riskCat} | Confidence: ${Math.round(info.confidence * 100)}%`,
+          },
+          notes: [...ent.notes, {
+            id: gid(),
+            text: `🚨 STR flagged via ${info.source}: "${info.title}" (${info.riskCat}, ${Math.round(info.confidence * 100)}% confidence)`,
+            date: today,
+            author: 'System',
+          }],
+        });
+        showToast(lang === 'zh' ? '🚨 已標記 STR 並新增備註' : '🚨 STR flagged & note added');
+      }}
+    />
+  ) : (
+    <AdverseMediaScreening
+      key={`ams-${ent.id}`}
+      entityName={ent.name}
+      onFlagSTR={(info) => {
+        updateEntity(ent.id, {
+          str: {
+            flagged: true,
+            submittedDate: null,
+            mlroApproved: false,
+            mlroDate: null,
+            _source: info.source,
+            _detail: `${info.title} | Risk: ${info.riskCat} | Confidence: ${Math.round(info.confidence * 100)}%`,
+          },
+          notes: [...ent.notes, {
+            id: gid(),
+            text: `🚨 STR flagged via ${info.source}: "${info.title}" (${info.riskCat}, ${Math.round(info.confidence * 100)}% confidence)`,
+            date: today,
+            author: 'System',
+          }],
+        });
+        showToast(lang === 'zh' ? '🚨 已標記 STR 並新增備註' : '🚨 STR flagged & note added');
+      }}
+    />
+  )}
+</div>
 
         <div className={detailTab === 'sanctionScreening' ? 'pb-2' : 'hidden'}>
           <SanctionScreening key={`ss-${ent.id}`} entityName={ent.name} onFlagSTR={(info) => {
