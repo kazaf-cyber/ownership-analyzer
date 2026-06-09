@@ -1,12 +1,15 @@
 // api/scrape.js — HTML (cheerio) + PDF (pdf-parse)
+// v2: per-host headers (SEC), bigger PDF limits, anti-bot fast-fail, 1x retry
 import * as cheerio from 'cheerio';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 
 const DEFAULT_MAX_CHARS = 3000;
-const FETCH_TIMEOUT_MS = 15000;
+const FETCH_TIMEOUT_MS = 15000;          // HTML
+const FETCH_TIMEOUT_PDF_MS = 45000;      // PDF needs longer (large annual reports)
 const MIN_USEFUL_CHARS = 80;
-const MAX_PDF_BYTES = 20 * 1024 * 1024;
-const MAX_PDF_PAGES = 50;
+const MAX_PDF_BYTES = 60 * 1024 * 1024;  // ⬆ was 20MB → 60MB (covers annual reports)
+const MAX_PDF_PAGES = 300;               // ⬆ was 50 → 300 (SHKP AR ~250 pages)
+const RETRY_DELAY_MS = 1500;
 
 const BROWSER_HEADERS = {
   'User-Agent':
@@ -17,6 +20,54 @@ const BROWSER_HEADERS = {
   'Accept-Language': 'zh-HK,zh-TW;q=0.9,zh;q=0.8,en;q=0.7',
   'Cache-Control': 'no-cache',
 };
+
+// ─── Per-host header overrides ──────────────────────────────
+// SEC.gov fair-access policy requires identifying UA with contact email.
+// Ref: https://www.sec.gov/os/accessing-edgar-data
+// ⚠️ REPLACE the email below with your real contact email before deploy.
+const SEC_UA = 'KYC Research Tool research@example.com';
+const HOST_HEADERS = {
+  'www.sec.gov': {
+    'User-Agent': SEC_UA,
+    'Accept-Encoding': 'gzip, deflate',
+    'Host': 'www.sec.gov',
+  },
+  'sec.gov': {
+    'User-Agent': SEC_UA,
+    'Accept-Encoding': 'gzip, deflate',
+  },
+};
+
+function getHeadersForUrl(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (HOST_HEADERS[host]) {
+      return { ...BROWSER_HEADERS, ...HOST_HEADERS[host] };
+    }
+  } catch {}
+  return BROWSER_HEADERS;
+}
+
+// ─── Known anti-bot / paywall hosts: fast-fail to snippet fallback ──
+// Server-side fetch is blocked by Cloudflare / paywall here.
+// Pipeline should detect _antibot flag and use Google snippet instead.
+const ANTIBOT_HOSTS = new Set([
+  'www.marketscreener.com',
+  'marketscreener.com',
+  'www.bloomberg.com',
+  'www.ft.com',
+  'www.wsj.com',
+  'www.nytimes.com',
+  'www.economist.com',
+]);
+
+function isAntiBotHost(url) {
+  try {
+    return ANTIBOT_HOSTS.has(new URL(url).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
 
 // ─── HTML → Text ────────────────────────────────────────────
 function htmlToText(html) {
@@ -114,16 +165,47 @@ export default async function handler(req, res) {
     });
   }
 
+  // ─── Fast-fail for known anti-bot hosts ───────────────────
+  if (isAntiBotHost(url)) {
+    return res.status(200).json({
+      success: false, url, title: '', text: '',
+      error: 'Anti-bot protection (Cloudflare/paywall) — use snippet fallback',
+      _antibot: true,
+    });
+  }
+
+  // ─── Pick timeout based on URL hint ───────────────────────
+  const isPdfHint = url.toLowerCase().endsWith('.pdf');
+  const timeoutMs = isPdfHint ? FETCH_TIMEOUT_PDF_MS : FETCH_TIMEOUT_MS;
+
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(url, {
+    const headers = getHeadersForUrl(url);
+
+    let response = await fetch(url, {
       method: 'GET',
-      headers: BROWSER_HEADERS,
+      headers,
       signal: controller.signal,
       redirect: 'follow',
     });
+
+    // 1x retry on 5xx or 429 (rate limit / transient)
+    if (!response.ok && (response.status >= 500 || response.status === 429)) {
+      await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+      try {
+        response = await fetch(url, {
+          method: 'GET',
+          headers,
+          signal: controller.signal,
+          redirect: 'follow',
+        });
+      } catch (_) {
+        // keep original failing response
+      }
+    }
+
     clearTimeout(timer);
 
     if (!response.ok) {
@@ -154,7 +236,7 @@ export default async function handler(req, res) {
       if (buffer.byteLength > MAX_PDF_BYTES) {
         return res.status(200).json({
           success: false, url, title: '', text: '',
-          error: `PDF too large: ${Math.round(buffer.byteLength / 1024 / 1024)}MB (limit 20MB)`,
+          error: `PDF too large: ${Math.round(buffer.byteLength / 1024 / 1024)}MB (limit ${MAX_PDF_BYTES / 1024 / 1024}MB)`,
         });
       }
       try {
@@ -213,7 +295,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       success: false, url, title: '', text: '',
       error: isTimeout
-        ? `Timeout after ${FETCH_TIMEOUT_MS}ms`
+        ? `Timeout after ${timeoutMs}ms`
         : `Fetch error: ${err.message}`,
     });
   }
