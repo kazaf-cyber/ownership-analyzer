@@ -3517,6 +3517,25 @@ PAGE-CONTENT SCRAPING:
   console.log(`📊 Final pipeline stats:`, scrapeStats);
 }
 
+// ════════════════════════════════════════════════════════════
+      // 🆕 PATCH P17 — Poe Web-Search pre-enrichment
+      //   Gemini-3.5-Flash via Poe API has NO web browsing capability.
+      //   Poe chat's UI auto-attaches browsing context; the API does not.
+      //   → We explicitly call Poe's Web-Search bot ONCE per entity to
+      //     fetch real web background, then inject into every Pass 1 prompt
+      //     where local /api/scrape failed.
+      //   Cost: ~500-800 pts per entity (subscription user → negligible).
+      // ════════════════════════════════════════════════════════════
+      setProgress(48);
+      setStage('🌐 Poe Web-Search: 正在補充 entity 真實 web 背景...');
+      const poeBackground = await enrichWithPoeWebSearch(searchEntity, apiKey, entityContext);
+      if (poeBackground) {
+        console.log(`✅ P17: Poe Web-Search returned ${poeBackground.length} chars of context`);
+      } else {
+        console.log(`⏭️ P17: Poe Web-Search returned nothing — Pass 1 will rely on local body only`);
+      }
+      
+
 // ═══════════════════════════════════════════════════════════
       // 🆕 TWO-PASS: Pass 1 (per-article fact extraction) + Pass 2 (JS classifier)
       // ═══════════════════════════════════════════════════════════
@@ -3592,13 +3611,34 @@ console.log(`📦 Article body sources:`, sources);
       setProgress(55);
 
       // ═══ Pass 1 — parallel per-article fact extraction ═══
+      //   🆕 P17: Inject Poe Web-Search background ONLY when the local
+      //   /api/scrape failed (a.hasFullBody === false).
+      //   Why conditional:
+      //     • If scrape succeeded → we already have authoritative full body
+      //       → no need to add background → avoids duplicate context.
+      //     • If scrape failed → AI only had 200-char SERP snippet → very
+      //       prone to hallucination → background fills the gap.
       const factsResults = await Promise.allSettled(
-        articles.map(a => extractArticleFacts({
-          targetName: searchEntity,
-          kycInfo: entityContext,
-          article: a,
-          apiKey,
-        }))
+        articles.map(a => {
+          const enrichedArticle = (a.hasFullBody || !poeBackground)
+            ? a
+            : {
+                ...a,
+                body:
+                  `[Poe Web-Search background for screened target "${searchEntity}" ` +
+                  `— treat as supplementary context, NOT as the article body]:\n` +
+                  `${poeBackground}\n\n` +
+                  `[─────── This specific article's content begins below ───────]\n` +
+                  `${a.body}`,
+                bodySource: a.bodySource + '+poe-bg',
+              };
+          return extractArticleFacts({
+            targetName: searchEntity,
+            kycInfo: entityContext,
+            article: enrichedArticle,
+            apiKey,
+          });
+        })
       );
 
       setProgress(85);
@@ -3719,10 +3759,22 @@ console.log(`📦 Article body sources:`, sources);
             const siblings = group.items.filter(s => s.rank !== item.rank);
             const article = articles.find(a => a.rank === item.rank);
             if (!article) return Promise.resolve(null);
+            // 🆕 P17: same Poe background injection for re-extraction
+            const enrichedArticle = (article.hasFullBody || !poeBackground)
+              ? article
+              : {
+                  ...article,
+                  body:
+                    `[Poe Web-Search background for screened target "${searchEntity}" ` +
+                    `— treat as supplementary context, NOT as the article body]:\n` +
+                    `${poeBackground}\n\n` +
+                    `[─────── This specific article's content begins below ───────]\n` +
+                    `${article.body}`,
+                };
             return reExtractWithDistinguishing({
               targetName: searchEntity,
               kycInfo: entityContext,
-              article,
+              article: enrichedArticle,
               siblings,
               apiKey,
             });
@@ -4820,6 +4872,18 @@ const ResultCard = ({ r }) => {
                 </div>
               </div>
             )}
+            
+            {/* 🆕 P17: Web-Search context indicator */}
+              {results.some(r => r._facts?.bodySource?.includes('poe-bg')) && (
+                <div className="bg-gradient-to-r from-teal-50 to-cyan-50 border border-teal-200 rounded-xl p-3 flex items-start gap-2.5">
+                  <span className="text-base mt-0.5">🌐</span>
+                  <div className="flex-1 text-xs text-teal-800">
+                    <b>Poe Web-Search enrichment was applied</b> to articles where local scraping failed.
+                    This mimics Poe chat's auto-browsing behaviour and dramatically reduces hallucination
+                    on snippet-only ranks.
+                  </div>
+                </div>
+              )}
 
             {analysisComplete && (<>
               {/* Statistics Grid — 5 columns (Total + 4 labels) */}
