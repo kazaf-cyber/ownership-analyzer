@@ -101,6 +101,22 @@ const CLS_CONFIG = {
     cardBg: 'from-emerald-50 to-teal-100 border-emerald-200',
     text: 'text-emerald-700',
   },
+  MALFORMED: {
+    label: '⚠️ Malformed',
+    icon: AlertTriangle,
+    leftBar: 'bg-yellow-500',
+    labelColor: 'text-yellow-700',
+    cardBg: 'from-yellow-50 to-yellow-100 border-yellow-300',
+    text: 'text-yellow-700',
+  },
+  UNPROCESSED: {
+    label: '⚠️ Unprocessed',
+    icon: AlertTriangle,
+    leftBar: 'bg-red-400',
+    labelColor: 'text-red-700',
+    cardBg: 'from-red-50 to-red-100 border-red-300',
+    text: 'text-red-700',
+  },
 };
 
 /* ════════════════════════════════════════════════════════════════
@@ -115,7 +131,7 @@ const MOCK_EN = [
   { rank: 5, cls: 'NO_HIT', reason: 'because the Bloomberg article is general regulatory news about Hong Kong\'s new AML framework and does not mention the screened target at all.' },
 ];
 
-const MOCK_ZH = MOCK_EN; // Same English output regardless of input language
+const MOCK_ZH = MOCK_EN;
 
 /* ════════════════════════════════════════════════════════════════
    HELPERS
@@ -165,7 +181,6 @@ function formatEntityContext(info) {
 
 function cleanGooglePdfText(rawText) {
   let text = rawText.normalize('NFKC');
-  // Remove AI overview block
   const aiStart = Math.max(text.indexOf('AI 概覽'), text.indexOf('AI Overview'));
   if (aiStart !== -1) {
     const searchMarker = Math.max(text.indexOf('的搜尋結果', aiStart), text.indexOf('search results', aiStart));
@@ -173,7 +188,6 @@ function cleanGooglePdfText(rawText) {
       text = text.substring(0, aiStart) + '\n' + text.substring(searchMarker);
     }
   }
-  // Strip UI noise
   text = text
     .replace(/AI 模式\s*全部\s*新聞\s*圖片\s*購物\s*短片\s*影片\s*更多\s*工具/g, '\n')
     .replace(/AI mode\s*All\s*News\s*Images\s*Shopping/gi, '\n')
@@ -228,10 +242,34 @@ async function extractPdfText(file) {
 }
 
 /* ════════════════════════════════════════════════════════════════
-   PROMPT — Single-shot, few-shot anchored, mandatory suffix
+   COUNT EXPECTED RESULTS FROM PDF TEXT
+   (Counts numbered SERP entries — looks for "N 頁" / domain patterns)
+   ════════════════════════════════════════════════════════════════ */
+function estimateResultCount(pdfText) {
+  // Heuristic: count the unique top-level result blocks.
+  // Google SERP PDFs usually show domain + URL + snippet per entry.
+  // We look for the typical pattern: "N 頁" page-count markers, or
+  // distinct "https://" lines. Fall back to splitting on "—" date markers.
+  const httpsMatches = pdfText.match(/https?:\/\/[^\s]+/g) || [];
+  const uniqueDomains = new Set(
+    httpsMatches.map(u => {
+      try { return new URL(u).hostname; } catch { return u; }
+    })
+  );
+  // Most Google SERPs show ~10 results per page
+  // Use the larger of (unique domain count) or 10 as upper bound, but
+  // do NOT trust this — return null so caller falls back to AI count.
+  if (uniqueDomains.size >= 3 && uniqueDomains.size <= 20) {
+    return uniqueDomains.size;
+  }
+  return null;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   PROMPT BUILDER
    ════════════════════════════════════════════════════════════════ */
 
-function buildPrompt({ entityName, entityContext, pdfText, mode }) {
+function buildPrompt({ entityName, entityContext, pdfText, mode, explicitRanks = null }) {
   const ctxStr = formatEntityContext(entityContext);
   const hasContext = ctxStr.trim().length > 0;
   const isSanction = mode === 'sanction';
@@ -241,8 +279,12 @@ function buildPrompt({ entityName, entityContext, pdfText, mode }) {
     ? 'There is no sanction negative news.'
     : 'There is no ML/TF negative news.';
 
-  return `You are a senior KYC/AML compliance analyst reviewing a Google search results PDF for a single screened target.
+  const retryNotice = explicitRanks
+    ? `\n\n⚠️ RETRY MODE: You previously failed to return complete output for the following rank numbers: ${explicitRanks.join(', ')}.\nThis time, output EXACTLY these ranks: ${explicitRanks.join(', ')}.\nUse the original rank numbers (do NOT renumber).\nEach entry MUST be a full multi-sentence analysis — no shorthand, no truncation.\n`
+    : '';
 
+  return `You are a senior KYC/AML compliance analyst reviewing a Google search results PDF for a single screened target.
+${retryNotice}
 ═══════════════════════════════════════════════════════
 SCREENED TARGET
 ═══════════════════════════════════════════════════════
@@ -266,7 +308,7 @@ Read the Google search results PDF text below. It contains N numbered search res
   • No Hit            — target is not mentioned in this result at all
 
 ═══════════════════════════════════════════════════════
-OUTPUT FORMAT
+OUTPUT FORMAT — STRICT
 ═══════════════════════════════════════════════════════
 One detailed entry per result, formatted as:
 
@@ -275,6 +317,28 @@ One detailed entry per result, formatted as:
 Allowed labels (case-sensitive): "True Hit" | "False Hit" | "${irrelevantLabel}" | "No Hit"
 
 ENGLISH ONLY. No Chinese. No preamble. No summary. Numbered analysis only.
+
+═══════════════════════════════════════════════════════
+🚨 CRITICAL ANTI-LAZINESS RULES 🚨
+═══════════════════════════════════════════════════════
+1. EVERY single result MUST include the FULL format:
+   "<rank>. <classification>: because <full reasoning of 3-5 sentences>"
+
+2. DO NOT abbreviate later entries — even if the classification is the same
+   as previous entries. Each result is a SEPARATE document and deserves its
+   OWN complete reasoning.
+
+3. DO NOT write shorthand like "10. Irrelevant" or "10. Irrelevant ML/TF: same as above".
+   Such output will be REJECTED and you will be asked to redo it.
+
+4. DO NOT merge, skip, or combine entries — even if content looks duplicated.
+   Each numbered search result MUST get its own dedicated entry.
+
+5. DO NOT output ranks outside the actual range of the PDF.
+
+6. If the PDF has 10 results, you MUST output 10 entries (1 through 10).
+   If the PDF has 7 results, you MUST output 7 entries (1 through 7).
+   Count carefully before responding.
 
 ───────────────────────────────────────────────────────
 EXAMPLES of the expected depth, length, and structure:
@@ -292,37 +356,28 @@ Match the example's depth and specificity for EVERY result. Each entry should ty
 ANALYTICAL RULES (read carefully)
 ═══════════════════════════════════════════════════════
 A. THIRD-PARTY-ACCUSED rule — If wrongdoing is attributed to a NAMED PARTY who
-   is NOT the target (e.g. target's relative, colleague, same-surname person),
-   you MUST:
+   is NOT the target, you MUST:
      (a) Name the actual accused party EXPLICITLY
-         e.g. "the bribery charges were laid against Thomas Kwok and Raymond Kwok"
      (b) State the target's incidental role
-         e.g. "the target is mentioned only as alternate director"
    → Classify as "${irrelevantLabel}".
 
-B. KEYWORD-IN-CONTEXT rule — Search keywords may appear as:
-     • Website navigation / boilerplate (e.g. "Disciplinary Sanctions" as sidebar)
-     • Abbreviations / codes (e.g. "ML" as fund ticker, not money laundering)
-     • Statute names (e.g. "Prevention of Bribery Ordinance" as legal framework)
-   When keyword appears in such non-substantive context, classify as
-   "${irrelevantLabel}" or "No Hit" and EXPLICITLY explain the keyword's true role.
+B. KEYWORD-IN-CONTEXT rule — Search keywords may appear as website navigation,
+   abbreviations/codes, or statute names. When keyword appears in such
+   non-substantive context, classify as "${irrelevantLabel}" or "No Hit" and
+   EXPLICITLY explain the keyword's true role.
 
 C. KYC-DISAMBIGUATION rule — If the article's named party has identifying
    details that CLEARLY CONTRADICT the KYC info above → False Hit.
 
 D. GROUND-TRUTH rule — Base your reason ONLY on text actually visible in the
-   PDF snippet. Do NOT invent facts, publishers, or topics. If a snippet is
-   too brief, say "snippet too brief to determine substantive context".
+   PDF snippet. Do NOT invent facts.
 
-E. MANDATORY SUFFIX rule — Every "${irrelevantLabel}" entry MUST end with
-   the EXACT sentence (verbatim, no paraphrase, no variation):
+E. MANDATORY SUFFIX rule — Every "${irrelevantLabel}" entry MUST end with the
+   EXACT sentence (verbatim, no paraphrase):
 
        "${mandatorySuffix}"
 
-   This sentence is appended AFTER your detailed analysis as the final
-   sentence. It is non-negotiable and applies to EVERY "${irrelevantLabel}"
-   entry without exception. Do NOT add this suffix to True Hit, False Hit,
-   or No Hit entries.
+   Do NOT add this suffix to True Hit, False Hit, or No Hit entries.
 
 ═══════════════════════════════════════════════════════
 GOOGLE SEARCH RESULTS PDF TEXT
@@ -330,89 +385,109 @@ GOOGLE SEARCH RESULTS PDF TEXT
 ${pdfText.slice(0, 30000)}
 
 ═══════════════════════════════════════════════════════
-Now analyze each search result. Write each reason with the depth and
-specificity a senior compliance analyst would naturally provide — explain
-the article's substantive context, name relevant third parties, identify
-keyword roles, and articulate why your classification holds. Do not
-artificially compress.
+Now analyze each search result. Count the results carefully and output
+ONE complete numbered entry for EACH result. Do not skip, merge, or
+abbreviate any entry.
 ═══════════════════════════════════════════════════════`;
 }
 
 /* ════════════════════════════════════════════════════════════════
-   PARSER — Convert AI text response into structured results
+   LABEL NORMALISER
+   ════════════════════════════════════════════════════════════════ */
+
+function normaliseCls(rawLabel) {
+  const k = rawLabel.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (k.startsWith('true hit')) return 'TRUE_HIT';
+  if (k.startsWith('false hit')) return 'FALSE_HIT';
+  if (k.startsWith('no hit')) return 'NO_HIT';
+  if (k.startsWith('irrelevant')) return 'IRRELEVANT_MLTF';
+  return 'IRRELEVANT_MLTF'; // safe default
+}
+
+/* ════════════════════════════════════════════════════════════════
+   PARSER — Two-stage: rank-first then label match
+   Never silently drops a line with a rank number.
    ════════════════════════════════════════════════════════════════ */
 
 function parseAiResponse(text, mode) {
-  const isSanction = mode === 'sanction';
-  const irrelevantStr = isSanction ? 'Irrelevant sanction' : 'Irrelevant ML/TF';
-
-  const labelMap = {
-    'true hit': 'TRUE_HIT',
-    'false hit': 'FALSE_HIT',
-    'no hit': 'NO_HIT',
-    'irrelevant ml/tf': 'IRRELEVANT_MLTF',
-    'irrelevant sanction': 'IRRELEVANT_MLTF',
-    'irrelevant': 'IRRELEVANT_MLTF',
-  };
-
   const results = [];
+  const malformedRanks = [];
   const lines = text.split(/\n/);
 
-  // Match patterns like:  "1. True Hit: because ..."
-  //                       "1) False Hit — because ..."
-  //                       "1. **True Hit**: because ..."
-  const lineRe = /^\s*(\d+)[.)\]]\s*\**\s*([^*:—\-]+?)\s*\**\s*[:：\-—]\s*(.+)$/;
+  // Stage 1: pull rank number off the line (very lenient)
+  const rankLeadRe = /^\s*\**\s*(\d+)\s*[.\)\]\-:]\s*\**\s*(.*)$/;
 
-  const malformed = [];
+  // Stage 2: validate full <label>: <reason> structure
+  const fullLineRe = /^\**\s*(True Hit|False Hit|No Hit|Irrelevant(?:\s+ML\/TF|\s+sanction)?)\s*\**\s*[:：\-—]\s*(.+)$/i;
 
-for (const ln of lines) {
-  // Step 1: 先抽 rank number (寬鬆 match)
-  const rankMatch = ln.match(/^\s*(\d+)\s*[.\):\-]\s*(.*)$/);
-  if (!rankMatch) continue;
+  for (const ln of lines) {
+    const trimmed = ln.trim();
+    if (!trimmed) continue;
 
-  const rank = +rankMatch[1];
-  const rest = rankMatch[2].trim();
+    const rankMatch = trimmed.match(rankLeadRe);
+    if (!rankMatch) continue;
 
-  // Step 2: 試 match 完整格式
-  const fullMatch = rest.match(/^(TRUE HIT|NO HIT|FALSE HIT|Irrelevant ML\/TF|Irrelevant)\s*[:\-]\s*(.+)$/i);
+    const rank = +rankMatch[1];
+    const rest = rankMatch[2].trim();
 
-  if (fullMatch) {
-    const [, cls, reason] = fullMatch;
-    results.push({
-      rank,
-      cls: normaliseCls(cls),
-      reason: reason.trim(),
-      _raw: ln,
-      _malformed: false,
-    });
-  } else {
-    // ── 有 rank 但格式唔啱 → 記低,唔好 drop ──
-    console.warn(`⚠️ Malformed line for rank ${rank}: "${ln}"`);
-    malformed.push(rank);
-    results.push({
-      rank,
-      cls: 'MALFORMED',
-      reason: `⚠️ AI returned incomplete output: "${ln}". Needs retry.`,
-      _raw: ln,
-      _malformed: true,
-    });
+    if (!rest) {
+      // pure "10." with nothing after
+      console.warn(`⚠️ Empty content for rank ${rank}: "${trimmed}"`);
+      malformedRanks.push(rank);
+      results.push({
+        rank,
+        cls: 'MALFORMED',
+        reason: `⚠️ AI returned only the rank number with no content. Original line: "${trimmed}"`,
+        _raw: trimmed,
+        _malformed: true,
+      });
+      continue;
+    }
+
+    const fullMatch = rest.match(fullLineRe);
+    if (fullMatch) {
+      const [, rawCls, reason] = fullMatch;
+      results.push({
+        rank,
+        cls: normaliseCls(rawCls),
+        reason: reason.trim(),
+        _raw: trimmed,
+        _malformed: false,
+      });
+    } else {
+      // Has rank + content but no recognisable label
+      console.warn(`⚠️ Malformed line for rank ${rank}: "${trimmed}"`);
+      malformedRanks.push(rank);
+      results.push({
+        rank,
+        cls: 'MALFORMED',
+        reason: `⚠️ AI returned incomplete output: "${trimmed}". Needs retry.`,
+        _raw: trimmed,
+        _malformed: true,
+      });
+    }
   }
+
+  // Sort by rank (non-malformed first if duplicate rank)
+  results.sort((a, b) => a.rank - b.rank || (a._malformed ? 1 : -1));
+
+  // Dedup: keep first occurrence of each rank
+  const seen = new Set();
+  const deduped = results.filter(r => {
+    if (seen.has(r.rank)) {
+      console.warn(`⚠️ Duplicate rank ${r.rank} — keeping first occurrence only`);
+      return false;
+    }
+    seen.add(r.rank);
+    return true;
+  });
+
+  if (malformedRanks.length) {
+    console.warn(`⚠️ Malformed ranks needing retry: ${malformedRanks.join(', ')}`);
+  }
+
+  return deduped;
 }
-
-// Sort + dedup (keep non-malformed if duplicate)
-results.sort((a, b) => a.rank - b.rank || (a._malformed ? 1 : -1));
-const seen = new Set();
-const deduped = results.filter(r => {
-  if (seen.has(r.rank)) return false;
-  seen.add(r.rank);
-  return true;
-});
-
-if (malformed.length) {
-  console.warn(`⚠️ Malformed ranks needing retry: ${malformed.join(', ')}`);
-}
-
-return deduped;
 
 /* ════════════════════════════════════════════════════════════════
    POST-PROCESSING — Enforce mandatory suffix on Irrelevant entries
@@ -424,7 +499,6 @@ function enforceSuffix(parsedResults, mode) {
     ? 'There is no sanction negative news.'
     : 'There is no ML/TF negative news.';
 
-  // Patterns that match paraphrased / partial versions to strip first
   const paraphrasePatterns = isSanction
     ? [
         /\s*there (is|are) no sanction[^.]*\.?\s*$/i,
@@ -438,31 +512,21 @@ function enforceSuffix(parsedResults, mode) {
         /\s*the target is not (accused|implicated|involved)[^.]*ML\/TF[^.]*\.?\s*$/i,
       ];
 
-  return parsedResults.map(entry => {
-    // Only enforce on IRRELEVANT_MLTF entries
-    if (entry.cls !== 'IRRELEVANT_MLTF') return entry;
+  return parsedResults
+    .map(entry => {
+      if (entry.cls !== 'IRRELEVANT_MLTF') return entry;
 
-    let reason = entry.reason.trim();
+      let reason = entry.reason.trim().replace(/\s+/g, ' ');
+      if (reason.endsWith(REQUIRED_SUFFIX)) return entry;
 
-    // Normalise whitespace
-    reason = reason.replace(/\s+/g, ' ');
-
-    // Already ends with exact required suffix → keep as-is
-    if (reason.endsWith(REQUIRED_SUFFIX)) return entry;
-
-    // Strip any paraphrased variants
-    for (const pattern of paraphrasePatterns) {
-      reason = reason.replace(pattern, '').trim();
-    }
-
-    // Ensure ends with a period before appending suffix
-    if (!/[.!?]$/.test(reason)) reason += '.';
-
-    // Append the canonical suffix
-    reason = `${reason} ${REQUIRED_SUFFIX}`;
-
-    return { ...entry, reason };
-  });
+      for (const pattern of paraphrasePatterns) {
+        reason = reason.replace(pattern, '').trim();
+      }
+      if (!/[.!?]$/.test(reason)) reason += '.';
+      reason = `${reason} ${REQUIRED_SUFFIX}`;
+      return { ...entry, reason };
+    })
+    .sort((a, b) => a.rank - b.rank);
 }
 
 function assertSuffixCompliance(results, mode) {
@@ -518,6 +582,8 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
   const [errorMsg, setErrorMsg] = useState('');
   const [copied, setCopied] = useState(false);
   const [strFlaggedRanks, setStrFlaggedRanks] = useState(new Set());
+  const [expectedCount, setExpectedCount] = useState(null);
+  const [retryAttempted, setRetryAttempted] = useState(false);
 
   const [entityContext, setEntityContext] = useState(saved?.entityContext || {
     dob: '', nationality: '', gender: '', company: '', idNumber: '', address: '', notes: ''
@@ -547,17 +613,48 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
   const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
 
   const counts = useMemo(() => {
-    const c = { TRUE_HIT: 0, FALSE_HIT: 0, IRRELEVANT_MLTF: 0, NO_HIT: 0 };
+    const c = { TRUE_HIT: 0, FALSE_HIT: 0, IRRELEVANT_MLTF: 0, NO_HIT: 0, MALFORMED: 0, UNPROCESSED: 0 };
     results.forEach(r => { if (c[r.cls] !== undefined) c[r.cls]++; });
     return c;
   }, [results]);
 
-  const filteredResults = useMemo(
-    () => filterType === 'ALL' ? results : results.filter(r => r.cls === filterType),
-    [results, filterType]
+  const filteredResults = useMemo(() => {
+    const base = filterType === 'ALL' ? results : results.filter(r => r.cls === filterType);
+    return [...base].sort((a, b) => a.rank - b.rank);
+  }, [results, filterType]);
+
+  const hasMismatch = expectedCount !== null && results.length !== expectedCount;
+  const malformedCount = useMemo(
+    () => results.filter(r => r._malformed || r.cls === 'MALFORMED' || r.cls === 'UNPROCESSED').length,
+    [results]
   );
 
-  /* ── Run Analysis (SINGLE Poe API call) ── */
+  /* ── Helper: call Poe ── */
+  const callPoe = async (userPrompt) => {
+    const res = await fetch('https://api.poe.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey.trim()}`,
+      },
+      body: JSON.stringify({
+        model: 'gemini-3.5-flash',
+        messages: [{ role: 'user', content: userPrompt }],
+        temperature: 0.3,
+        max_tokens: 4000,
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Poe API HTTP ${res.status}: ${errText.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const aiText = data?.choices?.[0]?.message?.content || '';
+    if (!aiText) throw new Error('Poe API 回傳空白內容');
+    return aiText;
+  };
+
+  /* ── Run Analysis ── */
   const runAnalysis = async () => {
     if (!pdfFile) { setErrorMsg('請先上傳搜尋結果 PDF 文件'); return; }
     if (!apiKey.trim()) { setErrorMsg('請輸入 POE API Key'); return; }
@@ -570,16 +667,22 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
     setErrorMsg('');
     setFilterType('ALL');
     setExpandedId(null);
+    setExpectedCount(null);
+    setRetryAttempted(false);
 
     try {
       // ── Step 1: PDF → text ──
-      setProgress(20); setStage('正在讀取 PDF...');
+      setProgress(15); setStage('正在讀取 PDF...');
       const pdfText = await extractPdfText(pdfFile);
       if (!pdfText.trim()) throw new Error('PDF 無法提取文字(可能是掃描圖片)');
       console.log(`📄 PDF text extracted: ${pdfText.length} chars`);
 
+      // Heuristic estimate of result count from PDF
+      const estimated = estimateResultCount(pdfText);
+      if (estimated) console.log(`🔢 Estimated result count from PDF: ${estimated}`);
+
       // ── Step 2: Build prompt ──
-      setProgress(40); setStage('正在組建 prompt...');
+      setProgress(30); setStage('正在組建 prompt...');
       const userPrompt = buildPrompt({
         entityName: searchEntity,
         entityContext,
@@ -588,50 +691,96 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
       });
       console.log(`📝 Prompt length: ${userPrompt.length} chars`);
 
-      // ── Step 3: SINGLE Poe API call ──
-      setProgress(55); setStage('正在呼叫 Poe AI (gemini-3.5-flash)...');
-      const res = await fetch('https://api.poe.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey.trim()}`,
-        },
-        body: JSON.stringify({
-          model: 'gemini-3.5-flash',
-          messages: [
-            { role: 'user', content: userPrompt }
-          ],
-          temperature: 0.3,
-          max_tokens: 4000,
-        }),
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Poe API HTTP ${res.status}: ${errText.slice(0, 200)}`);
-      }
-
-      const data = await res.json();
-      const aiText = data?.choices?.[0]?.message?.content || '';
-      if (!aiText) throw new Error('Poe API 回傳空白內容');
+      // ── Step 3: First Poe API call ──
+      setProgress(45); setStage('正在呼叫 Poe AI (gemini-3.5-flash)...');
+      let aiText = await callPoe(userPrompt);
       console.log(`🤖 AI response length: ${aiText.length} chars`);
       console.log(aiText);
-
       setRawResponse(aiText);
 
       // ── Step 4: Parse ──
-      setProgress(85); setStage('正在解析結果...');
-      const parsedRaw = parseAiResponse(aiText, mode);
-      console.log(`✅ Parsed ${parsedRaw.length} result(s)`);
+      setProgress(70); setStage('正在解析結果...');
+      let parsed = parseAiResponse(aiText, mode);
+      console.log(`✅ Parsed ${parsed.length} result(s)`);
 
-      if (parsedRaw.length === 0) {
+      if (parsed.length === 0) {
         throw new Error('AI 回傳格式無法解析 — 請檢查 console.log 嘅 raw response。');
       }
 
-      // ── Step 4b: Enforce mandatory suffix on Irrelevant entries ──
+      // ── Step 5: Determine expected count ──
+      // Use max rank returned by AI as ground truth (since AI saw the PDF)
+      const maxRank = Math.max(...parsed.map(r => r.rank));
+      const targetCount = Math.max(maxRank, estimated || 0);
+      setExpectedCount(targetCount);
+      console.log(`🎯 Expected total result count: ${targetCount}`);
+
+      // ── Step 6: Identify missing or malformed ranks → retry ──
+      const okRanks = new Set(parsed.filter(r => !r._malformed).map(r => r.rank));
+      const needsRetry = [];
+      for (let i = 1; i <= targetCount; i++) {
+        if (!okRanks.has(i)) needsRetry.push(i);
+      }
+
+      if (needsRetry.length > 0) {
+        setProgress(80); setStage(`正在 retry 漏咗嘅 ${needsRetry.length} 條...`);
+        console.warn(`🔄 Retrying ranks: ${needsRetry.join(', ')} (missing or malformed)`);
+        setRetryAttempted(true);
+
+        try {
+          const retryPrompt = buildPrompt({
+            entityName: searchEntity,
+            entityContext,
+            pdfText,
+            mode,
+            explicitRanks: needsRetry,
+          });
+          const retryText = await callPoe(retryPrompt);
+          console.log(`🔄 Retry response:`, retryText);
+          setRawResponse(prev => `${prev}\n\n========== RETRY RESPONSE ==========\n\n${retryText}`);
+
+          const retryParsed = parseAiResponse(retryText, mode);
+
+          // Replace malformed/missing entries with successful retry entries
+          const retryGoodByRank = new Map();
+          for (const r of retryParsed) {
+            if (!r._malformed && needsRetry.includes(r.rank)) {
+              retryGoodByRank.set(r.rank, r);
+            }
+          }
+
+          parsed = parsed.filter(r => !needsRetry.includes(r.rank) || !retryGoodByRank.has(r.rank));
+          for (const [, r] of retryGoodByRank) parsed.push(r);
+          parsed.sort((a, b) => a.rank - b.rank);
+          console.log(`✅ After retry: ${retryGoodByRank.size}/${needsRetry.length} ranks recovered`);
+        } catch (retryErr) {
+          console.error('Retry failed:', retryErr);
+        }
+      }
+
+      // ── Step 7: Fill any still-missing ranks with placeholder ──
+      const finalOkRanks = new Set(parsed.map(r => r.rank));
+      for (let i = 1; i <= targetCount; i++) {
+        if (!finalOkRanks.has(i)) {
+          parsed.push({
+            rank: i,
+            cls: 'UNPROCESSED',
+            reason: `⚠️ AI failed to return a valid result for entry #${i} after retry. Please re-run analysis or review the source PDF manually.`,
+            _raw: '',
+            _malformed: true,
+          });
+        }
+      }
+
+      // ── Step 8: Drop out-of-range ranks ──
+      parsed = parsed.filter(r => r.rank >= 1 && r.rank <= targetCount);
+
+      // ── Step 9: Final sort + enforce suffix ──
       setProgress(92); setStage('正在套用合規後處理...');
-      const parsed = enforceSuffix(parsedRaw, mode);
+      parsed.sort((a, b) => a.rank - b.rank);
+      parsed = enforceSuffix(parsed, mode);
       assertSuffixCompliance(parsed, mode);
+
+      console.log(`✅ Self-check: expected ${targetCount}, got ${parsed.length}`);
 
       setProgress(100); setStage('完成 ✓');
       setTimeout(() => {
@@ -650,9 +799,6 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
 
   /* ── Manual override actions ── */
   const updateResultCls = (rank, newCls, note) => {
-    const labelStr = isSanction && newCls === 'IRRELEVANT_MLTF'
-      ? 'Irrelevant sanction'
-      : CLS_CONFIG[newCls].label;
     setResults(prev => prev.map(r => {
       if (r.rank !== rank) return r;
       const prevLabel = CLS_CONFIG[r.cls]?.label || r.cls;
@@ -662,6 +808,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
         reason: `because ${note}. (Manually re-classified from "${prevLabel}" by analyst.)`,
         _manualOverride: true,
         _previousCls: r.cls,
+        _malformed: false,
       };
     }));
   };
@@ -704,6 +851,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
     const isOpen = expandedId === r.rank;
     const label = isSanction && r.cls === 'IRRELEVANT_MLTF' ? 'Irrelevant sanction' : c.label;
     const reason = r.reason.replace(/^because\s/, 'because ');
+    const isMalformed = r._malformed || r.cls === 'MALFORMED' || r.cls === 'UNPROCESSED';
 
     return (
       <div className="relative bg-white border border-slate-200 rounded-lg overflow-hidden hover:shadow-sm transition-shadow">
@@ -714,6 +862,11 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
         >
           <span className="text-sm font-bold text-slate-500 min-w-[24px] tabular-nums">{r.rank}.</span>
           <div className="flex-1 min-w-0">
+            {isMalformed && (
+              <div className="bg-yellow-100 border border-yellow-400 px-2 py-1 text-[10px] rounded mb-2 text-yellow-800 font-bold">
+                ⚠️ AI returned incomplete output for this entry — manual review required
+              </div>
+            )}
             <div className="text-[13px] leading-relaxed">
               <span className={`font-bold ${c.labelColor}`}>{label}</span>
               <span className="text-slate-400">: </span>
@@ -746,10 +899,13 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   <button onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'IRRELEVANT_MLTF', 'manually re-classified to Irrelevant by analyst'); }} className="text-[11px] px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-100 font-semibold">→ Irrelevant</button>
                 </>
               )}
-              {(r.cls === 'IRRELEVANT_MLTF' || r.cls === 'NO_HIT') && (
+              {(r.cls === 'IRRELEVANT_MLTF' || r.cls === 'NO_HIT' || r.cls === 'MALFORMED' || r.cls === 'UNPROCESSED') && (
                 <>
                   <button onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'TRUE_HIT', 'manually upgraded to True Hit by analyst'); }} className="text-[11px] px-2.5 py-1 rounded bg-red-500 text-white hover:bg-red-600 font-bold">↑ True Hit</button>
                   <button onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'FALSE_HIT', 'manually re-classified to False Hit by analyst'); }} className="text-[11px] px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-100 font-semibold">→ False Hit</button>
+                  {(r.cls === 'MALFORMED' || r.cls === 'UNPROCESSED') && (
+                    <button onClick={(e) => { e.stopPropagation(); updateResultCls(r.rank, 'IRRELEVANT_MLTF', 'manually re-classified to Irrelevant by analyst'); }} className="text-[11px] px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-100 font-semibold">→ Irrelevant</button>
+                  )}
                 </>
               )}
             </div>
@@ -1002,12 +1158,12 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg ${isSanction ? 'bg-gradient-to-br from-orange-500 to-red-600' : 'bg-gradient-to-br from-emerald-500 to-teal-600'}`}>3</div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h2 className="text-sm font-bold text-slate-900">AI 分析 (Single Call)</h2>
+                    <h2 className="text-sm font-bold text-slate-900">AI 分析 (with auto-retry)</h2>
                     <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                      ⚡ 1 Poe API call · ~3-5s
+                      ⚡ 1-2 Poe API calls · ~3-8s
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5">使用 gemini-3.5-flash · single-shot · English output</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">gemini-3.5-flash · single-shot + auto-retry malformed entries</p>
                 </div>
               </div>
 
@@ -1062,7 +1218,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
               >
                 {isAnalyzing
                   ? <><Loader className="w-4 h-4 animate-spin" />AI 分析中...</>
-                  : <><Brain className="w-4 h-4" />開始 AI 分析 (Single Call)</>
+                  : <><Brain className="w-4 h-4" />開始 AI 分析</>
                 }
               </button>
             </div>
@@ -1086,13 +1242,44 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
             {/* ── RESULTS ── */}
             {analysisComplete && (
               <>
+                {/* Count assertion banner */}
+                {expectedCount !== null && (
+                  <div className={`rounded-xl p-3 text-xs flex items-start gap-2 ${
+                    hasMismatch || malformedCount > 0
+                      ? 'bg-red-50 border border-red-300 text-red-700'
+                      : 'bg-emerald-50 border border-emerald-200 text-emerald-700'
+                  }`}>
+                    {hasMismatch || malformedCount > 0 ? (
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    ) : (
+                      <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    )}
+                    <div className="flex-1">
+                      <span className="font-bold">
+                        Self-check: returned {results.length} / expected {expectedCount} result(s)
+                      </span>
+                      {malformedCount > 0 && (
+                        <span className="ml-2 font-bold">
+                          · {malformedCount} entry(s) need manual review
+                        </span>
+                      )}
+                      {retryAttempted && (
+                        <span className="ml-2 text-[10px] opacity-75">
+                          (auto-retry was triggered)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Stats */}
                 <div className="grid grid-cols-5 gap-2.5">
                   <div className="bg-white rounded-2xl border border-slate-200 p-3 text-center">
                     <div className="text-2xl font-black text-slate-900">{results.length}</div>
                     <div className="text-[10px] text-slate-500 font-bold uppercase mt-0.5">Total</div>
                   </div>
-                  {Object.entries(CLS_CONFIG).map(([key, c]) => {
+                  {['TRUE_HIT', 'FALSE_HIT', 'IRRELEVANT_MLTF', 'NO_HIT'].map(key => {
+                    const c = CLS_CONFIG[key];
                     const Icon = c.icon;
                     return (
                       <div key={key} className={`bg-gradient-to-br ${c.cardBg} rounded-2xl border p-3 text-center`}>
@@ -1111,7 +1298,12 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   <div className="flex gap-1 flex-wrap">
                     {[
                       { k: 'ALL', l: 'All', count: results.length },
-                      ...Object.entries(CLS_CONFIG).map(([k, c]) => ({ k, l: isSanction && k === 'IRRELEVANT_MLTF' ? 'Irrelevant' : c.label, count: counts[k] })),
+                      ...['TRUE_HIT', 'FALSE_HIT', 'IRRELEVANT_MLTF', 'NO_HIT'].map(k => ({
+                        k,
+                        l: isSanction && k === 'IRRELEVANT_MLTF' ? 'Irrelevant' : CLS_CONFIG[k].label,
+                        count: counts[k],
+                      })),
+                      ...(malformedCount > 0 ? [{ k: 'MALFORMED', l: '⚠️ Malformed', count: counts.MALFORMED + counts.UNPROCESSED }] : []),
                     ].map(f => {
                       const isActive = filterType === f.k;
                       return (
@@ -1142,7 +1334,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
 
                 {/* Reset */}
                 <button
-                  onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); setRawResponse(''); }}
+                  onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); setRawResponse(''); setExpectedCount(null); setRetryAttempted(false); }}
                   className="w-full py-2 rounded-lg text-xs text-slate-500 border border-dashed hover:border-slate-400 hover:text-slate-700"
                 >
                   🔄 Re-analyze (clear results)
@@ -1201,16 +1393,19 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div>
               <h2 className="text-base font-bold text-slate-900">🏗️ v2 架構說明 (Poe Chat Port)</h2>
-              <p className="text-xs text-slate-500 mt-1">Single-shot 設計 · 對比 legacy 嘅 multi-stage pipeline</p>
+              <p className="text-xs text-slate-500 mt-1">Single-shot with auto-retry · 對比 legacy 嘅 multi-stage pipeline</p>
             </div>
 
             <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-4">
-              <div className="text-xs font-bold text-emerald-800 mb-2">⚡ v2 流程 (4 steps · 1 API call)</div>
+              <div className="text-xs font-bold text-emerald-800 mb-2">⚡ v2 流程 (1-2 API calls)</div>
               <ol className="text-xs text-emerald-900 space-y-2 list-decimal list-inside">
                 <li><b>輸入實體名稱</b> → 自動生成 Google 查詢字串</li>
-                <li><b>填寫 Supplementary ID Info</b>(選填但強烈推薦) → 用嚟排除同名誤報</li>
+                <li><b>填寫 Supplementary ID Info</b>(選填但強烈推薦)</li>
                 <li><b>上傳 Google SERP PDF</b> → pdf.js 抽取文字 → 清理 noise</li>
-                <li><b>單一 Poe API call</b>(gemini-3.5-flash) → 收到結構化 numbered list → enforce 強制 suffix → 即時解析 + 顯示</li>
+                <li><b>首次 Poe API call</b>(gemini-3.5-flash)→ 解析 numbered list</li>
+                <li><b>Self-check</b>: 對比 expected count vs returned count</li>
+                <li><b>Auto-retry</b>(如有 malformed/missing entries)→ 只重問漏咗嗰幾條</li>
+                <li><b>Enforce mandatory suffix</b> + sort + dedup → 顯示結果</li>
               </ol>
             </div>
 
@@ -1225,18 +1420,17 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td className="p-2 border">API calls</td><td className="p-2 border text-center font-bold text-emerald-700">1</td><td className="p-2 border text-center font-bold text-amber-700">11-25</td></tr>
-                  <tr><td className="p-2 border">分析時間</td><td className="p-2 border text-center font-bold text-emerald-700">~3-5s</td><td className="p-2 border text-center font-bold text-amber-700">~30-60s</td></tr>
+                  <tr><td className="p-2 border">API calls</td><td className="p-2 border text-center font-bold text-emerald-700">1-2</td><td className="p-2 border text-center font-bold text-amber-700">11-25</td></tr>
+                  <tr><td className="p-2 border">分析時間</td><td className="p-2 border text-center font-bold text-emerald-700">~3-8s</td><td className="p-2 border text-center font-bold text-amber-700">~30-60s</td></tr>
                   <tr><td className="p-2 border">Code 行數</td><td className="p-2 border text-center font-bold text-emerald-700">~900</td><td className="p-2 border text-center font-bold text-amber-700">~2000</td></tr>
-                  <tr><td className="p-2 border">Patches 數量</td><td className="p-2 border text-center font-bold text-emerald-700">0</td><td className="p-2 border text-center font-bold text-amber-700">17</td></tr>
+                  <tr><td className="p-2 border">Self-check</td><td className="p-2 border text-center font-bold text-emerald-700">✓ count + dedup + retry</td><td className="p-2 border text-center font-bold text-amber-700">無</td></tr>
                   <tr><td className="p-2 border">輸出格式</td><td className="p-2 border text-center text-emerald-700">Point-form English</td><td className="p-2 border text-center text-amber-700">Per-article facts → JS rules</td></tr>
-                  <tr><td className="p-2 border">Hallucination 防護</td><td className="p-2 border text-center text-slate-600">Prompt + suffix enforcement</td><td className="p-2 border text-center text-slate-600">靠 P6-P16 patches</td></tr>
                 </tbody>
               </table>
             </div>
 
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
-              <b>💡 點解 v2 work:</b> Single-shot prompt 包含 few-shot example + analytical rules,加上 code-level <code>enforceSuffix()</code> post-processing 保證每個 Irrelevant 結尾都有 mandatory suffix。
+              <b>💡 三層 self-check:</b> (1) Parser 永遠唔 silently drop,malformed line 會標記 + warn (2) Expected count vs returned count 對比,差咗就 auto-retry 漏咗嗰幾條 (3) UI 紅色 banner 標示 mismatch + malformed,卡片有黃色警告。
             </div>
           </div>
         )}
