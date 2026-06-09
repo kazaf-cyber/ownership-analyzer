@@ -25,7 +25,7 @@ const BROWSER_HEADERS = {
 // SEC.gov fair-access policy requires identifying UA with contact email.
 // Ref: https://www.sec.gov/os/accessing-edgar-data
 // ⚠️ REPLACE the email below with your real contact email before deploy.
-const SEC_UA = 'KYC Research Tool research@example.com';
+const SEC_UA = 'KYC Research Tool kazaftsui1987@gmail.com';
 const HOST_HEADERS = {
   'www.sec.gov': {
     'User-Agent': SEC_UA,
