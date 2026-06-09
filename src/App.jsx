@@ -5827,6 +5827,7 @@ function DemandListKYC({ entity, entities, relationships, findUBOs, threshold, c
 export default function KYCSystem() {
   const [lang, setLang] = useState('zh');
   const t = i18n[lang];
+  const [useV2, setUseV2] = useState(true);  // ← default v2,容易切返 legacy 對比
   const [entities, setEntities] = useState([]);
   const [relationships, setRelationships] = useState([]);
   const [view, setView] = useState('workspace');
