@@ -108,14 +108,14 @@ const CLS_CONFIG = {
    ════════════════════════════════════════════════════════════════ */
 
 const MOCK_EN = [
-  { rank: 1, cls: 'TRUE_HIT', reason: 'because the screened target "ABC Holdings Ltd" is directly named in a South China Morning Post article (2026-02-15) reporting that Hong Kong authorities have launched a formal money laundering investigation involving approximately USD 50 million.' },
-  { rank: 2, cls: 'TRUE_HIT', reason: 'because Reuters (2026-01-20) reports the target faces multiple fraud allegations linked to sanctions-evasion transactions with sanctioned counterparties, directly implicating the entity in ML/TF-scope wrongdoing.' },
-  { rank: 3, cls: 'FALSE_HIT', reason: 'because the named party "ABC Holdings Pty Ltd (Melbourne)" in The Australian (2026-01-10) is an Australian technology startup with a different jurisdiction and industry, so it is a different entity from the screened target.' },
-  { rank: 4, cls: 'IRRELEVANT_MLTF', reason: 'because the HK Economic Journal article (2026-02-01) concerns a HKD 120 million commercial supply-contract dispute, which is a civil matter outside the ML/TF scope.' },
-  { rank: 5, cls: 'NO_HIT', reason: 'because the Bloomberg article (2026-03-01) is general regulatory news about Hong Kong\'s new AML framework and does not mention the screened target at all.' },
+  { rank: 1, cls: 'TRUE_HIT', reason: 'because the screened target "ABC Holdings Ltd" is directly named in a South China Morning Post article reporting that Hong Kong authorities have launched a formal money laundering investigation involving approximately USD 50 million.' },
+  { rank: 2, cls: 'TRUE_HIT', reason: 'because Reuters reports the target faces multiple fraud allegations linked to sanctions-evasion transactions with sanctioned counterparties, directly implicating the entity in ML/TF-scope wrongdoing.' },
+  { rank: 3, cls: 'FALSE_HIT', reason: 'because the named party "ABC Holdings Pty Ltd (Melbourne)" in The Australian is an Australian technology startup with a different jurisdiction and industry, so it is a different entity from the screened target.' },
+  { rank: 4, cls: 'IRRELEVANT_MLTF', reason: 'because the HK Economic Journal article concerns a HKD 120 million commercial supply-contract dispute, which is a civil matter outside the ML/TF scope. There is no ML/TF negative news.' },
+  { rank: 5, cls: 'NO_HIT', reason: 'because the Bloomberg article is general regulatory news about Hong Kong\'s new AML framework and does not mention the screened target at all.' },
 ];
 
-const MOCK_ZH = MOCK_EN;
+const MOCK_ZH = MOCK_EN; // Same English output regardless of input language
 
 /* ════════════════════════════════════════════════════════════════
    HELPERS
@@ -165,6 +165,7 @@ function formatEntityContext(info) {
 
 function cleanGooglePdfText(rawText) {
   let text = rawText.normalize('NFKC');
+  // Remove AI overview block
   const aiStart = Math.max(text.indexOf('AI 概覽'), text.indexOf('AI Overview'));
   if (aiStart !== -1) {
     const searchMarker = Math.max(text.indexOf('的搜尋結果', aiStart), text.indexOf('search results', aiStart));
@@ -172,6 +173,7 @@ function cleanGooglePdfText(rawText) {
       text = text.substring(0, aiStart) + '\n' + text.substring(searchMarker);
     }
   }
+  // Strip UI noise
   text = text
     .replace(/AI 模式\s*全部\s*新聞\s*圖片\s*購物\s*短片\s*影片\s*更多\s*工具/g, '\n')
     .replace(/AI mode\s*All\s*News\s*Images\s*Shopping/gi, '\n')
@@ -198,7 +200,6 @@ async function loadPdfJs() {
   });
 }
 
-/* ── PDF → text (kept for debug logging only) ── */
 async function extractPdfText(file) {
   await loadPdfJs();
   const arrayBuf = await new Promise((resolve, reject) => {
@@ -226,47 +227,21 @@ async function extractPdfText(file) {
   return cleanGooglePdfText(fullText);
 }
 
-/* ── PDF → high-res PNG images (base64 data URIs) for multimodal API ── */
-async function pdfToImages(file, scale = 2.0) {
-  await loadPdfJs();
-  const arrayBuf = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = ev => resolve(ev.target.result);
-    reader.onerror = () => reject(new Error('Cannot read PDF'));
-    reader.readAsArrayBuffer(file);
-  });
-  const pdf = await window.pdfjsLib.getDocument({ data: arrayBuf }).promise;
-  const images = [];
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const viewport = page.getViewport({ scale });
-    const canvas = document.createElement('canvas');
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    const ctx = canvas.getContext('2d');
-    // white bg (avoid transparent PNG → black bg)
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    await page.render({ canvasContext: ctx, viewport }).promise;
-    // JPEG quality 0.85 = smaller payload than PNG, fine for text screenshots
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-    images.push(dataUrl);
-  }
-  return images;
-}
-
 /* ════════════════════════════════════════════════════════════════
-   PROMPT — Multimodal (PDF attached as images)
+   PROMPT — Single-shot, few-shot anchored, mandatory suffix
    ════════════════════════════════════════════════════════════════ */
 
-function buildPrompt({ entityName, entityContext, mode }) {
+function buildPrompt({ entityName, entityContext, pdfText, mode }) {
   const ctxStr = formatEntityContext(entityContext);
   const hasContext = ctxStr.trim().length > 0;
   const isSanction = mode === 'sanction';
   const scopeLabel = isSanction ? 'sanction' : 'ML/TF';
   const irrelevantLabel = isSanction ? 'Irrelevant sanction' : 'Irrelevant ML/TF';
+  const mandatorySuffix = isSanction
+    ? 'There is no sanction negative news.'
+    : 'There is no ML/TF negative news.';
 
-  return `You are a senior KYC/AML compliance analyst reviewing a Google search results PDF (attached as images) for a single screened target.
+  return `You are a senior KYC/AML compliance analyst reviewing a Google search results PDF for a single screened target.
 
 ═══════════════════════════════════════════════════════
 SCREENED TARGET
@@ -279,7 +254,7 @@ ${ctxStr}` : 'Supplementary KYC identifiers: (none provided)'}
 ═══════════════════════════════════════════════════════
 YOUR TASK
 ═══════════════════════════════════════════════════════
-The attached image(s) show a Google search results page with N numbered results. Read the full visual layout — titles, snippets, URLs, highlighted keywords. For EACH result in order, classify into EXACTLY ONE label:
+Read the Google search results PDF text below. It contains N numbered search results (typically 5-10). For EACH result in order, classify into EXACTLY ONE label:
 
   • True Hit          — the target is the DIRECT SUBJECT of ${scopeLabel}-related wrongdoing
                         (named as accused, charged, investigated, sanctioned, etc.)
@@ -293,50 +268,25 @@ The attached image(s) show a Google search results page with N numbered results.
 ═══════════════════════════════════════════════════════
 OUTPUT FORMAT
 ═══════════════════════════════════════════════════════
-One entry per result, formatted as:
+One detailed entry per result, formatted as:
 
   <N>. <LABEL>: because <detailed multi-sentence analysis>
 
 Allowed labels (case-sensitive): "True Hit" | "False Hit" | "${irrelevantLabel}" | "No Hit"
 
-ENGLISH ONLY. No Chinese. No preamble. No summary.
+ENGLISH ONLY. No Chinese. No preamble. No summary. Numbered analysis only.
 
 ───────────────────────────────────────────────────────
-EXAMPLE of the expected depth and length per entry:
+EXAMPLES of the expected depth, length, and structure:
 ───────────────────────────────────────────────────────
 
-1. Irrelevant ML/TF: because this MarketScreener article reports on bribery
-   charges brought under the Prevention of Bribery Ordinance by Hong Kong's
-   Independent Commission Against Corruption against Mr. Thomas Kwok and Mr.
-   Raymond Kwok, the co-chairmen of Sun Hung Kai Properties, in connection
-   with the long-running SHKP corruption case. The screened target "KWOK
-   Kai-fai, Adam" is referenced in the snippet only in his incidental
-   corporate-governance capacity as an alternate director appointed to the
-   board during the period of the investigation, and is not himself named
-   as a defendant, suspect, or person of interest in the proceedings. The
-   article therefore concerns wrongdoing attributed exclusively to third
-   parties, and the target's appearance is a passive board-disclosure
-   mention rather than any allegation of money laundering, terrorist
-   financing, or predicate financial crime against him.
+1. ${irrelevantLabel}: because this MarketScreener article reports on bribery charges brought under the Prevention of Bribery Ordinance by Hong Kong's Independent Commission Against Corruption against Mr. Thomas Kwok and Mr. Raymond Kwok, the co-chairmen of Sun Hung Kai Properties, in connection with the long-running SHKP corruption case. The screened target is referenced in the snippet only in his incidental corporate-governance capacity as an alternate director appointed to the board during the period of the investigation, and is not himself named as a defendant, suspect, or person of interest in the proceedings. The article therefore concerns wrongdoing attributed exclusively to third parties, and the target's appearance is a passive board-disclosure mention rather than any allegation of predicate financial crime against him. ${mandatorySuffix}
 
-2. No Hit: because this is a routine United States Securities and Exchange
-   Commission Form N-PX proxy-voting record disclosing how a mutual fund
-   cast its shareholder vote on the re-election of the target "KWOK
-   KAI-FAI, ADAM" as an executive director of the listed company. The
-   filing contains no narrative about the target's conduct and makes no
-   allegation of misconduct of any kind. The token "ML" highlighted by the
-   Google search appears as a fund-family ticker abbreviation (e.g. a
-   Merrill Lynch or similar fund code) embedded in the filing's tabular
-   data, and bears no semantic relationship to "money laundering" — it is
-   a false keyword match generated by substring search.
+2. No Hit: because this is a routine United States Securities and Exchange Commission Form N-PX proxy-voting record disclosing how a mutual fund cast its shareholder vote on the re-election of the target as an executive director of the listed company. The filing contains no narrative about the target's conduct and makes no allegation of misconduct of any kind. The token "ML" highlighted by the Google search appears as a fund-family ticker abbreviation embedded in the filing's tabular data, and bears no semantic relationship to "money laundering" — it is a false keyword match generated by substring search.
 
 ───────────────────────────────────────────────────────
 
-Match the example's depth and specificity for EVERY result. Each entry
-should typically be 3-5 sentences covering: (a) what the article actually
-is about, (b) who the named wrongdoers are if any, (c) the target's
-specific role in the document, and (d) why your classification follows.
-───────────────────────────────────────────────────────
+Match the example's depth and specificity for EVERY result. Each entry should typically be 3-5 sentences covering: (a) what the article actually is about, (b) who the named wrongdoers are if any, (c) the target's specific role in the document, and (d) why your classification follows.
 
 ═══════════════════════════════════════════════════════
 ANALYTICAL RULES (read carefully)
@@ -361,26 +311,40 @@ C. KYC-DISAMBIGUATION rule — If the article's named party has identifying
    details that CLEARLY CONTRADICT the KYC info above → False Hit.
 
 D. GROUND-TRUTH rule — Base your reason ONLY on text actually visible in the
-   attached PDF image(s). Do NOT invent facts, publishers, or topics. If a
-   snippet is too brief, say "snippet too brief to determine substantive context".
+   PDF snippet. Do NOT invent facts, publishers, or topics. If a snippet is
+   too brief, say "snippet too brief to determine substantive context".
 
-E. KYC-conscious — For "${irrelevantLabel}", "False Hit", and "No Hit", make
-   clear that the target is not accused. Vary your phrasing naturally.
+E. MANDATORY SUFFIX rule — Every "${irrelevantLabel}" entry MUST end with
+   the EXACT sentence (verbatim, no paraphrase, no variation):
+
+       "${mandatorySuffix}"
+
+   This sentence is appended AFTER your detailed analysis as the final
+   sentence. It is non-negotiable and applies to EVERY "${irrelevantLabel}"
+   entry without exception. Do NOT add this suffix to True Hit, False Hit,
+   or No Hit entries.
 
 ═══════════════════════════════════════════════════════
-Now analyze the attached PDF images. Write each reason with the depth and
+GOOGLE SEARCH RESULTS PDF TEXT
+═══════════════════════════════════════════════════════
+${pdfText.slice(0, 30000)}
+
+═══════════════════════════════════════════════════════
+Now analyze each search result. Write each reason with the depth and
 specificity a senior compliance analyst would naturally provide — explain
 the article's substantive context, name relevant third parties, identify
 keyword roles, and articulate why your classification holds. Do not
 artificially compress.
 ═══════════════════════════════════════════════════════`;
 }
+
 /* ════════════════════════════════════════════════════════════════
    PARSER — Convert AI text response into structured results
    ════════════════════════════════════════════════════════════════ */
 
 function parseAiResponse(text, mode) {
   const isSanction = mode === 'sanction';
+  const irrelevantStr = isSanction ? 'Irrelevant sanction' : 'Irrelevant ML/TF';
 
   const labelMap = {
     'true hit': 'TRUE_HIT',
@@ -394,6 +358,9 @@ function parseAiResponse(text, mode) {
   const results = [];
   const lines = text.split(/\n/);
 
+  // Match patterns like:  "1. True Hit: because ..."
+  //                       "1) False Hit — because ..."
+  //                       "1. **True Hit**: because ..."
   const lineRe = /^\s*(\d+)[.)\]]\s*\**\s*([^*:—\-]+?)\s*\**\s*[:：\-—]\s*(.+)$/;
 
   for (const ln of lines) {
@@ -405,6 +372,7 @@ function parseAiResponse(text, mode) {
 
     let cls = labelMap[rawLabel];
     if (!cls) {
+      // Try partial match
       if (rawLabel.includes('true')) cls = 'TRUE_HIT';
       else if (rawLabel.includes('false')) cls = 'FALSE_HIT';
       else if (rawLabel.includes('no hit') || rawLabel.includes('not hit')) cls = 'NO_HIT';
@@ -412,6 +380,7 @@ function parseAiResponse(text, mode) {
       else continue;
     }
 
+    // Strip leading "Because" → "because"
     reason = reason.replace(/^Because\s/, 'because ');
     if (!/^because\s/i.test(reason)) reason = `because ${reason}`;
 
@@ -419,6 +388,78 @@ function parseAiResponse(text, mode) {
   }
 
   return results;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   POST-PROCESSING — Enforce mandatory suffix on Irrelevant entries
+   ════════════════════════════════════════════════════════════════ */
+
+function enforceSuffix(parsedResults, mode) {
+  const isSanction = mode === 'sanction';
+  const REQUIRED_SUFFIX = isSanction
+    ? 'There is no sanction negative news.'
+    : 'There is no ML/TF negative news.';
+
+  // Patterns that match paraphrased / partial versions to strip first
+  const paraphrasePatterns = isSanction
+    ? [
+        /\s*there (is|are) no sanction[^.]*\.?\s*$/i,
+        /\s*no sanction (negative news|allegations?|concerns?|hits?|matches?)[^.]*\.?\s*$/i,
+        /\s*the target is not (subject to|on)[^.]*sanction[^.]*\.?\s*$/i,
+      ]
+    : [
+        /\s*there (is|are) no ML\/TF[^.]*\.?\s*$/i,
+        /\s*there (is|are) no (money laundering|terrorist financing)[^.]*\.?\s*$/i,
+        /\s*no ML\/TF (negative news|allegations?|concerns?|hits?)[^.]*\.?\s*$/i,
+        /\s*the target is not (accused|implicated|involved)[^.]*ML\/TF[^.]*\.?\s*$/i,
+      ];
+
+  return parsedResults.map(entry => {
+    // Only enforce on IRRELEVANT_MLTF entries
+    if (entry.cls !== 'IRRELEVANT_MLTF') return entry;
+
+    let reason = entry.reason.trim();
+
+    // Normalise whitespace
+    reason = reason.replace(/\s+/g, ' ');
+
+    // Already ends with exact required suffix → keep as-is
+    if (reason.endsWith(REQUIRED_SUFFIX)) return entry;
+
+    // Strip any paraphrased variants
+    for (const pattern of paraphrasePatterns) {
+      reason = reason.replace(pattern, '').trim();
+    }
+
+    // Ensure ends with a period before appending suffix
+    if (!/[.!?]$/.test(reason)) reason += '.';
+
+    // Append the canonical suffix
+    reason = `${reason} ${REQUIRED_SUFFIX}`;
+
+    return { ...entry, reason };
+  });
+}
+
+function assertSuffixCompliance(results, mode) {
+  const isSanction = mode === 'sanction';
+  const requiredSuffix = isSanction
+    ? 'There is no sanction negative news.'
+    : 'There is no ML/TF negative news.';
+
+  const violations = results.filter(r =>
+    r.cls === 'IRRELEVANT_MLTF' &&
+    !r.reason.trim().endsWith(requiredSuffix)
+  );
+
+  if (violations.length > 0) {
+    console.warn(
+      `⚠️ Suffix enforcement: ${violations.length} Irrelevant entries lacked the required suffix and were auto-patched.`,
+      violations.map(v => v.rank)
+    );
+  } else {
+    console.log(`✅ Suffix compliance: all Irrelevant entries end with "${requiredSuffix}"`);
+  }
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -492,7 +533,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
     [results, filterType]
   );
 
-  /* ── Run Analysis (SINGLE Poe API call · MULTIMODAL) ── */
+  /* ── Run Analysis (SINGLE Poe API call) ── */
   const runAnalysis = async () => {
     if (!pdfFile) { setErrorMsg('請先上傳搜尋結果 PDF 文件'); return; }
     if (!apiKey.trim()) { setErrorMsg('請輸入 POE API Key'); return; }
@@ -507,40 +548,24 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
     setExpandedId(null);
 
     try {
-      // ── Step 1: PDF → text (debug only) + PDF → images (for API) ──
-      setProgress(15); setStage('正在讀取 PDF 文字 (debug)...');
+      // ── Step 1: PDF → text ──
+      setProgress(20); setStage('正在讀取 PDF...');
       const pdfText = await extractPdfText(pdfFile);
-      console.log(`📄 PDF text extracted: ${pdfText.length} chars (for debug log only)`);
-      if (pdfText.length > 30000) {
-        console.warn('⚠️ PDF text > 30k chars — multimodal mode means slicing is no longer needed.');
-      }
+      if (!pdfText.trim()) throw new Error('PDF 無法提取文字(可能是掃描圖片)');
+      console.log(`📄 PDF text extracted: ${pdfText.length} chars`);
 
-      setProgress(30); setStage('正在轉換 PDF 為高清圖片...');
-      const pdfImages = await pdfToImages(pdfFile, 2.0);
-      console.log(`🖼️ PDF rendered to ${pdfImages.length} image(s)`);
-      const totalImageKB = pdfImages.reduce((sum, url) => sum + Math.ceil(url.length * 0.75 / 1024), 0);
-      console.log(`📦 Total image payload: ~${totalImageKB} KB`);
-
-      // ── Step 2: Build prompt (text only — PDF goes as images) ──
-      setProgress(45); setStage('正在組建 prompt...');
+      // ── Step 2: Build prompt ──
+      setProgress(40); setStage('正在組建 prompt...');
       const userPrompt = buildPrompt({
         entityName: searchEntity,
         entityContext,
+        pdfText,
         mode,
       });
       console.log(`📝 Prompt length: ${userPrompt.length} chars`);
 
-      // ── Step 3: SINGLE Poe API call (multimodal) ──
-      setProgress(60); setStage('正在呼叫 Poe AI (gemini-3.5-flash · multimodal)...');
-
-      const contentArray = [
-        { type: 'text', text: userPrompt },
-        ...pdfImages.map(dataUrl => ({
-          type: 'image_url',
-          image_url: { url: dataUrl },
-        })),
-      ];
-
+      // ── Step 3: SINGLE Poe API call ──
+      setProgress(55); setStage('正在呼叫 Poe AI (gemini-3.5-flash)...');
       const res = await fetch('https://api.poe.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -550,36 +575,39 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
         body: JSON.stringify({
           model: 'gemini-3.5-flash',
           messages: [
-            { role: 'user', content: contentArray }
+            { role: 'user', content: userPrompt }
           ],
-          temperature: 0.2,
-          max_tokens: 8000,
+          temperature: 0.3,
+          max_tokens: 4000,
         }),
       });
 
       if (!res.ok) {
         const errText = await res.text();
-        throw new Error(`Poe API HTTP ${res.status}: ${errText.slice(0, 300)}`);
+        throw new Error(`Poe API HTTP ${res.status}: ${errText.slice(0, 200)}`);
       }
 
       const data = await res.json();
       const aiText = data?.choices?.[0]?.message?.content || '';
       if (!aiText) throw new Error('Poe API 回傳空白內容');
       console.log(`🤖 AI response length: ${aiText.length} chars`);
-      console.log('=== RAW AI RESPONSE ===');
       console.log(aiText);
-      console.log('=== END RAW RESPONSE ===');
 
       setRawResponse(aiText);
 
       // ── Step 4: Parse ──
       setProgress(85); setStage('正在解析結果...');
-      const parsed = parseAiResponse(aiText, mode);
-      console.log(`✅ Parsed ${parsed.length} result(s)`);
+      const parsedRaw = parseAiResponse(aiText, mode);
+      console.log(`✅ Parsed ${parsedRaw.length} result(s)`);
 
-      if (parsed.length === 0) {
+      if (parsedRaw.length === 0) {
         throw new Error('AI 回傳格式無法解析 — 請檢查 console.log 嘅 raw response。');
       }
+
+      // ── Step 4b: Enforce mandatory suffix on Irrelevant entries ──
+      setProgress(92); setStage('正在套用合規後處理...');
+      const parsed = enforceSuffix(parsedRaw, mode);
+      assertSuffixCompliance(parsed, mode);
 
       setProgress(100); setStage('完成 ✓');
       setTimeout(() => {
@@ -598,6 +626,9 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
 
   /* ── Manual override actions ── */
   const updateResultCls = (rank, newCls, note) => {
+    const labelStr = isSanction && newCls === 'IRRELEVANT_MLTF'
+      ? 'Irrelevant sanction'
+      : CLS_CONFIG[newCls].label;
     setResults(prev => prev.map(r => {
       if (r.rank !== rank) return r;
       const prevLabel = CLS_CONFIG[r.cls]?.label || r.cls;
@@ -720,11 +751,11 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
             <h1 className="text-lg font-bold tracking-tight flex items-center gap-2">
               {isSanction ? 'Sanction Screening' : 'Adverse Media Screening'}
               <span className="text-[10px] font-bold bg-emerald-400/30 text-white border border-emerald-300/50 px-2 py-0.5 rounded-full">
-                v2.1 · Multimodal
+                v2 · Poe Chat Port
               </span>
             </h1>
             <p className="text-[11px] mt-0.5 text-white/80">
-              🚀 Single Poe API call · PDF as images · ~5-8 seconds · English-only output
+              🚀 Single Poe API call · ~3-5 seconds · English-only output
             </p>
           </div>
         </div>
@@ -841,14 +872,16 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">📅 Date of Birth</label>
-                  <input type="date" value={entityContext.dob} onChange={e => handleCtxChange('dob', e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all" />
+                  <input type="date" value={entityContext.dob} onChange={e => handleCtxChange('dob', e.target.value)}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all" />
                 </div>
 
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">🏳️ Nationality / Region</label>
-                  <select value={entityContext.nationality} onChange={e => handleCtxChange('nationality', e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all appearance-none">
+                  <select value={entityContext.nationality} onChange={e => handleCtxChange('nationality', e.target.value)}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all appearance-none">
                     <option value="">— Select —</option>
-                    {NATIONALITIES.map(n => (<option key={n.value} value={n.value}>{n.en} ({n.zh})</option>))}
+                    {NATIONALITIES.map(n => <option key={n.value} value={n.value}>{n.en} ({n.zh})</option>)}
                   </select>
                 </div>
 
@@ -856,29 +889,42 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">⚧ Gender</label>
                   <div className="flex gap-2">
                     {[{ value: 'Male', label: 'Male' }, { value: 'Female', label: 'Female' }, { value: 'Other', label: 'Other' }].map(g => (
-                      <button key={g.value} type="button" onClick={() => handleCtxChange('gender', entityContext.gender === g.value ? '' : g.value)} className={`flex-1 py-2 rounded-lg text-xs font-semibold border transition-all ${entityContext.gender === g.value ? 'bg-purple-500 text-white border-purple-500 shadow-sm' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-purple-300 hover:bg-purple-50'}`}>{g.label}</button>
+                      <button key={g.value} type="button"
+                        onClick={() => handleCtxChange('gender', entityContext.gender === g.value ? '' : g.value)}
+                        className={`flex-1 py-2 rounded-lg text-xs font-semibold border transition-all ${entityContext.gender === g.value ? 'bg-purple-500 text-white border-purple-500 shadow-sm' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-purple-300 hover:bg-purple-50'}`}>
+                        {g.label}
+                      </button>
                     ))}
                   </div>
                 </div>
 
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">🏢 Company / Title</label>
-                  <input type="text" value={entityContext.company} onChange={e => handleCtxChange('company', e.target.value)} placeholder="e.g. Alpha Holdings Ltd / Director" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all" />
+                  <input type="text" value={entityContext.company} onChange={e => handleCtxChange('company', e.target.value)}
+                    placeholder="e.g. Alpha Holdings Ltd / Director"
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all" />
                 </div>
 
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">🆔 ID Number</label>
-                  <input type="text" value={entityContext.idNumber} onChange={e => handleCtxChange('idNumber', e.target.value)} placeholder="Passport / ID / Registration No." className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all" />
+                  <input type="text" value={entityContext.idNumber} onChange={e => handleCtxChange('idNumber', e.target.value)}
+                    placeholder="Passport / ID / Registration No."
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all" />
                 </div>
 
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">📍 Address</label>
-                  <input type="text" value={entityContext.address} onChange={e => handleCtxChange('address', e.target.value)} placeholder="Registered or residential address" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all" />
+                  <input type="text" value={entityContext.address} onChange={e => handleCtxChange('address', e.target.value)}
+                    placeholder="Registered or residential address"
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all" />
                 </div>
 
                 <div className="md:col-span-2">
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">📝 Other Notes</label>
-                  <textarea value={entityContext.notes} onChange={e => handleCtxChange('notes', e.target.value)} placeholder="Any other identifying info (e.g. known unrelated identities: not a lawyer, not a doctor)..." rows={2} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all resize-none" />
+                  <textarea value={entityContext.notes} onChange={e => handleCtxChange('notes', e.target.value)}
+                    placeholder="Any other identifying info (e.g. known unrelated identities: not a lawyer, not a doctor)..."
+                    rows={2}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all resize-none" />
                 </div>
               </div>
 
@@ -894,7 +940,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg ${isSanction ? 'bg-gradient-to-br from-orange-500 to-red-600' : 'bg-gradient-to-br from-emerald-500 to-teal-600'}`}>2</div>
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">上傳搜尋結果 PDF</h2>
-                  <p className="text-[11px] text-slate-500 mt-0.5">將 Google 搜尋頁面儲存為 PDF 後上傳 · 系統會轉成圖片俾 AI 「睇」</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">將 Google 搜尋頁面儲存為 PDF 後上傳</p>
                 </div>
               </div>
               <div className="flex flex-col sm:flex-row gap-3 items-stretch">
@@ -932,18 +978,21 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg ${isSanction ? 'bg-gradient-to-br from-orange-500 to-red-600' : 'bg-gradient-to-br from-emerald-500 to-teal-600'}`}>3</div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h2 className="text-sm font-bold text-slate-900">AI 分析 (Multimodal Single Call)</h2>
+                    <h2 className="text-sm font-bold text-slate-900">AI 分析 (Single Call)</h2>
                     <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                      ⚡ 1 Poe API call · ~5-8s
+                      ⚡ 1 Poe API call · ~3-5s
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5">使用 gemini-3.5-flash · PDF 轉圖片傳送 · 模擬 Poe Chat upload</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">使用 gemini-3.5-flash · single-shot · English output</p>
                 </div>
               </div>
 
+              {/* API Key */}
               <div className="mb-4 bg-slate-50 rounded-xl p-3 border border-slate-200">
                 <div className="flex items-center justify-between mb-2">
-                  <label className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">🔑 POE API Key</label>
+                  <label className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
+                    🔑 POE API Key
+                  </label>
                   <button onClick={() => setShowKeyInput(!showKeyInput)} className="text-[11px] text-emerald-600 hover:text-emerald-700 font-bold hover:underline">
                     {showKeyInput ? '🙈 隱藏' : '👁️ 顯示/修改'}
                   </button>
@@ -952,14 +1001,26 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   <input type="text" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="poe-..." className="w-full border border-slate-200 bg-white rounded-lg px-3 py-2 text-sm font-mono focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 outline-none" />
                 ) : (
                   <div className="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-400 bg-white font-mono flex items-center gap-2">
-                    {apiKey ? (<><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /><span>{apiKey.slice(0, 10)}{'•'.repeat(Math.min(20, apiKey.length - 10))}</span></>) : (<><span className="w-1.5 h-1.5 rounded-full bg-slate-300" /><span>(未設定)</span></>)}
+                    {apiKey ? (
+                      <>
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                        <span>{apiKey.slice(0, 10)}{'•'.repeat(Math.min(20, apiKey.length - 10))}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                        <span>(未設定)</span>
+                      </>
+                    )}
                   </div>
                 )}
                 <p className="text-[10px] text-slate-500 mt-2 flex items-center gap-1 flex-wrap">
                   <span>使用</span>
                   <span className="inline-block px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-bold text-[9px]">gemini-3.5-flash</span>
-                  <span>via Poe API (multimodal)</span>
-                  <a href="https://poe.com/api_key" target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline ml-auto font-semibold">取得 API Key →</a>
+                  <span>via Poe API</span>
+                  <a href="https://poe.com/api_key" target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline ml-auto font-semibold">
+                    取得 API Key →
+                  </a>
                 </p>
               </div>
 
@@ -977,7 +1038,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
               >
                 {isAnalyzing
                   ? <><Loader className="w-4 h-4 animate-spin" />AI 分析中...</>
-                  : <><Brain className="w-4 h-4" />開始 AI 分析 (Multimodal)</>
+                  : <><Brain className="w-4 h-4" />開始 AI 分析 (Single Call)</>
                 }
               </button>
             </div>
@@ -1001,6 +1062,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
             {/* ── RESULTS ── */}
             {analysisComplete && (
               <>
+                {/* Stats */}
                 <div className="grid grid-cols-5 gap-2.5">
                   <div className="bg-white rounded-2xl border border-slate-200 p-3 text-center">
                     <div className="text-2xl font-black text-slate-900">{results.length}</div>
@@ -1020,20 +1082,33 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   })}
                 </div>
 
+                {/* Filter tabs */}
                 <div className="bg-white rounded-2xl border border-slate-200 p-2">
                   <div className="flex gap-1 flex-wrap">
-                    {[{ k: 'ALL', l: 'All', count: results.length }, ...Object.entries(CLS_CONFIG).map(([k, c]) => ({ k, l: isSanction && k === 'IRRELEVANT_MLTF' ? 'Irrelevant' : c.label, count: counts[k] }))].map(f => {
+                    {[
+                      { k: 'ALL', l: 'All', count: results.length },
+                      ...Object.entries(CLS_CONFIG).map(([k, c]) => ({ k, l: isSanction && k === 'IRRELEVANT_MLTF' ? 'Irrelevant' : c.label, count: counts[k] })),
+                    ].map(f => {
                       const isActive = filterType === f.k;
                       return (
-                        <button key={f.k} onClick={() => setFilterType(f.k)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${isActive ? 'bg-gradient-to-r from-slate-700 to-slate-800 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}>
+                        <button
+                          key={f.k}
+                          onClick={() => setFilterType(f.k)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                            isActive ? 'bg-gradient-to-r from-slate-700 to-slate-800 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
                           {f.l}
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-black ${isActive ? 'bg-white/25' : 'bg-slate-200 text-slate-700'}`}>{f.count}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-black ${isActive ? 'bg-white/25' : 'bg-slate-200 text-slate-700'}`}>
+                            {f.count}
+                          </span>
                         </button>
                       );
                     })}
                   </div>
                 </div>
 
+                {/* Result cards */}
                 <div className="space-y-2">
                   {filteredResults.length === 0
                     ? <div className="text-center py-8 text-sm text-slate-400">No results</div>
@@ -1041,20 +1116,36 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   }
                 </div>
 
-                <button onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); setRawResponse(''); }} className="w-full py-2 rounded-lg text-xs text-slate-500 border border-dashed hover:border-slate-400 hover:text-slate-700">
+                {/* Reset */}
+                <button
+                  onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); setRawResponse(''); }}
+                  className="w-full py-2 rounded-lg text-xs text-slate-500 border border-dashed hover:border-slate-400 hover:text-slate-700"
+                >
                   🔄 Re-analyze (clear results)
                 </button>
 
+                {/* Copy summary */}
                 <div className="bg-slate-50 rounded-xl border p-4">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-sm font-bold text-slate-700">📋 Analysis Summary (Copy & Paste)</h3>
-                    <button onClick={() => { navigator.clipboard.writeText(summaryText).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); }} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${copied ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-white hover:bg-slate-600'}`}>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(summaryText).then(() => {
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 2000);
+                        });
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${copied ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-white hover:bg-slate-600'}`}
+                    >
                       {copied ? '✅ Copied' : '📋 Copy All'}
                     </button>
                   </div>
-                  <pre className="w-full max-h-96 overflow-y-auto text-xs font-mono bg-white border rounded-lg p-3 whitespace-pre-wrap text-slate-700 select-all">{summaryText}</pre>
+                  <pre className="w-full max-h-96 overflow-y-auto text-xs font-mono bg-white border rounded-lg p-3 whitespace-pre-wrap text-slate-700 select-all">
+                    {summaryText}
+                  </pre>
                 </div>
 
+                {/* Raw AI Response (debug) */}
                 {rawResponse && (
                   <details className="bg-slate-100 rounded-xl border p-3">
                     <summary className="text-xs font-bold text-slate-600 cursor-pointer">🔬 Raw AI Response (debug)</summary>
@@ -1064,6 +1155,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
               </>
             )}
 
+            {/* ── Demo mock (before analysis) ── */}
             {!analysisComplete && !isAnalyzing && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
                 <div className="flex items-center gap-2 mb-3">
@@ -1084,44 +1176,43 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
         {activeTab === 'arch' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div>
-              <h2 className="text-base font-bold text-slate-900">🏗️ v2.1 架構說明 (Multimodal Poe Chat Port)</h2>
-              <p className="text-xs text-slate-500 mt-1">PDF → Images → Multimodal single-shot · 1:1 模擬 Poe Chat 上傳行為</p>
+              <h2 className="text-base font-bold text-slate-900">🏗️ v2 架構說明 (Poe Chat Port)</h2>
+              <p className="text-xs text-slate-500 mt-1">Single-shot 設計 · 對比 legacy 嘅 multi-stage pipeline</p>
             </div>
 
             <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-4">
-              <div className="text-xs font-bold text-emerald-800 mb-2">⚡ v2.1 流程 (4 steps · 1 API call · multimodal)</div>
+              <div className="text-xs font-bold text-emerald-800 mb-2">⚡ v2 流程 (4 steps · 1 API call)</div>
               <ol className="text-xs text-emerald-900 space-y-2 list-decimal list-inside">
                 <li><b>輸入實體名稱</b> → 自動生成 Google 查詢字串</li>
                 <li><b>填寫 Supplementary ID Info</b>(選填但強烈推薦) → 用嚟排除同名誤報</li>
-                <li><b>上傳 Google SERP PDF</b> → pdf.js render 每頁成高清 PNG/JPEG → base64</li>
-                <li><b>單一 Poe API call</b>(gemini-3.5-flash, multimodal: prompt + N images) → AI「睇」住完整視覺 layout → 結構化 numbered list → 解析 + 顯示</li>
+                <li><b>上傳 Google SERP PDF</b> → pdf.js 抽取文字 → 清理 noise</li>
+                <li><b>單一 Poe API call</b>(gemini-3.5-flash) → 收到結構化 numbered list → enforce 強制 suffix → 即時解析 + 顯示</li>
               </ol>
             </div>
 
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-              <div className="text-xs font-bold text-blue-800 mb-2">🆚 v2.1 vs v2.0(純文字) vs Legacy</div>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+              <div className="text-xs font-bold text-slate-700 mb-2">📊 v2 vs Legacy 對比</div>
               <table className="w-full text-xs border-collapse">
                 <thead>
                   <tr className="bg-white">
                     <th className="p-2 text-left border">指標</th>
-                    <th className="p-2 text-center border text-emerald-700">v2.1 Multimodal</th>
-                    <th className="p-2 text-center border text-blue-700">v2.0 Text</th>
+                    <th className="p-2 text-center border text-emerald-700">v2</th>
                     <th className="p-2 text-center border text-amber-700">Legacy</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td className="p-2 border">API calls</td><td className="p-2 border text-center font-bold text-emerald-700">1</td><td className="p-2 border text-center font-bold text-blue-700">1</td><td className="p-2 border text-center font-bold text-amber-700">11-25</td></tr>
-                  <tr><td className="p-2 border">分析時間</td><td className="p-2 border text-center font-bold text-emerald-700">~5-8s</td><td className="p-2 border text-center font-bold text-blue-700">~3-5s</td><td className="p-2 border text-center font-bold text-amber-700">~30-60s</td></tr>
-                  <tr><td className="p-2 border">PDF 傳遞方式</td><td className="p-2 border text-center text-emerald-700">圖片 (image_url)</td><td className="p-2 border text-center text-blue-700">純文字 slice</td><td className="p-2 border text-center text-amber-700">純文字 chunk</td></tr>
-                  <tr><td className="p-2 border">視覺 layout 保留</td><td className="p-2 border text-center text-emerald-700">✅ 完整</td><td className="p-2 border text-center text-red-600">❌ 失去</td><td className="p-2 border text-center text-red-600">❌ 失去</td></tr>
-                  <tr><td className="p-2 border">Reason 豐富度</td><td className="p-2 border text-center text-emerald-700">★★★★★</td><td className="p-2 border text-center text-blue-700">★★★</td><td className="p-2 border text-center text-amber-700">★★★★</td></tr>
-                  <tr><td className="p-2 border">同 Poe Chat 一致度</td><td className="p-2 border text-center text-emerald-700">~95%</td><td className="p-2 border text-center text-blue-700">~60%</td><td className="p-2 border text-center text-amber-700">~70%</td></tr>
+                  <tr><td className="p-2 border">API calls</td><td className="p-2 border text-center font-bold text-emerald-700">1</td><td className="p-2 border text-center font-bold text-amber-700">11-25</td></tr>
+                  <tr><td className="p-2 border">分析時間</td><td className="p-2 border text-center font-bold text-emerald-700">~3-5s</td><td className="p-2 border text-center font-bold text-amber-700">~30-60s</td></tr>
+                  <tr><td className="p-2 border">Code 行數</td><td className="p-2 border text-center font-bold text-emerald-700">~900</td><td className="p-2 border text-center font-bold text-amber-700">~2000</td></tr>
+                  <tr><td className="p-2 border">Patches 數量</td><td className="p-2 border text-center font-bold text-emerald-700">0</td><td className="p-2 border text-center font-bold text-amber-700">17</td></tr>
+                  <tr><td className="p-2 border">輸出格式</td><td className="p-2 border text-center text-emerald-700">Point-form English</td><td className="p-2 border text-center text-amber-700">Per-article facts → JS rules</td></tr>
+                  <tr><td className="p-2 border">Hallucination 防護</td><td className="p-2 border text-center text-slate-600">Prompt + suffix enforcement</td><td className="p-2 border text-center text-slate-600">靠 P6-P16 patches</td></tr>
                 </tbody>
               </table>
             </div>
 
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
-              <b>💡 點解 v2.1 work:</b> Poe Chat 用戶 upload PDF 時,model 收到嘅係**視覺渲染**而唔係 raw text。v2.1 喺 client side 用 pdf.js render 每頁成 JPEG (scale 2x),再用 OpenAI-compatible <code className="bg-amber-100 px-1 rounded">image_url</code> 格式傳俾 Poe API,完全 1:1 複製 Poe Chat 行為。Reason 自然豐富度同你直接喺 Poe Chat 試嘅 output 接近 95%+ 一致。
+              <b>💡 點解 v2 work:</b> Single-shot prompt 包含 few-shot example + analytical rules,加上 code-level <code>enforceSuffix()</code> post-processing 保證每個 Irrelevant 結尾都有 mandatory suffix。
             </div>
           </div>
         )}
@@ -1160,7 +1251,9 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {g.list.map((kw, i) => (
-                        <span key={i} className={`bg-white border px-2 py-1 rounded-md text-[11px] font-semibold text-${g.color}-700 border-${g.color}-200`}>{kw}</span>
+                        <span key={i} className={`bg-white border px-2 py-1 rounded-md text-[11px] font-semibold text-${g.color}-700 border-${g.color}-200`}>
+                          {kw}
+                        </span>
                       ))}
                     </div>
                   </div>
