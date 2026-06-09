@@ -2296,6 +2296,35 @@ function extractBlockMetadata(block, url) {
   return result;
 }
 
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 P13-B (JS) — SERP-date priority wrapper
+//   Background:
+//     • When scrape succeeds, `body` = scraped FULL article text, which
+//       contains many event dates (e.g. "appointed on 13 Jul 2012",
+//       "released on bail on 10 Oct 2013"). extractBlockMetadata() may
+//       grab one of those EVENT dates and label it as articleDate.
+//     • The SERP snippet, by contrast, always shows the Google-indexed
+//       PUBLICATION date at the very start (e.g. "2025年9月4日 —").
+//     • → Prefer the SERP-snippet date whenever it is parseable.
+//   Behaviour:
+//     • Run extractBlockMetadata() on the SERP snippet first.
+//     • If it finds a date, override the body-extracted articleDate.
+//     • All other fields (publisher) still come from the body+url path.
+// ════════════════════════════════════════════════════════════════
+function extractBlockMetadataWithSerpPriority(block, url, serpSnippet) {
+  const fromBody = extractBlockMetadata(block, url);
+  if (!serpSnippet || typeof serpSnippet !== 'string' || serpSnippet.length < 8) {
+    return fromBody;
+  }
+  const fromSerp = extractBlockMetadata(serpSnippet, url);
+  if (fromSerp.articleDate && fromSerp.articleDate !== fromBody.articleDate) {
+    console.log(`🔒 P13-B: SERP date "${fromSerp.articleDate}" overrides body date "${fromBody.articleDate || '(none)'}"`);
+    return { ...fromBody, articleDate: fromSerp.articleDate, articleDateSource: 'SERP_snippet' };
+  }
+  return fromBody;
+}
+
 // ============================================================================
 // PATCH ⑥ — Block-isolation verify (anti-hallucination)
 // ============================================================================
@@ -3448,7 +3477,7 @@ console.log(`📦 Article body sources:`, sources);
         // 🆕 PATCH ⑦: verify key_observation is grounded in this block (else clear it)
         verifyKeyObservation(facts, articles[i].body, articles[i].rank);
         // 🆕 GATE 3: JS-derive publisher / articleDate / specificEvent from THIS block only
-        const blockMeta = extractBlockMetadata(articles[i].body, articles[i].url);
+        const blockMeta = extractBlockMetadataWithSerpPriority(articles[i].body, articles[i].url, articles[i].serpSnippet);
         facts.publisher = blockMeta.publisher;
         facts.articleDate = blockMeta.articleDate || 'unknown';
         facts.specificEvent = buildDeterministicSpecificEvent({
@@ -3461,6 +3490,7 @@ console.log(`📦 Article body sources:`, sources);
         console.log(`📍 GATE 3 rank ${articles[i].rank}: publisher="${facts.publisher}", date="${facts.articleDate}"`);
 
         const cls = classifyFromFacts({ facts, targetName: searchEntity, mode });
+        cls.reason = stripDuplicateDate(cls.reason, facts.articleDate);   // 🆕 P13-A wire-in
         return {
           rank: article.rank,
           url: article.url,
@@ -3559,7 +3589,7 @@ console.log(`📦 Article body sources:`, sources);
             if (articleForBody) verifyKeyObservation(newFacts, articleForBody.body, item.rank);
             // 🆕 GATE 3: same JS metadata injection as Pass 2
             if (articleForBody) {
-              const blockMeta = extractBlockMetadata(articleForBody.body, articleForBody.url);
+              const blockMeta = extractBlockMetadataWithSerpPriority(articleForBody.body, articleForBody.url, articleForBody.serpSnippet);
               newFacts.publisher = blockMeta.publisher;
               newFacts.articleDate = blockMeta.articleDate || 'unknown';
               newFacts.specificEvent = buildDeterministicSpecificEvent({
@@ -3572,6 +3602,7 @@ console.log(`📦 Article body sources:`, sources);
             }
 
             const newCls = classifyFromFacts({ facts: newFacts, targetName: searchEntity, mode });
+            newCls.reason = stripDuplicateDate(newCls.reason, newFacts.articleDate);   // 🆕 P13-A wire-in
             
             const idx = parsed.findIndex(p => p.rank === item.rank);
             if (idx !== -1) {
