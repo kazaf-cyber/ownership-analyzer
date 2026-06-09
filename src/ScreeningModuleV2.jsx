@@ -266,7 +266,7 @@ function buildPrompt({ entityName, entityContext, mode }) {
   const scopeLabel = isSanction ? 'sanction' : 'ML/TF';
   const irrelevantLabel = isSanction ? 'Irrelevant sanction' : 'Irrelevant ML/TF';
 
-  return `You are a senior KYC/AML compliance analyst. You are reviewing a Google search results PDF (attached as images) for a single screened target.
+  return `You are a senior KYC/AML compliance analyst reviewing a Google search results PDF (attached as images) for a single screened target.
 
 ═══════════════════════════════════════════════════════
 SCREENED TARGET
@@ -279,85 +279,64 @@ ${ctxStr}` : 'Supplementary KYC identifiers: (none provided)'}
 ═══════════════════════════════════════════════════════
 YOUR TASK
 ═══════════════════════════════════════════════════════
-The attached image(s) show a Google search results page containing N numbered results (typically 5-10). Read the FULL visual layout — titles, snippets, URLs, publication dates, highlighted keywords. For EACH result in order, classify it into EXACTLY ONE of these 4 labels:
+The attached image(s) show a Google search results page with N numbered results. Read the full visual layout — titles, snippets, URLs, highlighted keywords. For EACH result in order, classify into EXACTLY ONE label:
 
-  • True Hit          — the screened target is the DIRECT SUBJECT of ${scopeLabel}-related
-                        wrongdoing (named as accused, charged, investigated, sanctioned, etc.)
-  • False Hit         — the named party in the article is a DIFFERENT person/entity from the
-                        target (different jurisdiction, industry, identifiers, or KYC info
-                        clearly contradicts the article)
-  • ${irrelevantLabel}  — target IS mentioned but the content is outside ${scopeLabel} scope
-                        OR the wrongdoing is against a THIRD PARTY and target is only
-                        mentioned in passing (e.g. as colleague, relative, alternate director)
+  • True Hit          — the target is the DIRECT SUBJECT of ${scopeLabel}-related wrongdoing
+                        (named as accused, charged, investigated, sanctioned, etc.)
+  • False Hit         — the named party in the article is a DIFFERENT person/entity
+                        (different jurisdiction, industry, or KYC info contradicts)
+  • ${irrelevantLabel}  — target IS mentioned but content is outside ${scopeLabel} scope,
+                        OR wrongdoing is against a THIRD PARTY and target is only
+                        mentioned in passing (colleague, relative, alternate director)
   • No Hit            — target is not mentioned in this result at all
 
 ═══════════════════════════════════════════════════════
-OUTPUT FORMAT — STRICT RULES
+OUTPUT FORMAT
 ═══════════════════════════════════════════════════════
-1. ENGLISH ONLY. Do not output any Chinese.
+One line per result: \`<N>. <LABEL>: because <reason>\`
 
-2. One line per result: \`<N>. <LABEL>: because <reason>\`
-   (Reason should be written as natural prose — not a run-on sentence.
-    Use commas and proper clauses for readability.)
+Allowed labels (case-sensitive, copy exactly):
+  "True Hit"  |  "False Hit"  |  "${irrelevantLabel}"  |  "No Hit"
 
-3. Allowed labels (case-sensitive, copy exactly):
-   "True Hit"  |  "False Hit"  |  "${irrelevantLabel}"  |  "No Hit"
-
-4. Reason MUST start with "because".
-
-5. Every reason MUST be UNIQUE. Anchor each with article-specific detail:
-     • publisher name (e.g. HKEXnews, SCMP, Reuters)
-     • named third party (if any)
-     • amount / regulator / case reference (if visible)
-
-6. Do NOT echo the label inside the reason.
-
-7. KYC-disambiguation rule: if the article's named party has identifying details
-   that CLEARLY CONTRADICT the KYC info above → False Hit.
+ENGLISH ONLY. No Chinese. No preamble. No summary. Numbered list only.
 
 ═══════════════════════════════════════════════════════
-REASONING QUALITY RULES (CRITICAL — read carefully)
+ANALYTICAL RULES (read carefully)
 ═══════════════════════════════════════════════════════
-9. THIRD-PARTY-ACCUSED rule: If the wrongdoing in an article is attributed to a
-   NAMED PARTY who is NOT the screened target (e.g. target's relative, colleague,
-   or person with same surname), you MUST:
+A. THIRD-PARTY-ACCUSED rule — If wrongdoing is attributed to a NAMED PARTY who
+   is NOT the target (e.g. target's relative, colleague, same-surname person),
+   you MUST:
      (a) Name the actual accused party EXPLICITLY
          e.g. "the bribery charges were laid against Thomas Kwok and Raymond Kwok"
      (b) State the target's incidental role
          e.g. "the target is mentioned only as alternate director"
-   Classify as "${irrelevantLabel}" (NOT "True Hit", NOT "False Hit").
+   → Classify as "${irrelevantLabel}".
 
-10. KEYWORD-IN-CONTEXT rule: Search keywords may appear in the PDF as:
-    • Website navigation / boilerplate (e.g. "Disciplinary Sanctions" as sidebar link)
-    • Abbreviations or codes (e.g. "ML" as fund ticker, not money laundering)
-    • Legal framework references (e.g. "Prevention of Bribery Ordinance" as statute name)
-    When the keyword appears in such non-substantive context, classify as
-    "${irrelevantLabel}" or "No Hit" and EXPLICITLY note the keyword's true role.
-    Example: "the term 'ML' here is a fund abbreviation, not money laundering"
+B. KEYWORD-IN-CONTEXT rule — Search keywords may appear as:
+     • Website navigation / boilerplate (e.g. "Disciplinary Sanctions" as sidebar)
+     • Abbreviations / codes (e.g. "ML" as fund ticker, not money laundering)
+     • Statute names (e.g. "Prevention of Bribery Ordinance" as legal framework)
+   When keyword appears in such non-substantive context, classify as
+   "${irrelevantLabel}" or "No Hit" and EXPLICITLY explain the keyword's true role.
 
-11. GROUND-TRUTH rule: Your reason MUST be based ONLY on text actually visible
-    in the attached PDF image(s). Do NOT invent article topics, publishers, or facts.
-    If a snippet is too brief to determine substance, say "snippet too brief to
-    determine substantive context" rather than guessing.
+C. KYC-DISAMBIGUATION rule — If the article's named party has identifying
+   details that CLEARLY CONTRADICT the KYC info above → False Hit.
 
-12. EXONERATION SUFFIX rule: For every "${irrelevantLabel}", "False Hit", and
-    "No Hit", the reason MUST end with an explicit statement that the target
-    is not accused. Rotate among these three phrasings to vary the language
-    (do NOT reuse the same phrase more than 4 times across the full list):
-      • "...with no allegations against the target."
-      • "...the target is not implicated."
-      • "...the target is not the subject of any wrongdoing."
+D. GROUND-TRUTH rule — Base your reason ONLY on text actually visible in the
+   attached PDF image(s). Do NOT invent facts, publishers, or topics. If a
+   snippet is too brief, say "snippet too brief to determine substantive context".
 
-13. NO preamble before "1.". NO summary after the last result.
-    NO markdown headers. Numbered list ONLY.
-    (Within each reason, natural prose is fine and encouraged.)
+E. KYC-conscious — For "${irrelevantLabel}", "False Hit", and "No Hit", make
+   clear that the target is not accused. Vary your phrasing naturally.
 
 ═══════════════════════════════════════════════════════
-NOW ANALYZE THE ATTACHED PDF IMAGES AND OUTPUT THE
-NUMBERED CLASSIFICATION LIST (English only):
+Now analyze the attached PDF images. Write each reason with the depth and
+specificity a senior compliance analyst would naturally provide — explain
+the article's substantive context, name relevant third parties, identify
+keyword roles, and articulate why your classification holds. Do not
+artificially compress.
 ═══════════════════════════════════════════════════════`;
 }
-
 /* ════════════════════════════════════════════════════════════════
    PARSER — Convert AI text response into structured results
    ════════════════════════════════════════════════════════════════ */
