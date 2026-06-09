@@ -2050,7 +2050,7 @@ function preCheckTargetMentioned(facts, targetName, body, serpSnippet = '') {
   if (!facts || !targetName) return facts;
 
   const targetTokens = tokenizeName(targetName);
-  if (targetTokens.length < 2) return facts;     // need ≥2 tokens to be meaningful
+  if (targetTokens.length < 2) return facts;
 
   const norm = (s) => String(s || '')
     .toLowerCase()
@@ -2059,20 +2059,34 @@ function preCheckTargetMentioned(facts, targetName, body, serpSnippet = '') {
   const bodyLc = norm(body);
   const snippetLc = norm(serpSnippet);
 
-  // 🆕 Check BOTH scraped body AND Google SERP snippet
-  // ----------------------------------------------------------------
-  // Rationale: SERP snippet is extracted by Google from the SAME
-  // document. If the name appears in the snippet (with Google's
-  // bold-highlight), the source doc DOES contain the name — even if
-  // our 12001-char scrape truncation missed it (e.g. name buried in
-  // page 3 of a 250-page annual report, or in a proxy voting table).
-  // We use SERP ONLY to confirm name-presence, NEVER to infer
-  // wrongdoing — so hallucination risk = 0.
-  // ----------------------------------------------------------------
+  // Check BOTH scraped body AND Google SERP snippet (FIX A rationale unchanged)
   const allTokensInBody = bodyLc && targetTokens.every(tok => bodyLc.includes(tok));
   const allTokensInSnippet = snippetLc && targetTokens.every(tok => snippetLc.includes(tok));
   const allTokensPresent = allTokensInBody || allTokensInSnippet;
   const evidenceSource = allTokensInBody ? 'scraped body' : 'SERP snippet';
+
+  // ════════════════════════════════════════════════════════════════
+  // 🆕 P12 — Contradiction sanitizer
+  //   When FIX A overrides targetMentioned/targetRole, the AI's previously
+  //   generated targetActionInArticle / key_observation were written UNDER
+  //   THE WRONG ASSUMPTION that the target was absent. They typically read
+  //   "not present in the article" / "target is not mentioned in this ..."
+  //   etc. If we keep them, classifyFromFacts() injects them into the final
+  //   reason → produces self-contradictory output:
+  //     "appears in the role of a passing mention. The target's role here
+  //      is described as: not present in the article."
+  //   → Clear those two fields whenever they contradict the override,
+  //     so Rule 6 falls back to its clean baseline sentence.
+  // ════════════════════════════════════════════════════════════════
+  const CONTRADICT_RE = /\b(not\s+(present|mentioned|found|in\s+the)|target\s+(is\s+)?not\s+(mentioned|present|found)|is\s+absent|appears?\s+nowhere|nowhere\s+in|no\s+mention\s+of|absent|^n\/?a$|^none$|^—$|^-$)\b/i;
+  const sanitizeIfContradicts = (text) => {
+    if (!text) return '';
+    if (CONTRADICT_RE.test(text)) {
+      console.log(`🧹 P12: cleared contradictory field — "${text.slice(0, 80)}"`);
+      return '';
+    }
+    return text;
+  };
 
   // CASE 1 — AI said "not mentioned" / ABSENT but tokens ARE present → OVERRIDE
   if (allTokensPresent && (!facts.targetMentioned || facts.nameMatch === 'ABSENT' || facts.targetRole === 'not_present')) {
@@ -2083,25 +2097,29 @@ function preCheckTargetMentioned(facts, targetName, body, serpSnippet = '') {
       nameMatch: 'EXACT',
       nameInArticle: facts.nameInArticle || targetName,
       targetRole: facts.targetRole === 'not_present' ? 'passing_mention' : (facts.targetRole || 'passing_mention'),
-      nameMatchReason: `JS-level token-equivalence override: all ${targetTokens.length} target name tokens (${targetTokens.join(', ')}) literally appear in the article body. ${facts.nameMatchReason || ''}`.trim(),
+      // 🆕 P12: scrub stale fields that were written under "absent" assumption
+      targetActionInArticle: sanitizeIfContradicts(facts.targetActionInArticle),
+      key_observation: sanitizeIfContradicts(facts.key_observation),
+      nameMatchReason: `JS-level token-equivalence override: all ${targetTokens.length} target name tokens (${targetTokens.join(', ')}) literally appear in the ${evidenceSource}. ${facts.nameMatchReason || ''}`.trim(),
     };
   }
 
-  // CASE 2 — AI flagged SUPERSET/DIFFERENT but ALL tokens of the target are still present
-  //          → at minimum, prevent FALSE_HIT (downgrade to EXACT match, let Rule 6/7 take it to IRRELEVANT)
+  // CASE 2 — AI flagged SUPERSET/DIFFERENT but ALL tokens present
   if (allTokensPresent && (facts.nameMatch === 'SUPERSET' || facts.nameMatch === 'DIFFERENT')) {
     console.log(`🔧 FIX A: Overriding nameMatch=${facts.nameMatch} → EXACT (all target tokens present in ${evidenceSource}; strict rule forbids FALSE_HIT)`);
     return {
       ...facts,
       targetMentioned: true,
       nameMatch: 'EXACT',
-      nameMatchReason: `JS-level token-equivalence override: although AI flagged ${facts.nameMatch}, all ${targetTokens.length} target name tokens (${targetTokens.join(', ')}) are literally present in the body, so this CANNOT be a False Hit. ${facts.nameMatchReason || ''}`.trim(),
+      // 🆕 P12: SUPERSET/DIFFERENT path也清,避免 stale "different person" 嘅 KO 殘留
+      targetActionInArticle: sanitizeIfContradicts(facts.targetActionInArticle),
+      key_observation: sanitizeIfContradicts(facts.key_observation),
+      nameMatchReason: `JS-level token-equivalence override: although AI flagged ${facts.nameMatch}, all ${targetTokens.length} target name tokens (${targetTokens.join(', ')}) are literally present in the ${evidenceSource}, so this CANNOT be a False Hit. ${facts.nameMatchReason || ''}`.trim(),
     };
   }
 
   return facts;
 }
-
 
 /* ════════════════════════════════════════════════════════════════
    🆕 GATE 3 — JS METADATA EXTRACTION (replaces AI-extracted
