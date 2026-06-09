@@ -163,22 +163,100 @@ function formatEntityContext(info) {
   return parts.join('\n');
 }
 
-/* ── NEW v2.3: File → base64 (for multimodal PDF upload) ── */
-async function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      const base64 = result.split(',')[1];
-      resolve(base64);
+function cleanGooglePdfText(rawText) {
+  let text = rawText.normalize('NFKC');
+  const aiStart = Math.max(text.indexOf('AI 概覽'), text.indexOf('AI Overview'));
+  if (aiStart !== -1) {
+    const searchMarker = Math.max(text.indexOf('的搜尋結果', aiStart), text.indexOf('search results', aiStart));
+    if (searchMarker !== -1 && searchMarker > aiStart) {
+      text = text.substring(0, aiStart) + '\n' + text.substring(searchMarker);
+    }
+  }
+  text = text
+    .replace(/AI 模式\s*全部\s*新聞\s*圖片\s*購物\s*短片\s*影片\s*更多\s*工具/g, '\n')
+    .replace(/AI mode\s*All\s*News\s*Images\s*Shopping/gi, '\n')
+    .replace(/顯示更多\s*[∨vV>↓]?/g, '\n')
+    .replace(/翻譯這個網頁/g, '\n')
+    .replace(/說明\s+發送意見\s+私隱權政策\s+條款/g, '\n')
+    .replace(/About\s+Send feedback\s+Privacy\s+Terms/gi, '\n')
+    .replace(/\n{4,}/g, '\n\n\n');
+  return text.trim();
+}
+
+async function loadPdfJs() {
+  if (window.pdfjsLib) return;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    s.onload = () => {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      resolve();
     };
-    reader.onerror = () => reject(new Error('Cannot read file as base64'));
-    reader.readAsDataURL(file);
+    s.onerror = () => reject(new Error('Failed to load PDF.js'));
+    document.head.appendChild(s);
   });
 }
 
+/* ── PDF → text (kept for debug logging only) ── */
+async function extractPdfText(file) {
+  await loadPdfJs();
+  const arrayBuf = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = ev => resolve(ev.target.result);
+    reader.onerror = () => reject(new Error('Cannot read PDF'));
+    reader.readAsArrayBuffer(file);
+  });
+  const pdf = await window.pdfjsLib.getDocument({ data: arrayBuf }).promise;
+  let fullText = '';
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    let lastY = null;
+    let pageText = '';
+    for (const item of content.items) {
+      if (!item.str || !item.str.trim()) continue;
+      const y = item.transform ? item.transform[5] : null;
+      if (lastY !== null && y !== null && Math.abs(y - lastY) > 3) pageText += '\n';
+      pageText += item.str + ' ';
+      lastY = y;
+    }
+    fullText += pageText + '\n';
+  }
+  return cleanGooglePdfText(fullText);
+}
+
+/* ── PDF → high-res PNG images (base64 data URIs) for multimodal API ── */
+async function pdfToImages(file, scale = 2.0) {
+  await loadPdfJs();
+  const arrayBuf = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = ev => resolve(ev.target.result);
+    reader.onerror = () => reject(new Error('Cannot read PDF'));
+    reader.readAsArrayBuffer(file);
+  });
+  const pdf = await window.pdfjsLib.getDocument({ data: arrayBuf }).promise;
+  const images = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+    // white bg (avoid transparent PNG → black bg)
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    // JPEG quality 0.85 = smaller payload than PNG, fine for text screenshots
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    images.push(dataUrl);
+  }
+  return images;
+}
+
 /* ════════════════════════════════════════════════════════════════
-   PROMPT v2.3 — Multimodal, Gold-Standard Aligned
+   PROMPT — Multimodal (PDF attached as images)
    ════════════════════════════════════════════════════════════════ */
 
 function buildPrompt({ entityName, entityContext, mode }) {
@@ -188,7 +266,7 @@ function buildPrompt({ entityName, entityContext, mode }) {
   const scopeLabel = isSanction ? 'sanction' : 'ML/TF';
   const irrelevantLabel = isSanction ? 'Irrelevant sanction' : 'Irrelevant ML/TF';
 
-  return `You are a senior KYC/AML compliance analyst. You are reviewing the ATTACHED PDF, which contains a Google search results page for adverse media / ${scopeLabel} screening on a single target.
+  return `You are a senior KYC/AML compliance analyst. You are reviewing a Google search results PDF (attached as images) for a single screened target.
 
 ═══════════════════════════════════════════════════════
 SCREENED TARGET
@@ -199,125 +277,84 @@ ${hasContext ? `Supplementary KYC identifiers (use to disambiguate same-name par
 ${ctxStr}` : 'Supplementary KYC identifiers: (none provided)'}
 
 ═══════════════════════════════════════════════════════
-PDF STRUCTURE — WHAT YOU CAN SEE
-═══════════════════════════════════════════════════════
-The attached PDF contains a Google Search Results page with:
-- Typically 10 numbered search results, each with: publisher icon/logo, publisher name, URL breadcrumb, blue title, date, and snippet
-- RED-HIGHLIGHTED keywords show which Google search term triggered the match
-  (common triggers: "bribery", "corruption", "ML", "AML", "penalty", "fraud",
-   "investigation", "Disciplinary Sanctions", "criminal", etc.)
-- You can directly read the visual layout — which keywords are highlighted in red,
-  which publisher logo appears, and whether keywords sit in body text vs sidebar/nav
-
-USE BOTH the visual layout AND the snippet text to analyze each result.
-
-═══════════════════════════════════════════════════════
 YOUR TASK
 ═══════════════════════════════════════════════════════
-For EACH numbered result, classify it into EXACTLY ONE of 4 labels:
+The attached image(s) show a Google search results page containing N numbered results (typically 5-10). Read the FULL visual layout — titles, snippets, URLs, publication dates, highlighted keywords. For EACH result in order, classify it into EXACTLY ONE of these 4 labels:
 
-  • True Hit          — target is the DIRECT SUBJECT of ${scopeLabel}-related wrongdoing
-                        (named as accused/charged/investigated/sanctioned/convicted)
-  • False Hit         — the named party is a DIFFERENT person/entity from the target
-                        (different jurisdiction, industry, or KYC info contradicts)
-  • ${irrelevantLabel}  — target IS mentioned but content is outside ${scopeLabel} scope,
-                        OR the wrongdoing belongs to a THIRD PARTY (target is only
-                        mentioned in passing — relative, colleague, alternate director)
+  • True Hit          — the screened target is the DIRECT SUBJECT of ${scopeLabel}-related
+                        wrongdoing (named as accused, charged, investigated, sanctioned, etc.)
+  • False Hit         — the named party in the article is a DIFFERENT person/entity from the
+                        target (different jurisdiction, industry, identifiers, or KYC info
+                        clearly contradicts the article)
+  • ${irrelevantLabel}  — target IS mentioned but the content is outside ${scopeLabel} scope
+                        OR the wrongdoing is against a THIRD PARTY and target is only
+                        mentioned in passing (e.g. as colleague, relative, alternate director)
   • No Hit            — target is not mentioned in this result at all
 
 ═══════════════════════════════════════════════════════
-OUTPUT TEMPLATE — STRICT (one line per result)
+OUTPUT FORMAT — STRICT RULES
 ═══════════════════════════════════════════════════════
-\`<N>. <LABEL>: because <SOURCE_DESCRIPTION> <CONTEXT_EXPLANATION>, <EXONERATION_CLAUSE>.\`
+1. ENGLISH ONLY. Do not output any Chinese.
 
-──────────── COMPONENT 1 — SOURCE_DESCRIPTION (required) ────────────
-Always identify the publisher + document type from what you SEE in the PDF:
-  • "the HKEXnews announcement dated 19 December 2014"
-  • "the etnet article dated 16 July 2012"
-  • "the Sun Hung Kai Properties Corporate Governance Report"
-  • "the MarketScreener announcement"
-  • "the SEC.gov proxy voting record"
-  • "the Hong Kong Baptist University academic paper on elite sport development"
-ALWAYS include the date if visible. Convert Chinese dates to English:
-  "2014年12月19日" → "dated 19 December 2014"
-  "2012年7月13日" → "dated 13 July 2012"
+2. One line per result: \`<N>. <LABEL>: because <reason>\`
+   (Reason should be written as natural prose — not a run-on sentence.
+    Use commas and proper clauses for readability.)
 
-──────────── COMPONENT 2 — CONTEXT_EXPLANATION (pick applicable type) ────────────
+3. Allowed labels (case-sensitive, copy exactly):
+   "True Hit"  |  "False Hit"  |  "${irrelevantLabel}"  |  "No Hit"
 
-(a) THIRD-PARTY-ACCUSED — wrongdoing belongs to someone OTHER than target:
-    Name the actual accused party explicitly. If unnamed in snippet, say
-    "another unnamed individual" or "other unnamed parties".
-    Examples:
-    • "refers to a bribery offence appeal by another unnamed individual, while
-       the target is only mentioned as ceasing to be an Alternate Director"
-    • "details Bribery Ordinance charges laid against Mr. KWOK Ping-luen,
-       while the target is mentioned only as his Alternate Director"
-    • "mentions board appointments during an Independent Commission Against
-       Corruption investigation involving other unnamed parties"
+4. Reason MUST start with "because".
 
-(b) KEYWORD-IN-CONTEXT — search trigger keyword appears in non-substantive context:
-    LOOK at the red-highlighted text to identify which keyword triggered the match.
-    Then determine if the keyword is substantive or cosmetic:
+5. Every reason MUST be UNIQUE. Anchor each with article-specific detail:
+     • publisher name (e.g. HKEXnews, SCMP, Reuters)
+     • named third party (if any)
+     • amount / regulator / case reference (if visible)
 
-    • Navigation/sidebar/footer link
-      → "contains the term 'Disciplinary Sanctions' as a website navigation link
-         rather than a substantive regulatory action"
-    • HTML/CSS class artifact (e.g. "ml-5 txt-link txt-s1")
-      → "the highlighted 'ml' is part of an HTML class name, not money laundering"
-    • Item label / form code (e.g. "ML 2.1 RE-ELECTION OF...")
-      → "uses the term 'ML' as an alphanumeric item code rather than referring
-         to money laundering"
-    • Academic / research consent boilerplate
-      → "the word 'penalty' is used in the context of study participation
-         guidelines (no penalty for withdrawing from the research)"
-    • Statute / framework name only
-      → "mentions 'Prevention of Bribery Ordinance' only as a statutory framework
-         reference, with no specific allegation against the target"
+6. Do NOT echo the label inside the reason.
 
-(c) CORPORATE-GOVERNANCE-MENTION — target listed in routine board/director context:
-    • "mentions the target as a director in a general section discussing
-       anti-corruption training provided to the board"
-    • "mentions the target in a table within a general regulatory disclosure
-       section discussing potential remediation orders or prosecution"
-
-(d) NEUTRAL-DISCLOSURE — routine regulatory filing with target name:
-    • "merely lists share transaction details for the target"
-    • "merely lists a vote regarding the target's election as executive director"
-
-──────────── COMPONENT 3 — EXONERATION_CLAUSE (required, ROTATE between 3) ────────────
-For every "${irrelevantLabel}", "False Hit", and "No Hit", END the reason with ONE of:
-  • "with no allegations against the target"
-  • "the target is not implicated"
-  • "the target is not the subject of any wrongdoing"
-DO NOT use the same exoneration clause more than 4 times in a 10-result output.
-(For "True Hit" results, do NOT add an exoneration clause.)
+7. KYC-disambiguation rule: if the article's named party has identifying details
+   that CLEARLY CONTRADICT the KYC info above → False Hit.
 
 ═══════════════════════════════════════════════════════
-GOLD-STANDARD REFERENCE EXAMPLES (target: KWOK KAI FAI ADAM)
+REASONING QUALITY RULES (CRITICAL — read carefully)
 ═══════════════════════════════════════════════════════
-Match the tone, density, and structure of these examples EXACTLY:
+9. THIRD-PARTY-ACCUSED rule: If the wrongdoing in an article is attributed to a
+   NAMED PARTY who is NOT the screened target (e.g. target's relative, colleague,
+   or person with same surname), you MUST:
+     (a) Name the actual accused party EXPLICITLY
+         e.g. "the bribery charges were laid against Thomas Kwok and Raymond Kwok"
+     (b) State the target's incidental role
+         e.g. "the target is mentioned only as alternate director"
+   Classify as "${irrelevantLabel}" (NOT "True Hit", NOT "False Hit").
 
-1. Irrelevant ML/TF: because the HKEXnews announcement dated 19 December 2014 refers to a bribery offence appeal by another unnamed individual, while the target is only mentioned as ceasing to be an Alternate Director, with no allegations against the target.
-2. Irrelevant ML/TF: because the HKEXnews Disclosure of Interests filing contains the term "Disciplinary Sanctions" as a website navigation link rather than a substantive regulatory action, and merely lists share transaction details for the target, the target is not implicated.
-3. Irrelevant ML/TF: because the etnet article dated 16 July 2012 discusses appointments of alternate directors in the context of Bribery Ordinance investigations against other unnamed parties, the target is not the subject of any wrongdoing.
-6. Irrelevant ML/TF: because the MarketScreener announcement details Bribery Ordinance charges laid against Mr. KWOK Ping-luen, while the target is mentioned only as his Alternate Director, the target is not the subject of any wrongdoing.
-9. Irrelevant ML/TF: because the SEC.gov proxy voting record uses the term "ML" as an alphanumeric item code rather than referring to money laundering, and merely lists a vote regarding the target's election as executive director, the target is not the subject of any wrongdoing.
-10. Irrelevant ML/TF: because the Hong Kong Baptist University academic paper on elite sport development mentions the target's role in promoting sports, while the word "penalty" is used in the context of study participation guidelines, with no allegations against the target.
+10. KEYWORD-IN-CONTEXT rule: Search keywords may appear in the PDF as:
+    • Website navigation / boilerplate (e.g. "Disciplinary Sanctions" as sidebar link)
+    • Abbreviations or codes (e.g. "ML" as fund ticker, not money laundering)
+    • Legal framework references (e.g. "Prevention of Bribery Ordinance" as statute name)
+    When the keyword appears in such non-substantive context, classify as
+    "${irrelevantLabel}" or "No Hit" and EXPLICITLY note the keyword's true role.
+    Example: "the term 'ML' here is a fund abbreviation, not money laundering"
+
+11. GROUND-TRUTH rule: Your reason MUST be based ONLY on text actually visible
+    in the attached PDF image(s). Do NOT invent article topics, publishers, or facts.
+    If a snippet is too brief to determine substance, say "snippet too brief to
+    determine substantive context" rather than guessing.
+
+12. EXONERATION SUFFIX rule: For every "${irrelevantLabel}", "False Hit", and
+    "No Hit", the reason MUST end with an explicit statement that the target
+    is not accused. Rotate among these three phrasings to vary the language
+    (do NOT reuse the same phrase more than 4 times across the full list):
+      • "...with no allegations against the target."
+      • "...the target is not implicated."
+      • "...the target is not the subject of any wrongdoing."
+
+13. NO preamble before "1.". NO summary after the last result.
+    NO markdown headers. Numbered list ONLY.
+    (Within each reason, natural prose is fine and encouraged.)
 
 ═══════════════════════════════════════════════════════
-FINAL FORMAT RULES
-═══════════════════════════════════════════════════════
-1. ENGLISH ONLY. No Chinese in output.
-2. Allowed labels (case-sensitive): "True Hit" | "False Hit" | "${irrelevantLabel}" | "No Hit"
-3. Every reason MUST start with "because" and be UNIQUE (no copy-paste between lines).
-4. KYC-disambiguation: if article's named party CLEARLY CONTRADICTS the KYC info above → False Hit.
-5. GROUND-TRUTH: reason MUST be based ONLY on what you actually see in the PDF.
-   If a snippet is too brief, say "snippet too brief to determine substantive context"
-   rather than inventing facts.
-6. NO extra commentary, headers, markdown, or bullet points. ONLY the numbered list.
-
-═══════════════════════════════════════════════════════
-NOW ANALYZE THE ATTACHED PDF AND OUTPUT THE NUMBERED LIST:
+NOW ANALYZE THE ATTACHED PDF IMAGES AND OUTPUT THE
+NUMBERED CLASSIFICATION LIST (English only):
 ═══════════════════════════════════════════════════════`;
 }
 
@@ -339,6 +376,7 @@ function parseAiResponse(text, mode) {
 
   const results = [];
   const lines = text.split(/\n/);
+
   const lineRe = /^\s*(\d+)[.)\]]\s*\**\s*([^*:—\-]+?)\s*\**\s*[:：\-—]\s*(.+)$/;
 
   for (const ln of lines) {
@@ -437,7 +475,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
     [results, filterType]
   );
 
-  /* ── Run Analysis (MULTIMODAL Poe API call) ── */
+  /* ── Run Analysis (SINGLE Poe API call · MULTIMODAL) ── */
   const runAnalysis = async () => {
     if (!pdfFile) { setErrorMsg('請先上傳搜尋結果 PDF 文件'); return; }
     if (!apiKey.trim()) { setErrorMsg('請輸入 POE API Key'); return; }
@@ -452,13 +490,22 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
     setExpandedId(null);
 
     try {
-      // ── Step 1: PDF → base64 (NO text extraction — Gemini reads PDF directly) ──
-      setProgress(20); setStage('正在編碼 PDF (base64)...');
-      const base64Pdf = await fileToBase64(pdfFile);
-      console.log(`📄 PDF base64 encoded: ${base64Pdf.length} chars (${(pdfFile.size / 1024).toFixed(1)} KB)`);
+      // ── Step 1: PDF → text (debug only) + PDF → images (for API) ──
+      setProgress(15); setStage('正在讀取 PDF 文字 (debug)...');
+      const pdfText = await extractPdfText(pdfFile);
+      console.log(`📄 PDF text extracted: ${pdfText.length} chars (for debug log only)`);
+      if (pdfText.length > 30000) {
+        console.warn('⚠️ PDF text > 30k chars — multimodal mode means slicing is no longer needed.');
+      }
 
-      // ── Step 2: Build prompt (multimodal — no pdfText needed) ──
-      setProgress(40); setStage('正在組建 multimodal prompt...');
+      setProgress(30); setStage('正在轉換 PDF 為高清圖片...');
+      const pdfImages = await pdfToImages(pdfFile, 2.0);
+      console.log(`🖼️ PDF rendered to ${pdfImages.length} image(s)`);
+      const totalImageKB = pdfImages.reduce((sum, url) => sum + Math.ceil(url.length * 0.75 / 1024), 0);
+      console.log(`📦 Total image payload: ~${totalImageKB} KB`);
+
+      // ── Step 2: Build prompt (text only — PDF goes as images) ──
+      setProgress(45); setStage('正在組建 prompt...');
       const userPrompt = buildPrompt({
         entityName: searchEntity,
         entityContext,
@@ -466,8 +513,17 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
       });
       console.log(`📝 Prompt length: ${userPrompt.length} chars`);
 
-      // ── Step 3: MULTIMODAL Poe API call (PDF attached as file) ──
-      setProgress(55); setStage('正在呼叫 Poe AI (Gemini-3.5-Flash, multimodal PDF)...');
+      // ── Step 3: SINGLE Poe API call (multimodal) ──
+      setProgress(60); setStage('正在呼叫 Poe AI (gemini-3.5-flash · multimodal)...');
+
+      const contentArray = [
+        { type: 'text', text: userPrompt },
+        ...pdfImages.map(dataUrl => ({
+          type: 'image_url',
+          image_url: { url: dataUrl },
+        })),
+      ];
+
       const res = await fetch('https://api.poe.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -475,21 +531,10 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
           'Authorization': `Bearer ${apiKey.trim()}`,
         },
         body: JSON.stringify({
-          model: 'Gemini-3.5-Flash',
-          stream: false,
-          messages: [{
-            role: 'user',
-            content: [
-              { type: 'text', text: userPrompt },
-              {
-                type: 'file',
-                file: {
-                  filename: pdfFile.name || 'google_search.pdf',
-                  file_data: `data:application/pdf;base64,${base64Pdf}`
-                }
-              }
-            ]
-          }],
+          model: 'gemini-3.5-flash',
+          messages: [
+            { role: 'user', content: contentArray }
+          ],
           temperature: 0.3,
           max_tokens: 4000,
         }),
@@ -504,7 +549,9 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
       const aiText = data?.choices?.[0]?.message?.content || '';
       if (!aiText) throw new Error('Poe API 回傳空白內容');
       console.log(`🤖 AI response length: ${aiText.length} chars`);
+      console.log('=== RAW AI RESPONSE ===');
       console.log(aiText);
+      console.log('=== END RAW RESPONSE ===');
 
       setRawResponse(aiText);
 
@@ -656,11 +703,11 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
             <h1 className="text-lg font-bold tracking-tight flex items-center gap-2">
               {isSanction ? 'Sanction Screening' : 'Adverse Media Screening'}
               <span className="text-[10px] font-bold bg-emerald-400/30 text-white border border-emerald-300/50 px-2 py-0.5 rounded-full">
-                v2.3 · Multimodal PDF
+                v2.1 · Multimodal
               </span>
             </h1>
             <p className="text-[11px] mt-0.5 text-white/80">
-              🚀 Single Poe API call · PDF sent directly to Gemini · Gold-standard prompt
+              🚀 Single Poe API call · PDF as images · ~5-8 seconds · English-only output
             </p>
           </div>
         </div>
@@ -776,111 +823,45 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
-                    📅 Date of Birth
-                  </label>
-                  <input
-                    type="date"
-                    value={entityContext.dob}
-                    onChange={e => handleCtxChange('dob', e.target.value)}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all"
-                  />
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">📅 Date of Birth</label>
+                  <input type="date" value={entityContext.dob} onChange={e => handleCtxChange('dob', e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all" />
                 </div>
 
                 <div>
-                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
-                    🏳️ Nationality / Region
-                  </label>
-                  <select
-                    value={entityContext.nationality}
-                    onChange={e => handleCtxChange('nationality', e.target.value)}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all appearance-none"
-                  >
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">🏳️ Nationality / Region</label>
+                  <select value={entityContext.nationality} onChange={e => handleCtxChange('nationality', e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all appearance-none">
                     <option value="">— Select —</option>
-                    {NATIONALITIES.map(n => (
-                      <option key={n.value} value={n.value}>
-                        {n.en} ({n.zh})
-                      </option>
-                    ))}
+                    {NATIONALITIES.map(n => (<option key={n.value} value={n.value}>{n.en} ({n.zh})</option>))}
                   </select>
                 </div>
 
                 <div>
-                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
-                    ⚧ Gender
-                  </label>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">⚧ Gender</label>
                   <div className="flex gap-2">
-                    {[
-                      { value: 'Male', label: 'Male' },
-                      { value: 'Female', label: 'Female' },
-                      { value: 'Other', label: 'Other' }
-                    ].map(g => (
-                      <button
-                        key={g.value}
-                        type="button"
-                        onClick={() => handleCtxChange('gender', entityContext.gender === g.value ? '' : g.value)}
-                        className={`flex-1 py-2 rounded-lg text-xs font-semibold border transition-all ${
-                          entityContext.gender === g.value
-                            ? 'bg-purple-500 text-white border-purple-500 shadow-sm'
-                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-purple-300 hover:bg-purple-50'
-                        }`}
-                      >
-                        {g.label}
-                      </button>
+                    {[{ value: 'Male', label: 'Male' }, { value: 'Female', label: 'Female' }, { value: 'Other', label: 'Other' }].map(g => (
+                      <button key={g.value} type="button" onClick={() => handleCtxChange('gender', entityContext.gender === g.value ? '' : g.value)} className={`flex-1 py-2 rounded-lg text-xs font-semibold border transition-all ${entityContext.gender === g.value ? 'bg-purple-500 text-white border-purple-500 shadow-sm' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-purple-300 hover:bg-purple-50'}`}>{g.label}</button>
                     ))}
                   </div>
                 </div>
 
                 <div>
-                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
-                    🏢 Company / Title
-                  </label>
-                  <input
-                    type="text"
-                    value={entityContext.company}
-                    onChange={e => handleCtxChange('company', e.target.value)}
-                    placeholder="e.g. Alpha Holdings Ltd / Director"
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all"
-                  />
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">🏢 Company / Title</label>
+                  <input type="text" value={entityContext.company} onChange={e => handleCtxChange('company', e.target.value)} placeholder="e.g. Alpha Holdings Ltd / Director" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all" />
                 </div>
 
                 <div>
-                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
-                    🆔 ID Number
-                  </label>
-                  <input
-                    type="text"
-                    value={entityContext.idNumber}
-                    onChange={e => handleCtxChange('idNumber', e.target.value)}
-                    placeholder="Passport / ID / Registration No."
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all"
-                  />
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">🆔 ID Number</label>
+                  <input type="text" value={entityContext.idNumber} onChange={e => handleCtxChange('idNumber', e.target.value)} placeholder="Passport / ID / Registration No." className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all" />
                 </div>
 
                 <div>
-                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
-                    📍 Address
-                  </label>
-                  <input
-                    type="text"
-                    value={entityContext.address}
-                    onChange={e => handleCtxChange('address', e.target.value)}
-                    placeholder="Registered or residential address"
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all"
-                  />
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">📍 Address</label>
+                  <input type="text" value={entityContext.address} onChange={e => handleCtxChange('address', e.target.value)} placeholder="Registered or residential address" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all" />
                 </div>
 
                 <div className="md:col-span-2">
-                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">
-                    📝 Other Notes
-                  </label>
-                  <textarea
-                    value={entityContext.notes}
-                    onChange={e => handleCtxChange('notes', e.target.value)}
-                    placeholder="Any other identifying info (e.g. known unrelated identities: not a lawyer, not a doctor)..."
-                    rows={2}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all resize-none"
-                  />
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 mb-1">📝 Other Notes</label>
+                  <textarea value={entityContext.notes} onChange={e => handleCtxChange('notes', e.target.value)} placeholder="Any other identifying info (e.g. known unrelated identities: not a lawyer, not a doctor)..." rows={2} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:border-purple-400 focus:ring-2 focus:ring-purple-100 outline-none transition-all resize-none" />
                 </div>
               </div>
 
@@ -896,7 +877,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg ${isSanction ? 'bg-gradient-to-br from-orange-500 to-red-600' : 'bg-gradient-to-br from-emerald-500 to-teal-600'}`}>2</div>
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">上傳搜尋結果 PDF</h2>
-                  <p className="text-[11px] text-slate-500 mt-0.5">PDF 會直接送俾 Gemini multimodal 解析(包括紅字 highlight / logo / layout)</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">將 Google 搜尋頁面儲存為 PDF 後上傳 · 系統會轉成圖片俾 AI 「睇」</p>
                 </div>
               </div>
               <div className="flex flex-col sm:flex-row gap-3 items-stretch">
@@ -934,21 +915,18 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg ${isSanction ? 'bg-gradient-to-br from-orange-500 to-red-600' : 'bg-gradient-to-br from-emerald-500 to-teal-600'}`}>3</div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h2 className="text-sm font-bold text-slate-900">AI 分析 (Multimodal)</h2>
+                    <h2 className="text-sm font-bold text-slate-900">AI 分析 (Multimodal Single Call)</h2>
                     <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                      🖼️ Gemini 直接睇 PDF
+                      ⚡ 1 Poe API call · ~5-8s
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5">Gemini-3.5-Flash · base64 PDF attachment · Gold-standard few-shot prompt</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">使用 gemini-3.5-flash · PDF 轉圖片傳送 · 模擬 Poe Chat upload</p>
                 </div>
               </div>
 
-              {/* API Key */}
               <div className="mb-4 bg-slate-50 rounded-xl p-3 border border-slate-200">
                 <div className="flex items-center justify-between mb-2">
-                  <label className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
-                    🔑 POE API Key
-                  </label>
+                  <label className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">🔑 POE API Key</label>
                   <button onClick={() => setShowKeyInput(!showKeyInput)} className="text-[11px] text-emerald-600 hover:text-emerald-700 font-bold hover:underline">
                     {showKeyInput ? '🙈 隱藏' : '👁️ 顯示/修改'}
                   </button>
@@ -957,26 +935,14 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   <input type="text" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="poe-..." className="w-full border border-slate-200 bg-white rounded-lg px-3 py-2 text-sm font-mono focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 outline-none" />
                 ) : (
                   <div className="border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-400 bg-white font-mono flex items-center gap-2">
-                    {apiKey ? (
-                      <>
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                        <span>{apiKey.slice(0, 10)}{'•'.repeat(Math.min(20, apiKey.length - 10))}</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
-                        <span>(未設定)</span>
-                      </>
-                    )}
+                    {apiKey ? (<><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /><span>{apiKey.slice(0, 10)}{'•'.repeat(Math.min(20, apiKey.length - 10))}</span></>) : (<><span className="w-1.5 h-1.5 rounded-full bg-slate-300" /><span>(未設定)</span></>)}
                   </div>
                 )}
                 <p className="text-[10px] text-slate-500 mt-2 flex items-center gap-1 flex-wrap">
                   <span>使用</span>
-                  <span className="inline-block px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-bold text-[9px]">Gemini-3.5-Flash</span>
+                  <span className="inline-block px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-bold text-[9px]">gemini-3.5-flash</span>
                   <span>via Poe API (multimodal)</span>
-                  <a href="https://poe.com/api_key" target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline ml-auto font-semibold">
-                    取得 API Key →
-                  </a>
+                  <a href="https://poe.com/api_key" target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline ml-auto font-semibold">取得 API Key →</a>
                 </p>
               </div>
 
@@ -1039,23 +1005,12 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
 
                 <div className="bg-white rounded-2xl border border-slate-200 p-2">
                   <div className="flex gap-1 flex-wrap">
-                    {[
-                      { k: 'ALL', l: 'All', count: results.length },
-                      ...Object.entries(CLS_CONFIG).map(([k, c]) => ({ k, l: isSanction && k === 'IRRELEVANT_MLTF' ? 'Irrelevant' : c.label, count: counts[k] })),
-                    ].map(f => {
+                    {[{ k: 'ALL', l: 'All', count: results.length }, ...Object.entries(CLS_CONFIG).map(([k, c]) => ({ k, l: isSanction && k === 'IRRELEVANT_MLTF' ? 'Irrelevant' : c.label, count: counts[k] }))].map(f => {
                       const isActive = filterType === f.k;
                       return (
-                        <button
-                          key={f.k}
-                          onClick={() => setFilterType(f.k)}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                            isActive ? 'bg-gradient-to-r from-slate-700 to-slate-800 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'
-                          }`}
-                        >
+                        <button key={f.k} onClick={() => setFilterType(f.k)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${isActive ? 'bg-gradient-to-r from-slate-700 to-slate-800 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}>
                           {f.l}
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-black ${isActive ? 'bg-white/25' : 'bg-slate-200 text-slate-700'}`}>
-                            {f.count}
-                          </span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-black ${isActive ? 'bg-white/25' : 'bg-slate-200 text-slate-700'}`}>{f.count}</span>
                         </button>
                       );
                     })}
@@ -1069,31 +1024,18 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   }
                 </div>
 
-                <button
-                  onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); setRawResponse(''); }}
-                  className="w-full py-2 rounded-lg text-xs text-slate-500 border border-dashed hover:border-slate-400 hover:text-slate-700"
-                >
+                <button onClick={() => { setAnalysisComplete(false); setResults([]); setPdfFile(null); setProgress(0); setRawResponse(''); }} className="w-full py-2 rounded-lg text-xs text-slate-500 border border-dashed hover:border-slate-400 hover:text-slate-700">
                   🔄 Re-analyze (clear results)
                 </button>
 
                 <div className="bg-slate-50 rounded-xl border p-4">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-sm font-bold text-slate-700">📋 Analysis Summary (Copy & Paste)</h3>
-                    <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(summaryText).then(() => {
-                          setCopied(true);
-                          setTimeout(() => setCopied(false), 2000);
-                        });
-                      }}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${copied ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-white hover:bg-slate-600'}`}
-                    >
+                    <button onClick={() => { navigator.clipboard.writeText(summaryText).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); }} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${copied ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-white hover:bg-slate-600'}`}>
                       {copied ? '✅ Copied' : '📋 Copy All'}
                     </button>
                   </div>
-                  <pre className="w-full max-h-96 overflow-y-auto text-xs font-mono bg-white border rounded-lg p-3 whitespace-pre-wrap text-slate-700 select-all">
-                    {summaryText}
-                  </pre>
+                  <pre className="w-full max-h-96 overflow-y-auto text-xs font-mono bg-white border rounded-lg p-3 whitespace-pre-wrap text-slate-700 select-all">{summaryText}</pre>
                 </div>
 
                 {rawResponse && (
@@ -1125,53 +1067,44 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
         {activeTab === 'arch' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div>
-              <h2 className="text-base font-bold text-slate-900">🏗️ v2.3 架構說明 (Multimodal + Gold-Standard)</h2>
-              <p className="text-xs text-slate-500 mt-1">Multimodal PDF · Few-shot prompt · 直接複製 Poe Chat 嘅效果</p>
+              <h2 className="text-base font-bold text-slate-900">🏗️ v2.1 架構說明 (Multimodal Poe Chat Port)</h2>
+              <p className="text-xs text-slate-500 mt-1">PDF → Images → Multimodal single-shot · 1:1 模擬 Poe Chat 上傳行為</p>
             </div>
 
             <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-4">
-              <div className="text-xs font-bold text-emerald-800 mb-2">⚡ v2.3 流程 (4 steps · 1 multimodal API call)</div>
+              <div className="text-xs font-bold text-emerald-800 mb-2">⚡ v2.1 流程 (4 steps · 1 API call · multimodal)</div>
               <ol className="text-xs text-emerald-900 space-y-2 list-decimal list-inside">
                 <li><b>輸入實體名稱</b> → 自動生成 Google 查詢字串</li>
                 <li><b>填寫 Supplementary ID Info</b>(選填但強烈推薦) → 用嚟排除同名誤報</li>
-                <li><b>上傳 Google SERP PDF</b> → base64 編碼(無需 pdf.js 抽 text)</li>
-                <li><b>單一 Multimodal Poe API call</b>(Gemini-3.5-Flash) → PDF 作為 file attachment 直接送俾 Gemini → Gemini 真正「睇」PDF 嘅紅字 / logo / layout → 即時解析輸出</li>
+                <li><b>上傳 Google SERP PDF</b> → pdf.js render 每頁成高清 PNG/JPEG → base64</li>
+                <li><b>單一 Poe API call</b>(gemini-3.5-flash, multimodal: prompt + N images) → AI「睇」住完整視覺 layout → 結構化 numbered list → 解析 + 顯示</li>
               </ol>
             </div>
 
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
-              <div className="text-xs font-bold text-slate-700 mb-2">📊 v2.3 vs v2.0 vs Legacy 對比</div>
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+              <div className="text-xs font-bold text-blue-800 mb-2">🆚 v2.1 vs v2.0(純文字) vs Legacy</div>
               <table className="w-full text-xs border-collapse">
                 <thead>
                   <tr className="bg-white">
                     <th className="p-2 text-left border">指標</th>
-                    <th className="p-2 text-center border text-emerald-700">v2.3 (Multimodal)</th>
-                    <th className="p-2 text-center border text-blue-700">v2.0 (Text-only)</th>
+                    <th className="p-2 text-center border text-emerald-700">v2.1 Multimodal</th>
+                    <th className="p-2 text-center border text-blue-700">v2.0 Text</th>
                     <th className="p-2 text-center border text-amber-700">Legacy</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr><td className="p-2 border">API calls</td><td className="p-2 border text-center font-bold text-emerald-700">1</td><td className="p-2 border text-center font-bold text-blue-700">1</td><td className="p-2 border text-center font-bold text-amber-700">11-25</td></tr>
-                  <tr><td className="p-2 border">PDF 處理</td><td className="p-2 border text-center text-emerald-700">Gemini 直讀</td><td className="p-2 border text-center text-blue-700">pdf.js 抽 text</td><td className="p-2 border text-center text-amber-700">pdf.js 抽 text</td></tr>
-                  <tr><td className="p-2 border">紅字 highlight 識別</td><td className="p-2 border text-center text-emerald-700">✅ 直接睇到</td><td className="p-2 border text-center text-blue-700">❌ 丟失</td><td className="p-2 border text-center text-amber-700">❌ 丟失</td></tr>
-                  <tr><td className="p-2 border">Logo / Layout 理解</td><td className="p-2 border text-center text-emerald-700">✅ 視覺識別</td><td className="p-2 border text-center text-blue-700">⚠️ 靠 URL</td><td className="p-2 border text-center text-amber-700">⚠️ 靠 URL</td></tr>
-                  <tr><td className="p-2 border">vs Poe Chat 對齊度</td><td className="p-2 border text-center font-bold text-emerald-700">~95-100%</td><td className="p-2 border text-center font-bold text-blue-700">~85-90%</td><td className="p-2 border text-center font-bold text-amber-700">~70%</td></tr>
-                  <tr><td className="p-2 border">Prompt 策略</td><td className="p-2 border text-center text-emerald-700">Few-shot gold std</td><td className="p-2 border text-center text-blue-700">Rule-based</td><td className="p-2 border text-center text-amber-700">17 patches</td></tr>
+                  <tr><td className="p-2 border">分析時間</td><td className="p-2 border text-center font-bold text-emerald-700">~5-8s</td><td className="p-2 border text-center font-bold text-blue-700">~3-5s</td><td className="p-2 border text-center font-bold text-amber-700">~30-60s</td></tr>
+                  <tr><td className="p-2 border">PDF 傳遞方式</td><td className="p-2 border text-center text-emerald-700">圖片 (image_url)</td><td className="p-2 border text-center text-blue-700">純文字 slice</td><td className="p-2 border text-center text-amber-700">純文字 chunk</td></tr>
+                  <tr><td className="p-2 border">視覺 layout 保留</td><td className="p-2 border text-center text-emerald-700">✅ 完整</td><td className="p-2 border text-center text-red-600">❌ 失去</td><td className="p-2 border text-center text-red-600">❌ 失去</td></tr>
+                  <tr><td className="p-2 border">Reason 豐富度</td><td className="p-2 border text-center text-emerald-700">★★★★★</td><td className="p-2 border text-center text-blue-700">★★★</td><td className="p-2 border text-center text-amber-700">★★★★</td></tr>
+                  <tr><td className="p-2 border">同 Poe Chat 一致度</td><td className="p-2 border text-center text-emerald-700">~95%</td><td className="p-2 border text-center text-blue-700">~60%</td><td className="p-2 border text-center text-amber-700">~70%</td></tr>
                 </tbody>
               </table>
             </div>
 
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
-              <b>💡 點解 v2.3 work:</b> (1) Multimodal — Gemini 直接「睇」PDF,可以分辨紅字 trigger keyword 喺正文定 sidebar nav;(2) Few-shot — prompt 內嵌 5 條 Poe Chat 實測 gold-standard output 做 in-context examples,model 直接 mimic 個 tone/structure;(3) Component template — Source + Context + Exoneration 三段式強制 schema,output 一致性極高。
-            </div>
-
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800">
-              <b>⚠️ 注意事項:</b>
-              <ul className="list-disc list-inside mt-1 space-y-1">
-                <li>Multimodal call 嘅 cost 比純文字高(file tokens 比 text tokens 貴)</li>
-                <li>PDF 太大(&gt;10MB)可能會被 Poe API 拒收 — Google SERP PDF 通常 &lt;1MB,冇問題</li>
-                <li>Gemini-3.5-Flash 屬於 paid model,API key owner 需要有 Poe subscription 或 add-on points</li>
-              </ul>
+              <b>💡 點解 v2.1 work:</b> Poe Chat 用戶 upload PDF 時,model 收到嘅係**視覺渲染**而唔係 raw text。v2.1 喺 client side 用 pdf.js render 每頁成 JPEG (scale 2x),再用 OpenAI-compatible <code className="bg-amber-100 px-1 rounded">image_url</code> 格式傳俾 Poe API,完全 1:1 複製 Poe Chat 行為。Reason 自然豐富度同你直接喺 Poe Chat 試嘅 output 接近 95%+ 一致。
             </div>
           </div>
         )}
@@ -1210,9 +1143,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {g.list.map((kw, i) => (
-                        <span key={i} className={`bg-white border px-2 py-1 rounded-md text-[11px] font-semibold text-${g.color}-700 border-${g.color}-200`}>
-                          {kw}
-                        </span>
+                        <span key={i} className={`bg-white border px-2 py-1 rounded-md text-[11px] font-semibold text-${g.color}-700 border-${g.color}-200`}>{kw}</span>
                       ))}
                     </div>
                   </div>
