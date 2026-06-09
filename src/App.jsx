@@ -2046,21 +2046,37 @@ function tokenizeName(name) {
     .filter(t => t.length >= 2);
 }
 
-function preCheckTargetMentioned(facts, targetName, body) {
-  if (!facts || !targetName || !body) return facts;
+function preCheckTargetMentioned(facts, targetName, body, serpSnippet = '') {
+  if (!facts || !targetName) return facts;
 
   const targetTokens = tokenizeName(targetName);
   if (targetTokens.length < 2) return facts;     // need ≥2 tokens to be meaningful
 
-  const bodyLc = String(body)
+  const norm = (s) => String(s || '')
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ');          // normalise punctuation in body too
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ');
 
-  const allTokensPresent = targetTokens.every(tok => bodyLc.includes(tok));
+  const bodyLc = norm(body);
+  const snippetLc = norm(serpSnippet);
+
+  // 🆕 Check BOTH scraped body AND Google SERP snippet
+  // ----------------------------------------------------------------
+  // Rationale: SERP snippet is extracted by Google from the SAME
+  // document. If the name appears in the snippet (with Google's
+  // bold-highlight), the source doc DOES contain the name — even if
+  // our 12001-char scrape truncation missed it (e.g. name buried in
+  // page 3 of a 250-page annual report, or in a proxy voting table).
+  // We use SERP ONLY to confirm name-presence, NEVER to infer
+  // wrongdoing — so hallucination risk = 0.
+  // ----------------------------------------------------------------
+  const allTokensInBody = bodyLc && targetTokens.every(tok => bodyLc.includes(tok));
+  const allTokensInSnippet = snippetLc && targetTokens.every(tok => snippetLc.includes(tok));
+  const allTokensPresent = allTokensInBody || allTokensInSnippet;
+  const evidenceSource = allTokensInBody ? 'scraped body' : 'SERP snippet';
 
   // CASE 1 — AI said "not mentioned" / ABSENT but tokens ARE present → OVERRIDE
   if (allTokensPresent && (!facts.targetMentioned || facts.nameMatch === 'ABSENT' || facts.targetRole === 'not_present')) {
-    console.log(`🔧 FIX A: Overriding targetMentioned=false → true (all ${targetTokens.length} tokens [${targetTokens.join(', ')}] present in body)`);
+    console.log(`🔧 FIX A: Overriding targetMentioned=false → true (all ${targetTokens.length} tokens [${targetTokens.join(', ')}] present in ${evidenceSource})`);
     return {
       ...facts,
       targetMentioned: true,
@@ -2074,7 +2090,7 @@ function preCheckTargetMentioned(facts, targetName, body) {
   // CASE 2 — AI flagged SUPERSET/DIFFERENT but ALL tokens of the target are still present
   //          → at minimum, prevent FALSE_HIT (downgrade to EXACT match, let Rule 6/7 take it to IRRELEVANT)
   if (allTokensPresent && (facts.nameMatch === 'SUPERSET' || facts.nameMatch === 'DIFFERENT')) {
-    console.log(`🔧 FIX A: Overriding nameMatch=${facts.nameMatch} → EXACT (all target tokens present; strict rule forbids FALSE_HIT)`);
+    console.log(`🔧 FIX A: Overriding nameMatch=${facts.nameMatch} → EXACT (all target tokens present in ${evidenceSource}; strict rule forbids FALSE_HIT)`);
     return {
       ...facts,
       targetMentioned: true,
@@ -3251,6 +3267,13 @@ PAGE-CONTENT SCRAPING:
         const scraped = pageContentMap.get(url) || '';
         const hasFullBody = scraped.length >= 200;
 
+        // 🆕 ALWAYS compute SERP snippet (rank-aligned), regardless of scrape success.
+        // Used as supplementary name-presence evidence for FIX A token-override.
+        const serpSnippet =
+          (pdfBlocks[i] && pdfBlocks[i].length >= 50)
+            ? pdfBlocks[i]
+            : (findArticleContextInPdf(pdfText, url) || '');
+
         let snippet = '';
         let bodySource = 'none';
 
@@ -3258,13 +3281,10 @@ PAGE-CONTENT SCRAPING:
           bodySource = 'scraped';
         } else if (pdfBlocks[i] && pdfBlocks[i].length >= 50) {
           snippet = pdfBlocks[i];
-          bodySource = 'pdf-block-rank';                    // 🆕 deterministic per-rank
-        } else {
-          const probed = findArticleContextInPdf(pdfText, url) || '';
-          if (probed) {
-            snippet = probed;
-            bodySource = 'pdf-probe-fallback';
-          }
+          bodySource = 'pdf-block-rank';
+        } else if (serpSnippet) {
+          snippet = serpSnippet;
+          bodySource = 'pdf-probe-fallback';
         }
 
         return {
@@ -3273,6 +3293,7 @@ PAGE-CONTENT SCRAPING:
           title: '',
           source: '',
           body: hasFullBody ? scraped : (snippet || '(No content available for this URL)'),
+          serpSnippet,                              // 🆕 always preserved for FIX A check
           hasFullBody,
           bodySource,
         };
@@ -3334,7 +3355,8 @@ console.log(`📦 Article body sources:`, sources);
         }
 
               // 🆕 FIX A: name-token override BEFORE classification
-        const facts = preCheckTargetMentioned(fr.value, searchEntity, articles[i].body);
+        //          (check BOTH scraped body AND rank-aligned SERP snippet)
+        const facts = preCheckTargetMentioned(fr.value, searchEntity, articles[i].body, articles[i].serpSnippet);
 
         // 🆕 PATCH ⑥: verify AI-extracted subject name actually exists in this block  ⭐ 新加呢一行
         verifyFactsAgainstBlock(facts, articles[i].body, articles[i].rank);          // ⭐
@@ -3438,8 +3460,13 @@ console.log(`📦 Article body sources:`, sources);
               return;
             }
           // 🆕 FIX A: name-token override BEFORE re-classification
+        //          (check BOTH scraped body AND rank-aligned SERP snippet)
             const articleForBody = articles.find(a => a.rank === item.rank);
-            const newFacts = preCheckTargetMentioned(r.value, searchEntity, articleForBody?.body || '');
+            const newFacts = preCheckTargetMentioned(
+              r.value, searchEntity,
+              articleForBody?.body || '',
+              articleForBody?.serpSnippet || ''
+            );
 
             // 🆕 PATCH ⑥: same anti-hallucination guard during re-extraction        ⭐ 新加呢一行
             if (articleForBody) verifyFactsAgainstBlock(newFacts, articleForBody.body, item.rank);  // ⭐
