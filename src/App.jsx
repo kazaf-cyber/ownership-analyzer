@@ -2314,15 +2314,26 @@ function extractBlockMetadata(block, url) {
 // ════════════════════════════════════════════════════════════════
 function extractBlockMetadataWithSerpPriority(block, url, serpSnippet) {
   const fromBody = extractBlockMetadata(block, url);
-  if (!serpSnippet || typeof serpSnippet !== 'string' || serpSnippet.length < 8) {
-    return fromBody;
+
+  // 🆕 P15: STRICT SERP-only date policy.
+  //   If SERP snippet contains a parseable date → use it.
+  //   If SERP snippet has NO date → articleDate = '' (null).
+  //   Body-extracted dates are NO LONGER trusted — they cause hallucination
+  //   (event dates inside the article body get misread as publication date).
+  const serpDate = extractDateOnlyFromSerp(serpSnippet);
+
+  if (serpDate) {
+    if (serpDate !== fromBody.articleDate) {
+      console.log(`🔒 P13-B+P15: SERP date "${serpDate}" overrides body date "${fromBody.articleDate || '(none)'}"`);
+    }
+    return { ...fromBody, articleDate: serpDate, articleDateSource: 'SERP_snippet' };
   }
-  const fromSerp = extractBlockMetadata(serpSnippet, url);
-  if (fromSerp.articleDate && fromSerp.articleDate !== fromBody.articleDate) {
-    console.log(`🔒 P13-B: SERP date "${fromSerp.articleDate}" overrides body date "${fromBody.articleDate || '(none)'}"`);
-    return { ...fromBody, articleDate: fromSerp.articleDate, articleDateSource: 'SERP_snippet' };
+
+  // No SERP date → DROP body date (anti-hallucination)
+  if (fromBody.articleDate) {
+    console.log(`🚫 P15 rank-unknown: SERP has no date → dropping body-extracted date "${fromBody.articleDate}" (could be event date, not publication date)`);
   }
-  return fromBody;
+  return { ...fromBody, articleDate: '', articleDateSource: 'none' };
 }
 
 // ============================================================================
@@ -2428,6 +2439,85 @@ function verifyKeyObservation(facts, body, rank) {
   facts._koGrounded = `failed (${matched.length}/${tokens.length})`;
   return facts;
 }
+
+// ============================================================================
+// 🆕 PATCH P14 — SERP-snippet anchored fact verification
+//   PROBLEM:
+//     P7 (verifyKeyObservation) only checks KO against the scraped body.
+//     But scraped body can contain MANY unrelated numbers / dates / IDs
+//     from sibling filings, table of contents, prior-year comparisons, etc.
+//     AI happily cites these as if they describe THIS specific article →
+//     hallucinated "523,502,486 deemed shares" / "DA20130711000183" /
+//     "4/4 Board meetings" appear in final reasons.
+//
+//   FIX:
+//     Any STRONG FACT (large number, regulator ID, date) inside the
+//     AI-supplied key_observation MUST literally appear in the
+//     Google SERP snippet (the user-visible search result).
+//     If a fact is cited but missing from SERP → AI made it up → CLEAR KO.
+//
+//   General rule, applies to every entity, every search. No case-specific code.
+// ============================================================================
+function verifyKOAgainstSerp(facts, serpSnippet, rank) {
+  if (!facts || !serpSnippet || serpSnippet.length < 20) return facts;
+
+  const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '');
+  const serpNorm = norm(serpSnippet);
+
+  const checkField = (fieldName) => {
+    const text = facts[fieldName];
+    if (!text || typeof text !== 'string') return;
+
+    // Extract STRONG facts cited inside this field
+    const numbers = [...text.matchAll(/\b\d{2,3}(?:,\d{3})+(?:\.\d+)?\b/g)].map(m => m[0]);
+    const ids = [...text.matchAll(/\b[A-Z]{2,}\d{4,}\b/g)].map(m => m[0]);
+    const dates = [
+      ...[...text.matchAll(/\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b/g)].map(m => m[0]),
+      ...[...text.matchAll(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/g)].map(m => m[0]),
+    ];
+    const strong = [...new Set([...numbers, ...ids, ...dates])];
+    if (strong.length === 0) return;
+
+    const ungrounded = strong.filter(f => !serpNorm.includes(norm(f)));
+    if (ungrounded.length > 0) {
+      console.warn(
+        `🚨 P14 rank ${rank}: ${fieldName} cites ${JSON.stringify(ungrounded)} ` +
+        `NOT in SERP snippet → likely hallucinated → CLEARING`
+      );
+      facts[fieldName] = '';
+      facts._p14Cleared = (facts._p14Cleared || []).concat(
+        ungrounded.map(u => `${fieldName}:${u}`)
+      );
+    }
+  };
+
+  checkField('key_observation');
+  checkField('targetActionInArticle');
+  return facts;
+}
+
+// ============================================================================
+// 🆕 PATCH P15 — Strict SERP-only date policy (anti-fabrication)
+//   PROBLEM:
+//     extractBlockMetadata() may pull ANY date from the scraped body
+//     (e.g. an event date "released on 19 Mar 2014", or a footnote year
+//     "2022-06-30" from an unrelated filing). AI then echoes this as
+//     the publication date of the article.
+//
+//   FIX:
+//     Only trust the SERP-snippet date as articleDate. If SERP has no
+//     parseable date → articleDate = '' (i.e. classifyFromFacts skips
+//     the "(dated …)" clause entirely instead of fabricating one).
+//
+//   General rule. Loses some legit dates (e.g. SEC filings with no SERP date)
+//   but ELIMINATES all date-hallucination at the cost of slightly less context.
+// ============================================================================
+function extractDateOnlyFromSerp(serpSnippet) {
+  if (!serpSnippet || serpSnippet.length < 8) return '';
+  const meta = extractBlockMetadata(serpSnippet, '');
+  return meta.articleDate || '';
+}
+
 
 function buildDeterministicSpecificEvent({ articleDate, publisher, targetActionInArticle, wrongdoingDescribed, wrongdoingType }) {
   const parts = [];
@@ -3476,6 +3566,8 @@ console.log(`📦 Article body sources:`, sources);
         verifyFactsAgainstBlock(facts, articles[i].body, articles[i].rank);          // ⭐
         // 🆕 PATCH ⑦: verify key_observation is grounded in this block (else clear it)
         verifyKeyObservation(facts, articles[i].body, articles[i].rank);
+        // 🆕 PATCH P14: verify KO/AC strong facts against SERP snippet (anti-hallucination)
+        verifyKOAgainstSerp(facts, articles[i].serpSnippet, articles[i].rank);
         // 🆕 GATE 3: JS-derive publisher / articleDate / specificEvent from THIS block only
         const blockMeta = extractBlockMetadataWithSerpPriority(articles[i].body, articles[i].url, articles[i].serpSnippet);
         facts.publisher = blockMeta.publisher;
@@ -3587,6 +3679,8 @@ console.log(`📦 Article body sources:`, sources);
             if (articleForBody) verifyFactsAgainstBlock(newFacts, articleForBody.body, item.rank);  // ⭐
             // 🆕 PATCH ⑦: same key_observation ground-truth check during re-extraction
             if (articleForBody) verifyKeyObservation(newFacts, articleForBody.body, item.rank);
+            // 🆕 PATCH P14: same SERP-anchored verify after re-extract
+            if (articleForBody) verifyKOAgainstSerp(newFacts, articleForBody.serpSnippet, item.rank);
             // 🆕 GATE 3: same JS metadata injection as Pass 2
             if (articleForBody) {
               const blockMeta = extractBlockMetadataWithSerpPriority(articleForBody.body, articleForBody.url, articleForBody.serpSnippet);
