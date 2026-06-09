@@ -235,7 +235,6 @@ function buildPrompt({ entityName, entityContext, pdfText, mode }) {
   const ctxStr = formatEntityContext(entityContext);
   const hasContext = ctxStr.trim().length > 0;
   const isSanction = mode === 'sanction';
-
   const scopeLabel = isSanction ? 'sanction' : 'ML/TF';
   const irrelevantLabel = isSanction ? 'Irrelevant sanction' : 'Irrelevant ML/TF';
 
@@ -252,51 +251,73 @@ ${ctxStr}` : 'Supplementary KYC identifiers: (none provided)'}
 ═══════════════════════════════════════════════════════
 YOUR TASK
 ═══════════════════════════════════════════════════════
-Read the Google search results PDF text below. It contains N numbered search results (typically 5-10). For EACH result in order (1, 2, 3, ...), classify it into EXACTLY ONE of these 4 labels:
+Read the Google search results PDF text below. It contains N numbered search results (typically 5-10). For EACH result in order, classify it into EXACTLY ONE of these 4 labels:
 
-  • True Hit          — the target is the direct subject of ${scopeLabel}-related wrongdoing
-  • False Hit         — the named party is a DIFFERENT person/entity from the target
-                        (different jurisdiction, different industry, different identifiers,
-                         or KYC-supplied info clearly contradicts the article)
-  • ${irrelevantLabel}  — name matches the target BUT the content is outside ${scopeLabel} scope
-                        (e.g. commercial dispute, regulatory announcement, general news)
+  • True Hit          — the screened target is the DIRECT SUBJECT of ${scopeLabel}-related
+                        wrongdoing (named as accused, charged, investigated, sanctioned, etc.)
+  • False Hit         — the named party in the article is a DIFFERENT person/entity from the
+                        target (different jurisdiction, industry, identifiers, or KYC info
+                        clearly contradicts the article)
+  • ${irrelevantLabel}  — target IS mentioned but the content is outside ${scopeLabel} scope
+                        OR the wrongdoing is against a THIRD PARTY and target is only
+                        mentioned in passing (e.g. as colleague, relative, alternate director)
   • No Hit            — target is not mentioned in this result at all
-                        (e.g. general regulatory framework news)
 
 ═══════════════════════════════════════════════════════
 OUTPUT FORMAT — STRICT RULES
 ═══════════════════════════════════════════════════════
 1. ENGLISH ONLY. Do not output any Chinese.
 
-2. Output exactly one line per result, in this format:
-     <N>. <LABEL>: because <reason>
+2. One line per result: \`<N>. <LABEL>: because <reason>\`
 
-   Example:
-     1. True Hit: because the screened target "XYZ Ltd" is directly named in Reuters (2026-02-15) as ...
-     2. False Hit: because the article in The Australian (2026-01-10) refers to "XYZ Pty Ltd", an Australian tech startup ...
+3. Allowed labels (case-sensitive, copy exactly):
+   "True Hit"  |  "False Hit"  |  "${irrelevantLabel}"  |  "No Hit"
 
-3. The 4 ALLOWED LABEL strings (case-sensitive, copy exactly):
-     "True Hit"  |  "False Hit"  |  "${irrelevantLabel}"  |  "No Hit"
+4. Reason MUST start with "because".
 
-4. The reason MUST start with the word "because".
+5. Every reason MUST be UNIQUE. Anchor each with article-specific detail
+   (publication date, publisher, named party, amount, regulator, etc.).
 
-5. Every reason MUST be UNIQUE. Include article-specific anchors such as:
-     • publication date
-     • publisher / source name
-     • case-specific detail (amount, regulator, role, etc.)
-   Two results from the same publisher must still have visibly different reasons.
+6. Do NOT repeat the same date twice in the same reason.
 
-6. DO NOT mention the same date twice in the same reason. State the date once.
+7. Do NOT echo the label inside the reason.
 
-7. DO NOT repeat the label text inside the reason body.
-   ❌ "True Hit: because this is a True Hit ..."
-   ✅ "True Hit: because the target is directly named ..."
+8. KYC-disambiguation rule: if the article's named party has identifying details
+   that CLEARLY CONTRADICT the KYC info above → False Hit.
 
-8. KYC-disambiguation rule: if the article's named party has identifying details (DOB,
-   nationality, company, role, address) that CLEARLY CONTRADICT the KYC info above,
-   classify as False Hit and state the contradiction in the reason.
+═══════════════════════════════════════════════════════
+REASONING QUALITY RULES (CRITICAL — read carefully)
+═══════════════════════════════════════════════════════
+9. THIRD-PARTY-ACCUSED rule: If the wrongdoing in an article is attributed to a
+   NAMED PARTY who is NOT the screened target (e.g. target's relative, colleague,
+   or person with same surname), you MUST:
+     (a) Name the actual accused party EXPLICITLY
+         e.g. "the bribery charges were laid against Thomas Kwok and Raymond Kwok"
+     (b) State the target's incidental role
+         e.g. "the target is mentioned only as alternate director"
+   Classify as "${irrelevantLabel}" (NOT "True Hit", NOT "False Hit").
 
-9. NO extra commentary. NO headers. NO markdown. NO summary. ONLY the numbered list.
+10. KEYWORD-IN-CONTEXT rule: Search keywords may appear in the PDF as:
+    • Website navigation / boilerplate (e.g. "Disciplinary Sanctions" as sidebar link)
+    • Abbreviations or codes (e.g. "ML" as fund ticker, not money laundering)
+    • Legal framework references (e.g. "Prevention of Bribery Ordinance" as statute name)
+    When the keyword appears in such non-substantive context, classify as
+    "${irrelevantLabel}" or "No Hit" and EXPLICITLY note the keyword's true role.
+    Example: "the term 'ML' here is a fund abbreviation, not money laundering"
+
+11. GROUND-TRUTH rule: Your reason MUST be based ONLY on text actually present
+    in the PDF snippet. Do NOT invent article topics, publishers, or facts.
+    If a snippet is too brief, say "snippet too brief to determine substantive
+    context" rather than guessing.
+
+12. EXONERATION SUFFIX rule: For every "${irrelevantLabel}", "False Hit", and
+    "No Hit", the reason MUST end with an explicit statement that the target
+    is not accused. Use one of:
+      • "...with no allegations against the target."
+      • "...the target is not implicated."
+      • "...the target is not the subject of any wrongdoing."
+
+13. NO extra commentary. NO headers. NO markdown. ONLY the numbered list.
 
 ═══════════════════════════════════════════════════════
 GOOGLE SEARCH RESULTS PDF TEXT
