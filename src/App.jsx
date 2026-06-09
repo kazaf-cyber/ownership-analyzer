@@ -1843,7 +1843,74 @@ function stripArticleDateFromText(text, articleDateISO) {
 /* ════════════════════════════════════════════════════════════════
    END P11 util
    ════════════════════════════════════════════════════════════════ */
+// ════════════════════════════════════════════════════════════════
+// 🆕 P13-A — Date duplication scrubber
+//   Removes the second occurrence of articleDate from the final reason.
+//   Background: user explicitly requested "reason不用出2次日期…在結尾不用又提".
+//   The opening "(dated YYYY-MM-DD, issued by ...)" already carries the date,
+//   so any later restatement inside the key-observation tail must be stripped.
+//
+//   Matches all common formats derived from ISO articleDate "YYYY-MM-DD":
+//     • "19 December 2014"
+//     • "December 19, 2014" / "December 19 2014"
+//     • "2014-12-19"
+//     • "19/12/2014" / "19-12-2014"
+//     • "12/19/2014" (US order, just in case)
+//   Optional leading "on " / "dated " is also consumed for clean punctuation.
+// ════════════════════════════════════════════════════════════════
+function stripDuplicateDate(reason, articleDate) {
+  if (!articleDate || !reason) return reason;
 
+  const m = String(articleDate).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return reason;
+
+  const [, y, mm, dd] = m;
+  const monthNum = parseInt(mm, 10);
+  const dayNum = parseInt(dd, 10);
+  const monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+  const monthName = monthNames[monthNum - 1];
+  if (!monthName) return reason;
+
+  const opt = '(?:\\s*(?:on|dated|as\\s+of)\\s+)?';
+  const patterns = [
+    new RegExp(`${opt}\\b${dayNum}\\s+${monthName}\\s+${y}\\b`, 'gi'),
+    new RegExp(`${opt}\\b${monthName}\\s+${dayNum},?\\s+${y}\\b`, 'gi'),
+    new RegExp(`${opt}\\b${y}[-/.]${mm}[-/.]${dd}\\b`, 'g'),
+    new RegExp(`${opt}\\b${dd}[-/.]${mm}[-/.]${y}\\b`, 'g'),
+    new RegExp(`${opt}\\b${mm}[-/.]${dd}[-/.]${y}\\b`, 'g'),
+  ];
+
+  let cleaned = reason;
+  let firstSeen = false;
+
+  for (const re of patterns) {
+    cleaned = cleaned.replace(re, (match) => {
+      // Preserve the FIRST occurrence (which sits in the opening
+      // "(dated YYYY-MM-DD, issued by ...)" clause). Strip every later one.
+      if (!firstSeen) {
+        firstSeen = true;
+        return match;
+      }
+      console.log(`🧹 P13-A: stripped duplicate date — "${match.trim()}"`);
+      return '';
+    });
+  }
+
+  // Tidy up artefacts created by removal: doubled spaces, " ." / " ,",
+  // hanging "on" / "dated" / "as of" left orphaned at sentence-end,
+  // and empty parentheses.
+  cleaned = cleaned
+    .replace(/\(\s*\)/g, '')
+    .replace(/\s+([.,;:])/g, '$1')
+    .replace(/\b(on|dated|as\s+of)\s*([.,;]|$)/gi, '$2')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  return cleaned;
+}
 
   
 function classifyFromFacts({ facts, targetName, mode }) {
