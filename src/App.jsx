@@ -1,3 +1,4 @@
+import ScreeningModuleV2 from './ScreeningModuleV2';
 /**
  * KYC/AML Compliance Management System
  * 
