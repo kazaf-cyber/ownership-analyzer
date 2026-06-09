@@ -536,7 +536,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
             { role: 'user', content: contentArray }
           ],
           temperature: 0.3,
-          max_tokens: 4000,
+          max_tokens: 8000,
         }),
       });
 
