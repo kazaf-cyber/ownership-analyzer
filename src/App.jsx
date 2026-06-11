@@ -1268,7 +1268,51 @@ function DemandListKYC({ entity, entities, relationships, findUBOs, threshold, c
   );
 }
 
+/* ========== GeoRiskMap STUB ==========
+   Lightweight placeholder while full D3 + TopoJSON map
+   component is re-integrated. Shows jurisdiction-grouped
+   entity count instead of crashing. */
+function GeoRiskMap({ entities = [], lang = 'zh' }) {
+  if (!entities || entities.length === 0) return null;
 
+  const byJurisdiction = entities.reduce((acc, e) => {
+    const j = e.jurisdiction || 'Unknown';
+    acc[j] = (acc[j] || 0) + 1;
+    return acc;
+  }, {});
+  const sorted = Object.entries(byJurisdiction).sort((a, b) => b[1] - a[1]);
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-[0_2px_8px_rgba(15,23,42,0.04)] mb-4">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-base">🌍</span>
+        <h3 className="text-sm font-bold text-slate-900">
+          {lang === 'zh' ? '地理風險分佈' : 'Geographic Risk Distribution'}
+        </h3>
+        <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md">
+          {lang === 'zh' ? '簡化版' : 'Lite'}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {sorted.map(([jurisdiction, count]) => (
+          <span
+            key={jurisdiction}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs border bg-slate-50 border-slate-200 text-slate-700"
+          >
+            <span className="font-semibold">{jurisdiction}</span>
+            <span className="text-slate-400">·</span>
+            <span className="font-bold text-blue-600">{count}</span>
+          </span>
+        ))}
+      </div>
+      <p className="text-[10px] text-slate-400 mt-2">
+        {lang === 'zh'
+          ? '💡 完整版互動地圖（D3 + TopoJSON）將於後續版本恢復'
+          : '💡 Full interactive map will return in a future release'}
+      </p>
+    </div>
+  );
+}
 
 
 /* =============== MAIN COMPONENT =============== */
