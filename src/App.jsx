@@ -12,7 +12,7 @@ import ScreeningModuleV2 from './ScreeningModuleV2';
 import React, { useState, useMemo, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom';
 import { PieChart, Pie, Cell, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer } from 'recharts';
-import { AlertTriangle, CheckCircle, Shield } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Shield, ChevronRight } from 'lucide-react';
 
 /* ========== DESIGN SYSTEM TOKENS ========== */
 const DS = {
@@ -692,123 +692,6 @@ const i18n = {
     demandListTitle: 'KYC 需求清單合規卡', 
   }
 };
-
-
-/* ========== SANCTION SCREENING MODULE (NEW) ========== */
-
-/* ── 制裁篩查：國家關鍵字（3 Parts × 3 Languages）── */
-
-// Part 1 — Comprehensive Sanctions / Highest Risk
-const SANCTION_EN_PART1 = [
-  "Syria", "Cuba", "Iran", "North Korea", "Crimea",
-  "Democratic People's Republic of Korea", "DPRK",
-  "DONETSK", "LUHANSK REGIONS", "Zaporizhzhia", "Kherson"
-];
-const SANCTION_ZH_TW_PART1 = [
-  "敘利亞", "古巴", "伊朗", "北韓", "克里米亞",
-  "朝鮮民主主義人民共和國", "頓內茨克", "盧甘斯克",
-  "札波羅熱", "赫爾松"
-];
-const SANCTION_ZH_CN_PART1 = [
-  "叙利亚", "古巴", "伊朗", "朝鲜", "克里米亚",
-  "朝鲜民主主义人民共和国", "顿涅茨克", "卢甘斯克",
-  "扎波罗热", "赫尔松"
-];
-
-// Part 2 — Second Tier
-const SANCTION_EN_PART2 = [
-  "Afghanistan", "Albania", "Belarus", "Bosnia and Herzegovina",
-  "Bulgaria", "Central African Republic", "Congo", "Croatia",
-  "Ethiopia", "Guinea-Bissau", "Haiti", "Iraq",
-  "Kosovo", "Kyrgyzstan", "Lebanon", "Libya"
-];
-const SANCTION_ZH_TW_PART2 = [
-  "阿富汗", "阿爾巴尼亞", "白俄羅斯", "波士尼亞與赫塞哥維納",
-  "保加利亞", "中非共和國", "剛果", "克羅埃西亞",
-  "衣索比亞", "幾內亞比紹", "海地", "伊拉克",
-  "科索沃", "吉爾吉斯斯坦", "黎巴嫩", "利比亞"
-];
-const SANCTION_ZH_CN_PART2 = [
-  "阿富汗", "阿尔巴尼亚", "白俄罗斯", "波斯尼亚和黑塞哥维那",
-  "保加利亚", "中非共和国", "刚果", "克罗地亚",
-  "埃塞俄比亚", "几内亚比绍", "海地", "伊拉克",
-  "科索沃", "吉尔吉斯斯坦", "黎巴嫩", "利比亚"
-];
-
-// Part 3 — Third Tier
-const SANCTION_EN_PART3 = [
-  "Macedonia", "Mali", "Montenegro", "Myanmar", "Nicaragua",
-  "Romania", "Russia", "Serbia", "Slovenia", "Somalia",
-  "South Sudan", "Sudan", "Ukraine", "Venezuela", "Yemen"
-];
-const SANCTION_ZH_TW_PART3 = [
-  "馬其頓", "馬裡", "蒙特內哥羅", "緬甸", "尼加拉瓜",
-  "羅馬尼亞", "俄羅斯", "塞爾維亞", "斯洛維尼亞",
-  "索馬利亞", "南蘇丹", "蘇丹", "烏克蘭", "委內瑞拉", "葉門"
-];
-const SANCTION_ZH_CN_PART3 = [
-  "马其顿", "马里", "黑山", "缅甸", "尼加拉瓜",
-  "罗马尼亚", "俄罗斯", "塞尔维亚", "斯洛文尼亚",
-  "索马里", "南苏丹", "苏丹", "乌克兰", "委内瑞拉", "也门"
-];
-
-/* ── 繁簡體中文偵測 ── */
-function detectLanguageDetail(text) {
-  const chineseChars = text.match(/[\u4e00-\u9fa5]/g);
-  const chineseCount = chineseChars ? chineseChars.length : 0;
-  const totalChars = text.replace(/[\s\p{P}]/gu, '').length;
-  if (totalChars === 0 || chineseCount / totalChars <= 0.3) return 'en';
-  // 常見簡體字（有別於繁體的字形）
-  const simpOnly = '国会们说这对开时问过机经还总从关动应实际认让产业专严临义书买亿仅仓价众优传伤亩';
-  let simpScore = 0;
-  for (const ch of text) { if (simpOnly.includes(ch)) simpScore++; }
-  return simpScore > 0 ? 'zh_cn' : 'zh_tw';
-}
-
-/* ── 按語言取得 3 Parts 關鍵字 ── */
-function getSanctionKeywordsByPart(lang) {
-  const m = {
-    en:    { part1: SANCTION_EN_PART1,    part2: SANCTION_EN_PART2,    part3: SANCTION_EN_PART3 },
-    zh_tw: { part1: SANCTION_ZH_TW_PART1, part2: SANCTION_ZH_TW_PART2, part3: SANCTION_ZH_TW_PART3 },
-    zh_cn: { part1: SANCTION_ZH_CN_PART1, part2: SANCTION_ZH_CN_PART2, part3: SANCTION_ZH_CN_PART3 },
-  };
-  return m[lang] || m.en;
-}
-
-/* ── 為指定 Part 組建 Google 搜尋查詢 ── */
-function buildSanctionQueryForPart(entityName, part) {
-  const lang = detectLanguageDetail(entityName);
-  const kws = getSanctionKeywordsByPart(lang)[part];
-  const kString = kws.map(k => `"${k}"`).join(' OR ');
-  // ★ 新格式：實體名稱在前 + 關鍵字在後（OR 連接，無外層括號）
-  return { query: `"${entityName}" ${kString}`, detectedLang: lang, keywords: kws };
-}
-
-/* ── 保留舊 API（合併全部 Parts，供 Mock / 向下相容）── */
-function buildSanctionQueryAuto(entityName) {
-  const lang = detectLanguageDetail(entityName);
-  const all = getSanctionKeywordsByPart(lang);
-  const keywords = [...all.part1, ...all.part2, ...all.part3];
-  const kString = keywords.map(k => `"${k}"`).join(' OR ');
-  // ★ 新格式：實體名稱在前 + 關鍵字在後（OR 連接，無外層括號）
-  return { query: `"${entityName}" ${kString}`, detectedLang: lang === 'zh_cn' ? 'zh' : lang === 'zh_tw' ? 'zh' : 'en', keywords };
-}
-
-const SANCTION_MOCK_EN = [
-  { rank: 1, title: 'ABC Holdings Ltd Added to OFAC SDN List for Iran-Related Transactions', source: 'U.S. Treasury Dept.', date: '2026-03-01', snippet: 'The U.S. Department of the Treasury\'s OFAC has designated ABC Holdings Ltd as a Specially Designated National (SDN) for facilitating illicit transactions with Iranian entities...', matchedKeywords: ['OFAC', 'SDN list', 'designated', 'sanction'], cls: 'TRUE_HIT', confidence: 0.97, reason: 'STAGE 1: Exact entity name match—ABC Holdings Ltd explicitly named by U.S. Treasury. STAGE 2: Designated on OFAC SDN List for Iran-related transactions. Direct sanctions hit.', riskCat: 'OFAC SDN Designation' },
-  { rank: 2, title: 'EU Council Adds ABC Holdings Ltd to Sanctions List Under Ukraine-Related Measures', source: 'Official Journal of the EU', date: '2026-02-20', snippet: 'The Council of the European Union has added ABC Holdings Ltd to its consolidated sanctions list under Regulation (EU) 269/2014 concerning Ukraine...', matchedKeywords: ['EU sanctions', 'sanctions', 'asset freeze'], cls: 'TRUE_HIT', confidence: 0.95, reason: 'STAGE 1: Exact entity match. STAGE 2: Listed under EU sanctions regulation with asset freeze measures. Confirmed sanctions designation.', riskCat: 'EU Sanctions Designation' },
-  { rank: 3, title: 'ABC Holdings Ltd Investigated for Potential Sanctions Evasion via Shell Companies', source: 'Financial Times', date: '2026-01-15', snippet: 'Investigators are examining whether ABC Holdings Ltd used a network of offshore shell companies to circumvent international sanctions imposed on Russian oligarchs...', matchedKeywords: ['sanctions evasion', 'sanction'], cls: 'TRUE_HIT', confidence: 0.91, reason: 'STAGE 1: Name match confirmed. STAGE 2: Under investigation for sanctions evasion—a serious sanctions-related offence.', riskCat: 'Sanctions Evasion' },
-  { rank: 4, title: 'ABC Holdings Pty Ltd (Melbourne) Wins Government Contract', source: 'The Australian', date: '2026-01-10', snippet: 'ABC Holdings Pty Ltd, an Australian defence contractor, has been awarded a major government procurement contract...', matchedKeywords: [], cls: 'FALSE_HIT', confidence: 0.92, reason: 'STAGE 1: Different entity—ABC Holdings Pty Ltd is an Australian company in a different industry and jurisdiction.', riskCat: 'N/A' },
-  { rank: 5, title: 'ABC Holdings Ltd Implements New Sanctions Compliance Programme', source: 'Company Press Release', date: '2026-02-28', snippet: 'ABC Holdings Ltd today announced the launch of a comprehensive sanctions compliance programme to ensure full adherence to international sanctions regimes...', matchedKeywords: ['sanctions'], cls: 'IRRELEVANT_MLTF', confidence: 0.89, reason: 'STAGE 1: Name match. STAGE 2: Entity is implementing compliance measures—not being sanctioned or investigated. No adverse sanctions information.', riskCat: 'N/A (Compliance Initiative)' },
-  { rank: 6, title: 'Global Sanctions Landscape: New OFAC Guidance for Financial Institutions', source: 'Bloomberg Law', date: '2026-03-05', snippet: 'OFAC has released updated guidance for financial institutions on sanctions screening best practices and risk-based approaches...', matchedKeywords: ['OFAC', 'sanctions'], cls: 'NO_HIT', confidence: 0.94, reason: 'General regulatory guidance. ABC Holdings Ltd is not mentioned in this article.', riskCat: 'N/A' }
-];
-
-const SANCTION_MOCK_ZH = [
-  { rank: 1, title: 'ABC控股有限公司被列入美國OFAC制裁名單', source: '美國財政部', date: '2026-03-01', snippet: '美國財政部海外資產控制辦公室（OFAC）已將ABC控股有限公司列為特別指定國民（SDN），因其涉嫌協助伊朗實體進行非法交易...', matchedKeywords: ['制裁', '制裁名單', '特別指定國民'], cls: 'TRUE_HIT', confidence: 0.97, reason: '階段一：實體名稱完全吻合。階段二：被OFAC列入SDN名單，屬直接制裁命中。', riskCat: 'OFAC SDN 列名' },
-  { rank: 2, title: 'ABC控股有限公司涉嫌透過空殼公司規避制裁遭調查', source: '金融時報中文版', date: '2026-01-15', snippet: '調查人員正在審查ABC控股有限公司是否利用離岸空殼公司網絡規避針對俄羅斯寡頭的國際制裁...', matchedKeywords: ['制裁規避', '制裁'], cls: 'TRUE_HIT', confidence: 0.91, reason: '階段一：名稱吻合。階段二：涉嫌制裁規避，屬嚴重制裁相關違規。', riskCat: '制裁規避' },
-  { rank: 3, title: 'ABC控股有限公司推出全新制裁合規計劃', source: '公司新聞稿', date: '2026-02-28', snippet: 'ABC控股有限公司今日宣佈推出全面的制裁合規計劃，以確保完全遵守國際制裁制度...', matchedKeywords: ['制裁'], cls: 'IRRELEVANT_MLTF', confidence: 0.88, reason: '階段一：名稱吻合。階段二：實體正在實施合規措施，並非被制裁或調查對象。無不利制裁信息。', riskCat: 'N/A（合規措施）' },
-  { rank: 4, title: '全球制裁動態：OFAC發佈金融機構新指引', source: '彭博法律', date: '2026-03-05', snippet: 'OFAC已發佈更新的金融機構制裁篩查最佳實踐指引...', matchedKeywords: ['制裁'], cls: 'NO_HIT', confidence: 0.93, reason: '一般監管指引。全文未提及ABC控股有限公司。', riskCat: 'N/A' }
-];
 
 
 /* ========== DEMAND-LIST KYC MODULE (Phase 1: Aggregator) ========== */
