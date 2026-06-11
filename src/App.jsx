@@ -1268,48 +1268,258 @@ function DemandListKYC({ entity, entities, relationships, findUBOs, threshold, c
   );
 }
 
-/* ========== GeoRiskMap STUB ==========
-   Lightweight placeholder while full D3 + TopoJSON map
-   component is re-integrated. Shows jurisdiction-grouped
-   entity count instead of crashing. */
-function GeoRiskMap({ entities = [], lang = 'zh' }) {
-  if (!entities || entities.length === 0) return null;
+/* ★ GeoRiskMap — Real World Map (D3.js + TopoJSON) */
+function GeoRiskMap({ entities, getEffectiveRating, t, lang }) {
+  const wrapRef = React.useRef(null);
+  const mapRef = React.useRef(null);
+  const tipRef = React.useRef(null);
+  const zoomObjRef = React.useRef(null);
+  const [loading, setLoading] = React.useState(true);
+  const [err, setErr] = React.useState(null);
+  const [unmatchedList, setUnmatchedList] = React.useState([]);
 
-  const byJurisdiction = entities.reduce((acc, e) => {
-    const j = e.jurisdiction || 'Unknown';
-    acc[j] = (acc[j] || 0) + 1;
-    return acc;
-  }, {});
-  const sorted = Object.entries(byJurisdiction).sort((a, b) => b[1] - a[1]);
+  const NAME_TO_ISO = useMemo(() => ({
+    'USA':'840','UK':'826','Germany':'276','France':'250','Japan':'392',
+    'Australia':'036','Canada':'124','Singapore':'702','Taiwan':'158',
+    'Switzerland':'756','Netherlands':'528','Ireland':'372','Luxembourg':'442',
+    'China':'156','India':'356','Brazil':'076','South Korea':'410',
+    'New Zealand':'554','Sweden':'752','Norway':'578','Iran':'364',
+    'North Korea':'408','Myanmar':'104','Syria':'760','Afghanistan':'004',
+    'Libya':'434','Somalia':'706','South Sudan':'728','Yemen':'887','Iraq':'368',
+    'Panama':'591','Liechtenstein':'438','Vanuatu':'548','Seychelles':'690',
+    'Russia':'643','Turkey':'792','UAE':'784','Pakistan':'586','Cambodia':'116',
+    'Nigeria':'566','Albania':'008','Philippines':'608','Barbados':'052',
+    'Senegal':'686','Cuba':'192','Venezuela':'862','Nicaragua':'558','Haiti':'332',
+    'Mali':'466','Central African Republic':'140','Congo':'180','Ethiopia':'231',
+    'Guinea-Bissau':'624','Macedonia':'807','Montenegro':'499','Serbia':'688',
+    'Slovenia':'705','Croatia':'191','Bulgaria':'100','Romania':'642',
+    'Belarus':'112','Bosnia and Herzegovina':'070','Kyrgyzstan':'417',
+    'Ukraine':'804','Lebanon':'422','Sudan':'729','South Africa':'710',
+    'Kenya':'404','Italy':'380','Spain':'724','Mexico':'484','Saudi Arabia':'682',
+    'Egypt':'818','Indonesia':'360','Thailand':'764','Malaysia':'458',
+    'Cayman Islands':'136',
+    'Hong Kong':null,'BVI':null,'Bermuda':null,'Jersey':null,'Guernsey':null,
+    'Isle of Man':null,'Kosovo':null,'Macau':null,
+  }), []);
+
+  const POINT_COORDS = useMemo(() => ({
+    'Hong Kong':[114.17,22.32],'Singapore':[103.82,1.35],'BVI':[-64.6,18.4],
+    'Cayman Islands':[-81.25,19.31],'Bermuda':[-64.78,32.3],'Jersey':[-2.13,49.21],
+    'Guernsey':[-2.58,49.45],'Isle of Man':[-4.48,54.24],'Liechtenstein':[9.55,47.17],
+    'Macau':[113.54,22.2],'Luxembourg':[6.13,49.81],'Kosovo':[20.9,42.6],
+    'Barbados':[-59.5,13.2],'Seychelles':[55.5,-4.7],'Vanuatu':[166.9,-15.4],
+    'Taiwan':[121,23.7],
+  }), []);
+
+  const geoData = useMemo(() => {
+    const data = {};
+    entities.forEach(e => {
+      const j = e.jurisdiction;
+      if (!data[j]) data[j] = { name: j, total: 0, high: 0, medium: 0, low: 0 };
+      data[j].total++;
+      const r = getEffectiveRating(e).rating;
+      if (r === 'High') data[j].high++;
+      else if (r === 'Medium') data[j].medium++;
+      else data[j].low++;
+    });
+    return data;
+  }, [entities, getEffectiveRating]);
+
+  const getCol = useCallback((g) => !g ? '#172340' : g.high > 0 ? '#ef4444' : g.medium > 0 ? '#f59e0b' : '#22c55e', []);
+  const hovCol = useCallback((g) => !g ? '#1e3050' : g.high > 0 ? '#fca5a5' : g.medium > 0 ? '#fcd34d' : '#86efac', []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const load = (src) => new Promise((res, rej) => {
+      if (src.includes('d3') && window.d3) return res();
+      if (src.includes('topojson') && window.topojson) return res();
+      const s = document.createElement('script');
+      s.src = src; s.onload = res; s.onerror = () => rej(new Error(src));
+      document.head.appendChild(s);
+    });
+    (async () => {
+      try {
+        await load('https://d3js.org/d3.v7.min.js');
+        await load('https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js');
+        if (!cancelled) setLoading(false);
+      } catch (e) { if (!cancelled) setErr(lang === 'zh' ? '地圖庫載入失敗' : 'Map library load failed'); }
+    })();
+    return () => { cancelled = true; };
+  }, [lang]);
+
+  React.useEffect(() => {
+    if (loading || err || !mapRef.current || Object.keys(geoData).length === 0) return;
+    const d3 = window.d3, topojson = window.topojson;
+    if (!d3 || !topojson) return;
+
+    d3.select(mapRef.current).selectAll('*').remove();
+    const W = mapRef.current.clientWidth || 800;
+    const H = Math.max(Math.min(W * 0.5, 480), 240);
+
+    const svg = d3.select(mapRef.current).append('svg').attr('width', W).attr('height', H).style('display', 'block');
+
+    const defs = svg.append('defs');
+    const og = defs.append('radialGradient').attr('id','geo-og2').attr('cx','50%').attr('cy','40%').attr('r','65%');
+    og.append('stop').attr('offset','0%').attr('stop-color','#0f1d32');
+    og.append('stop').attr('offset','100%').attr('stop-color','#060e1a');
+    const gl = defs.append('filter').attr('id','geo-gl2');
+    gl.append('feGaussianBlur').attr('stdDeviation','2.5').attr('result','b');
+    const fmg = gl.append('feMerge');
+    fmg.append('feMergeNode').attr('in','b');
+    fmg.append('feMergeNode').attr('in','SourceGraphic');
+
+    svg.append('rect').attr('width', W).attr('height', H).attr('fill','url(#geo-og2)');
+
+    const proj = d3.geoNaturalEarth1().scale(W / 5.5).translate([W / 2, H / 2]);
+    const pathGen = d3.geoPath().projection(proj);
+    const g = svg.append('g');
+
+    const zm = d3.zoom().scaleExtent([1, 10]).on('zoom', e => g.attr('transform', e.transform));
+    svg.call(zm);
+    zoomObjRef.current = { svg, zm };
+
+    g.append('path').datum(d3.geoGraticule().step([20, 20])())
+      .attr('d', pathGen).attr('fill','none').attr('stroke','rgba(30,58,95,0.4)').attr('stroke-width', 0.3);
+
+    const tip = tipRef.current;
+    const showT = (evt, data) => {
+      if (!tip) return;
+      tip.style.opacity = '1';
+      const pct = v => data.total ? Math.round(v / data.total * 100) : 0;
+      tip.innerHTML = '<div style="font-weight:700;font-size:13px;margin-bottom:4px">' + data.name + '</div>' +
+        '<div style="height:1px;background:rgba(148,163,184,0.2);margin:4px 0"></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:2px 0"><span>📊 ' + (lang === 'zh' ? '總實體' : 'Total') + '</span><b>' + data.total + '</b></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:2px 0"><span>🔴 ' + (lang === 'zh' ? '高風險' : 'High') + '</span><b>' + data.high + ' (' + pct(data.high) + '%)</b></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:2px 0"><span>🟡 ' + (lang === 'zh' ? '中風險' : 'Med') + '</span><b>' + data.medium + ' (' + pct(data.medium) + '%)</b></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:2px 0"><span>🟢 ' + (lang === 'zh' ? '低風險' : 'Low') + '</span><b>' + data.low + ' (' + pct(data.low) + '%)</b></div>';
+      moveT(evt);
+    };
+    const moveT = (evt) => {
+      if (!tip || !wrapRef.current) return;
+      const r = wrapRef.current.getBoundingClientRect();
+      let x = evt.clientX - r.left + 14, y = evt.clientY - r.top - 8;
+      if (x + 175 > r.width) x -= 195;
+      if (y + 130 > r.height) y -= 140;
+      tip.style.left = x + 'px'; tip.style.top = y + 'px';
+    };
+    const hideT = () => { if (tip) tip.style.opacity = '0'; };
+
+    const iso2j = {};
+    Object.entries(NAME_TO_ISO).forEach(([n, iso]) => { if (iso && geoData[n]) iso2j[iso] = n; });
+
+    d3.json('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json').then(world => {
+      const countries = topojson.feature(world, world.objects.countries);
+      const borders = topojson.mesh(world, world.objects.countries, (a, b) => a !== b);
+      const matched = new Set();
+
+      g.selectAll('.gc').data(countries.features).enter().append('path')
+        .attr('d', pathGen)
+        .attr('fill', d => { const j = iso2j[d.id]; return j ? getCol(geoData[j]) : '#172340'; })
+        .attr('fill-opacity', d => iso2j[d.id] ? 0.8 : 0.45)
+        .attr('stroke', d => iso2j[d.id] ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.06)')
+        .attr('stroke-width', d => iso2j[d.id] ? 0.7 : 0.3)
+        .style('cursor', d => iso2j[d.id] ? 'pointer' : 'default')
+        .style('transition', 'fill 0.2s')
+        .on('mouseenter', function(evt, d) {
+          const j = iso2j[d.id]; if (!j) return;
+          d3.select(this).attr('fill', hovCol(geoData[j])).attr('fill-opacity', 1).attr('stroke-width', 1.5).raise();
+          showT(evt, geoData[j]);
+        })
+        .on('mousemove', moveT)
+        .on('mouseleave', function(evt, d) {
+          const j = iso2j[d.id];
+          d3.select(this).attr('fill', j ? getCol(geoData[j]) : '#172340').attr('fill-opacity', j ? 0.8 : 0.45).attr('stroke-width', j ? 0.7 : 0.3);
+          hideT();
+        });
+
+      g.append('path').datum(borders).attr('d', pathGen).attr('fill','none').attr('stroke','rgba(255,255,255,0.08)').attr('stroke-width', 0.5).style('pointer-events','none');
+
+      Object.entries(iso2j).forEach(([iso, jName]) => {
+        const data = geoData[jName]; if (!data) return;
+        const feat = countries.features.find(f => String(f.id) === String(iso));
+        if (!feat) return;
+        const c = pathGen.centroid(feat); if (isNaN(c[0])) return;
+        matched.add(jName);
+        const r = Math.max(5, Math.min(14, 4 + data.total * 2));
+        const col = getCol(data);
+        const pu = g.append('circle').attr('cx', c[0]).attr('cy', c[1]).attr('r', r).attr('fill', col).attr('fill-opacity', 0.2).style('pointer-events','none');
+        pu.append('animate').attr('attributeName','r').attr('values', r + ';' + (r + 8) + ';' + r).attr('dur','2.5s').attr('repeatCount','indefinite');
+        pu.append('animate').attr('attributeName','fill-opacity').attr('values','.2;.04;.2').attr('dur','2.5s').attr('repeatCount','indefinite');
+        g.append('circle').attr('cx', c[0]).attr('cy', c[1]).attr('r', r).attr('fill', col).attr('stroke','rgba(255,255,255,0.85)').attr('stroke-width', 1.2).style('filter','url(#geo-gl2)').style('pointer-events','none');
+        if (data.total >= 2) g.append('text').attr('x', c[0]).attr('y', c[1] + 0.5).attr('text-anchor','middle').attr('dominant-baseline','middle').attr('font-size', r >= 8 ? '9px' : '7px').attr('font-weight','700').attr('fill','white').style('pointer-events','none').text(data.total);
+      });
+
+      Object.entries(POINT_COORDS).forEach(([name, coords]) => {
+        const data = geoData[name]; if (!data || matched.has(name)) return;
+        matched.add(name);
+        const p = proj(coords); if (!p || isNaN(p[0])) return;
+        const r = Math.max(5, Math.min(12, 4 + data.total * 1.5));
+        const col = getCol(data);
+        const pu = g.append('circle').attr('cx', p[0]).attr('cy', p[1]).attr('r', r).attr('fill', col).attr('fill-opacity', 0.2).style('pointer-events','none');
+        pu.append('animate').attr('attributeName','r').attr('values', r + ';' + (r + 7) + ';' + r).attr('dur','2.5s').attr('repeatCount','indefinite');
+        pu.append('animate').attr('attributeName','fill-opacity').attr('values','.2;.04;.2').attr('dur','2.5s').attr('repeatCount','indefinite');
+        g.append('circle').attr('cx', p[0]).attr('cy', p[1]).attr('r', r).attr('fill', col).attr('stroke','rgba(255,255,255,0.85)').attr('stroke-width', 1.2).style('filter','url(#geo-gl2)').style('pointer-events','none');
+        if (data.total >= 1) g.append('text').attr('x', p[0]).attr('y', p[1] + 0.5).attr('text-anchor','middle').attr('dominant-baseline','middle').attr('font-size','8px').attr('font-weight','700').attr('fill','white').style('pointer-events','none').text(data.total);
+        g.append('text').attr('x', p[0]).attr('y', p[1] + r + 10).attr('text-anchor','middle').attr('font-size','7px').attr('fill','rgba(255,255,255,0.45)').attr('font-weight','500').style('pointer-events','none').text(name.length > 14 ? name.slice(0, 12) + '…' : name);
+        g.append('circle').attr('cx', p[0]).attr('cy', p[1]).attr('r', r + 5).attr('fill','transparent').style('cursor','pointer')
+          .on('mouseenter', evt => showT(evt, data)).on('mousemove', moveT).on('mouseleave', hideT);
+      });
+
+      setUnmatchedList(Object.keys(geoData).filter(c => !matched.has(c)));
+    }).catch(() => setErr(lang === 'zh' ? '地圖數據載入失敗' : 'Map data load failed'));
+
+  }, [loading, err, geoData, lang, NAME_TO_ISO, POINT_COORDS, getCol, hovCol]);
+
+  const handleZoom = (action) => {
+    if (!zoomObjRef.current || !window.d3) return;
+    const { svg, zm } = zoomObjRef.current;
+    if (action === 'in') svg.transition().duration(300).call(zm.scaleBy, 1.5);
+    else if (action === 'out') svg.transition().duration(300).call(zm.scaleBy, 0.67);
+    else svg.transition().duration(400).call(zm.transform, window.d3.zoomIdentity);
+  };
+
+  if (Object.keys(geoData).length === 0) return null;
 
   return (
-    <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-[0_2px_8px_rgba(15,23,42,0.04)] mb-4">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-base">🌍</span>
-        <h3 className="text-sm font-bold text-slate-900">
-          {lang === 'zh' ? '地理風險分佈' : 'Geographic Risk Distribution'}
-        </h3>
-        <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md">
-          {lang === 'zh' ? '簡化版' : 'Lite'}
-        </span>
+    <div className="bg-white rounded-xl shadow-sm border p-3 mb-4">
+      <h3 className="text-xs font-semibold text-gray-600 mb-2">🌍 {t.geoRiskMap}</h3>
+      <div ref={wrapRef} className="relative w-full overflow-hidden rounded-lg" style={{ minHeight: '240px', background: 'linear-gradient(180deg, #0c1929, #132744, #1a3556)' }}>
+        <div ref={mapRef} />
+        {loading && !err && (
+          <div className="absolute inset-0 flex items-center justify-center gap-2 text-xs" style={{ color: '#64748b' }}>
+            <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: 'rgba(99,102,241,0.2)', borderTopColor: '#6366f1' }} />
+            {lang === 'zh' ? '正在載入真實世界地圖…' : 'Loading world map…'}
+          </div>
+        )}
+        {err && <div className="absolute inset-0 flex items-center justify-center text-xs" style={{ color: '#ef4444' }}>⚠ {err}</div>}
+        <div ref={tipRef} style={{ position: 'absolute', pointerEvents: 'none', zIndex: 100, background: 'rgba(8,15,30,0.96)', border: '1px solid rgba(99,102,241,0.4)', borderRadius: '10px', padding: '10px 14px', fontSize: '11px', color: '#e2e8f0', opacity: 0, transition: 'opacity 0.15s', minWidth: '160px', boxShadow: '0 8px 30px rgba(0,0,0,0.5)' }} />
+        {!loading && !err && (
+          <div className="absolute bottom-2 right-2 flex flex-col gap-1" style={{ zIndex: 10 }}>
+            <button onClick={() => handleZoom('in')} className="w-7 h-7 rounded-lg text-white text-sm flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }} title={t.zoomIn}>+</button>
+            <button onClick={() => handleZoom('out')} className="w-7 h-7 rounded-lg text-white text-sm flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }} title={t.zoomOut}>−</button>
+            <button onClick={() => handleZoom('reset')} className="w-7 h-7 rounded-lg text-white text-sm flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }} title={t.resetView}>⟳</button>
+          </div>
+        )}
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {sorted.map(([jurisdiction, count]) => (
-          <span
-            key={jurisdiction}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs border bg-slate-50 border-slate-200 text-slate-700"
-          >
-            <span className="font-semibold">{jurisdiction}</span>
-            <span className="text-slate-400">·</span>
-            <span className="font-bold text-blue-600">{count}</span>
-          </span>
-        ))}
+      {unmatchedList.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {unmatchedList.map(c => {
+            const gd = geoData[c];
+            return (
+              <span key={c} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs border bg-gray-50">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: getCol(gd) }} />
+                {c} ({gd.total})
+              </span>
+            );
+          })}
+        </div>
+      )}
+      <div className="flex gap-3 mt-2 text-xs text-gray-400 flex-wrap">
+        <span>🔴 {t.highRisk}</span>
+        <span>🟡 {lang === 'zh' ? '中風險' : 'Medium'}</span>
+        <span>🟢 {lang === 'zh' ? '低風險' : 'Low'}</span>
+        <span className="ml-auto text-gray-300">{lang === 'zh' ? '滾輪縮放 · 拖曳平移 · 懸停查看' : 'Scroll zoom · Drag pan · Hover details'}</span>
       </div>
-      <p className="text-[10px] text-slate-400 mt-2">
-        {lang === 'zh'
-          ? '💡 完整版互動地圖（D3 + TopoJSON）將於後續版本恢復'
-          : '💡 Full interactive map will return in a future release'}
-      </p>
     </div>
   );
 }
