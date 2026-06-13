@@ -287,8 +287,8 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
   const [names, setNames] = useState([]);
   const [ocrLang, setOcrLang] = useState('chi_tra+eng');
   const [extraKeyword, setExtraKeyword] = useState('');
-  const [searchMode, setSearchMode] = useState('adverseMedia'); // 'adverseMedia' | 'sanction'
-  const [sanctionPart, setSanctionPart] = useState(const [sanctionPart, setSanctionPart] = useState('part1'); 
+  const [searchMode, setSearchMode] = useState('adverseMedia');
+  const [sanctionPart, setSanctionPart] = useState('part1'); 
   const [isOcring, setIsOcring] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
