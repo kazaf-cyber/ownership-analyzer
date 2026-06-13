@@ -2899,6 +2899,7 @@ export default function KYCSystem() {
           {view === 'snapshots' && renderSnapshots()}
           {view === 'settings' && renderSettings()}
           {view === 'report' && renderReport()}
+          {view === 'scan' && <BatchScanApp lang={lang} darkMode={darkMode} />}
         </div>
       )}
       
