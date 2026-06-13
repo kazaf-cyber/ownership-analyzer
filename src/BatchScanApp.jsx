@@ -201,7 +201,7 @@ async function ocrWithTesseract(imagesB64, lang, onProgress) {
 export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
   const T = lang === 'zh' ? {
     title: '拍照批量搜尋',
-    sub: '離線 OCR + KYC 關鍵字',
+    sub: 'OCR + KYC 關鍵字',
     step1: '拍照 / 上傳圖片',
     step2: '識別文字',
     step3: 'KYC 搜尋模式',
