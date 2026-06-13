@@ -371,20 +371,20 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
           name: n.name,
           label: n.name,
           query: q,
-          url: `https://www.google.com.hk/search?q=${encodeURIComponent(q)}&num=50&hl=zh-TW&gl=hk&pws=0&nomo=1`,
+          url: `https://www.google.com.hk/search?q=${encodeURIComponent(q)}&udm=14&num=50&hl=zh-TW&gl=hk&pws=0&nomo=1`,
         });
       } else {
-  // sanction mode — single part
-  const q = buildSanctionPartQuery(n.name, sanctionPart, extraKeyword);
-  const partNum = sanctionPart.replace('part', '');
-  out.push({
-    name: n.name,
-    label: `${n.name} [Part ${partNum}]`,
-    part: sanctionPart,
-    query: q,
-    url: `https://www.google.com.hk/search?q=${encodeURIComponent(q)}&num=50&hl=zh-TW&gl=hk&pws=0&nomo=1`,
-  });
-}
+      // sanction mode — single part
+      const q = buildSanctionPartQuery(n.name, sanctionPart, extraKeyword);
+      const partNum = sanctionPart.replace('part', '');
+      out.push({
+      name: n.name,
+      label: `${n.name} [Part ${partNum}]`,
+      part: sanctionPart,
+      query: q,
+      url: `https://www.google.com.hk/search?q=${encodeURIComponent(q)}&udm=14&num=50&hl=zh-TW&gl=hk&pws=0&nomo=1`,
+       });
+    }
     });
     return out;
   }, [selectedNames, searchMode, sanctionPart, extraKeyword]);
@@ -659,15 +659,15 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
                           {n.name || <em className="text-slate-400">(空白)</em>}
                         </span>
                         <a
-  href={`https://www.google.com.hk/search?q=${encodeURIComponent(buildSingleQuery(n.name))}&num=50&hl=zh-TW&gl=hk&pws=0&nomo=1`}
-  target="_blank"
-  rel="noopener noreferrer"
-  onClick={e => { if (!n.name.trim()) e.preventDefault(); }}
-  className="text-blue-500 hover:text-blue-700"
-  title="單獨搜尋"
->
-  <Search className="w-3.5 h-3.5" />
-</a>
+                    href={`https://www.google.com.hk/search?q=${encodeURIComponent(buildSingleQuery(n.name))}&udm=14&num=50&hl=zh-TW&gl=hk&pws=0&nomo=1`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={e => { if (!n.name.trim()) e.preventDefault(); }}
+                    className="text-blue-500 hover:text-blue-700"
+                   title="單獨搜尋"
+                   >
+                   <Search className="w-3.5 h-3.5" />
+                   </a>
                         <button onClick={() => startEdit(n)} className="text-slate-400 hover:text-slate-600"><Edit2 className="w-3.5 h-3.5" /></button>
                         <button onClick={() => removeName(n.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
                       </>
