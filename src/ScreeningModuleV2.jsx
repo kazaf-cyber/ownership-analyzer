@@ -628,7 +628,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
   () => buildQuery(searchEntity, mode, sanctionPart),  
   [searchEntity, mode, sanctionPart]                    
 );
-  const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+  const googleUrl = `https://www.google.com.hk/search?q=${encodeURIComponent(query)}&num=50&hl=zh-TW&gl=hk&pws=0&nomo=1`;
 
   const counts = useMemo(() => {
     const c = { TRUE_HIT: 0, FALSE_HIT: 0, IRRELEVANT_MLTF: 0, NO_HIT: 0, MALFORMED: 0, UNPROCESSED: 0 };
