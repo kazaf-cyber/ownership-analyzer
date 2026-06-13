@@ -1,6 +1,5 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
-  Camera, Loader, X, Edit2, Check,
+  Camera, Loader, X, Edit2, Check, ExternalLink,
   Trash2, Plus, Search, Image as ImageIcon, Eraser, Shield, Globe
 } from 'lucide-react';
 
