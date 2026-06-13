@@ -1,3 +1,4 @@
+import React, { useState, useRef, useMemo } from 'react';
 import {
   Camera, Loader, X, Edit2, Check, ExternalLink,
   Trash2, Plus, Search, Image as ImageIcon, Eraser, Shield, Globe
