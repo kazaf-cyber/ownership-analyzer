@@ -1,4 +1,5 @@
 import ScreeningModuleV2 from './ScreeningModuleV2';
+import BatchScanApp from './BatchScanApp';
 /**
  * KYC/AML Compliance Management System
  * 
