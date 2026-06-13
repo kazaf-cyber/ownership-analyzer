@@ -2715,6 +2715,7 @@ export default function KYCSystem() {
     { id: 'dashboard', icon: '📊', label: t.dashboard },
     { id: 'workspace', icon: '🏢', label: t.workspace },
     { id: 'search', icon: '🔍', label: t.search },
+    { id: 'scan',      icon: '📷', label: lang === 'zh' ? '拍照搜尋' : 'Scan & Search' },
     { id: 'snapshots', icon: '📸', label: t.snapshots },
     { id: 'settings', icon: '⚙️', label: t.settings },
     { id: 'report', icon: '📄', label: t.report },
