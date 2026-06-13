@@ -1,18 +1,74 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Camera, Loader, X, Edit2, Check, ExternalLink, Copy, Share2,
-  Trash2, Plus, Search, Image as ImageIcon, Eraser
+  Trash2, Plus, Search, Image as ImageIcon, Eraser, Shield, Globe
 } from 'lucide-react';
 
 /* ════════════════════════════════════════════════════════════════
-   HELPERS
+   ★ KYC SCREENING KEYWORDS — 與 ScreeningModuleV2.jsx 完全一致
+   ════════════════════════════════════════════════════════════════ */
+const EN_KEYWORDS = [
+  'market abuse', 'regulatory breach', 'tax evasion', 'allegation', 'bribery',
+  'corruption', 'criminal', 'fraud', 'illegal', 'indict', 'investigation',
+  'laundering', 'lawsuit', 'penalty', 'prosecution', 'sanctions',
+  'terrorist', 'trafficking', 'ML', 'AML'
+];
+
+const ZH_KEYWORDS_TW = [
+  '市場濫用', '監管違規', '逃稅', '指控', '賄賂', '腐敗', '刑事',
+  '欺詐', '非法', '起訴', '調查', '洗錢', '訴訟', '處罰', '檢舉',
+  '制裁', '恐怖分子', '販運', '洗錢', '反洗錢'
+];
+
+const ZH_KEYWORDS_CN = [
+  '市场滥用', '监管违规', '逃税', '指控', '贿赂', '腐败', '刑事',
+  '欺诈', '非法', '起诉', '调查', '洗钱', '诉讼', '处罚', '检举',
+  '制裁', '恐怖分子', '贩运', '洗钱', '反洗钱'
+];
+
+const SANCTION_EN = [
+  'Syria', 'Cuba', 'Iran', 'North Korea', 'Crimea', 'DPRK',
+  'Russia', 'Belarus', 'Myanmar', 'Venezuela', 'Yemen', 'Sudan'
+];
+
+/* ★ 語言偵測 — 與 ScreeningModuleV2 一致 */
+function detectLanguageDetail(text) {
+  if (!text) return 'en';
+  const chinese = text.match(/[\u4e00-\u9fa5]/g);
+  const chineseCount = chinese ? chinese.length : 0;
+  const totalChars = text.replace(/[\s\p{P}]/gu, '').length;
+  if (totalChars === 0 || chineseCount / totalChars <= 0.3) return 'en';
+  const simpOnly = '国会们说这对开时问过机经还总从关动应实际认让产业专严临义书买亿';
+  let simpScore = 0;
+  for (const ch of text) if (simpOnly.includes(ch)) simpScore++;
+  return simpScore > 0 ? 'zh_cn' : 'zh_tw';
+}
+
+/* ★ 構建完整 KYC 查詢字串 — 與 ScreeningModuleV2 一致 */
+function buildKycQuery(entityName, mode, extraKeyword) {
+  const lang = detectLanguageDetail(entityName);
+  let keywords;
+  if (mode === 'sanction') {
+    keywords = SANCTION_EN;
+  } else {
+    if (lang === 'zh_cn') keywords = ZH_KEYWORDS_CN;
+    else if (lang === 'zh_tw') keywords = ZH_KEYWORDS_TW;
+    else keywords = EN_KEYWORDS;
+  }
+  const kStr = keywords.map(k => `"${k}"`).join(' OR ');
+  const extra = (extraKeyword || '').trim();
+  const baseQuery = `"${entityName}" ${kStr}`;
+  return extra ? `${baseQuery} ${extra}` : baseQuery;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   HELPERS (原本嘅 gid / preprocessImage / ocrWithTesseract — 不變)
    ════════════════════════════════════════════════════════════════ */
 const gid = () =>
   (typeof crypto !== 'undefined' && crypto.randomUUID)
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2);
 
-/** 壓縮 + 簡單 preprocess(灰階 + 提高對比),提升 Tesseract 準確度 */
 async function preprocessImage(file, maxDim = 1600, quality = 0.9) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -29,13 +85,10 @@ async function preprocessImage(file, maxDim = 1600, quality = 0.9) {
         canvas.width = width; canvas.height = height;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
-
-        // 灰階 + 對比強化(threshold 偏向白底黑字)
         const imgData = ctx.getImageData(0, 0, width, height);
         const d = imgData.data;
         for (let i = 0; i < d.length; i += 4) {
           const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-          // 簡單線性對比(中性灰拉開)
           const v = gray < 128 ? Math.max(0, gray - 25) : Math.min(255, gray + 25);
           d[i] = d[i + 1] = d[i + 2] = v;
         }
@@ -50,7 +103,6 @@ async function preprocessImage(file, maxDim = 1600, quality = 0.9) {
   });
 }
 
-/** Tesseract OCR — 一張圖一張圖跑,有 progress callback */
 async function ocrWithTesseract(imagesB64, lang, onProgress) {
   if (!window.Tesseract) {
     throw new Error('Tesseract.js 未載入,請喺 index.html 加 CDN script');
@@ -67,11 +119,10 @@ async function ocrWithTesseract(imagesB64, lang, onProgress) {
     });
     data.text.split('\n')
       .map(s => s.trim())
-      .map(s => s.replace(/^[\-\*\•\·\▪\□\■\◆\►\>\d\.\)\(\s]+/, '').trim()) // 砍 bullet / 序號
+      .map(s => s.replace(/^[\-\*\•\·\▪\□\■\◆\►\>\d\.\)\(\s]+/, '').trim())
       .filter(s => s.length >= 2 && s.length <= 80)
       .forEach(s => allLines.push(s));
   }
-  // 去重(保留出現順序)
   const seen = new Set();
   return allLines.filter(n => {
     const k = n.toLowerCase();
@@ -87,11 +138,12 @@ async function ocrWithTesseract(imagesB64, lang, onProgress) {
 export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
   const T = lang === 'zh' ? {
     title: '拍照批量搜尋',
-    sub: '離線 OCR (Tesseract.js) · 完全冇 API Key',
+    sub: '離線 OCR + KYC 關鍵字 · 完全冇 API Key',
     step1: '拍照 / 上傳圖片',
     step2: '識別文字',
-    step3: '檢視 / 編輯名單',
-    step4: '批量 Google 搜尋',
+    step3: 'KYC 搜尋模式',
+    step4: '檢視 / 編輯名單',
+    step5: '批量 Google 搜尋',
     cameraBtn: '📷 拍照',
     uploadBtn: '🖼️ 從相簿上傳',
     selectedImgs: '已選圖片',
@@ -100,7 +152,6 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
     extraPh: '例如:Hong Kong director',
     runOcr: '🔍 開始識別文字',
     ocring: 'OCR 進行中...',
-    nameList: '識別到嘅名單',
     addManual: '+ 手動加入',
     selectAll: '全選',
     deselectAll: '全不選',
@@ -112,23 +163,30 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
     openAll: '🚀 全部開啟',
     emptyImg: '未上傳圖片',
     emptyName: '未有識別到名字,先上傳圖片再識別',
-    tip: '💡 印刷字體 / Excel 截圖效果最好;手寫字、低光、角度歪 → 識別差',
+    tip: '💡 印刷字體 / Excel 截圖效果最好',
+    modeAdverse: '🔎 不良媒體',
+    modeAdverseDesc: 'fraud / bribery / 洗錢...',
+    modeSanction: '🛡️ 制裁名單',
+    modeSanctionDesc: 'Iran / DPRK / Russia...',
+    modeDesc: '揀邊組 KYC 關鍵字加入每個搜尋',
+    queryPreview: '查詢字串預覽 (第一個揀咗嘅名)',
+    langDetect: '第一個名語言偵測',
   } : {
     title: 'Batch Scan & Search',
-    sub: 'Offline OCR (Tesseract.js) · No API Key needed',
+    sub: 'Offline OCR + KYC keywords · No API Key',
     step1: 'Capture / Upload Images',
     step2: 'Extract Text',
-    step3: 'Review / Edit Names',
-    step4: 'Batch Google Search',
+    step3: 'KYC Search Mode',
+    step4: 'Review / Edit Names',
+    step5: 'Batch Google Search',
     cameraBtn: '📷 Take Photo',
     uploadBtn: '🖼️ Upload from Album',
     selectedImgs: 'Selected Images',
     ocrLang: 'OCR Language',
-    extraKw: 'Extra keyword (optional, appended to each search)',
+    extraKw: 'Extra keyword (optional)',
     extraPh: 'e.g. Hong Kong director',
     runOcr: '🔍 Run OCR',
     ocring: 'OCR running...',
-    nameList: 'Extracted Names',
     addManual: '+ Add Manually',
     selectAll: 'Select All',
     deselectAll: 'Deselect All',
@@ -140,13 +198,21 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
     openAll: '🚀 Open All',
     emptyImg: 'No image uploaded',
     emptyName: 'No names yet — upload images and run OCR',
-    tip: '💡 Best with printed text / Excel screenshots. Handwritten / low-light / skewed images may fail.',
+    tip: '💡 Best with printed text',
+    modeAdverse: '🔎 Adverse Media',
+    modeAdverseDesc: 'fraud / bribery / laundering...',
+    modeSanction: '🛡️ Sanction',
+    modeSanctionDesc: 'Iran / DPRK / Russia...',
+    modeDesc: 'Pick which KYC keyword set to append',
+    queryPreview: 'Query Preview (first selected name)',
+    langDetect: 'First name lang detected',
   };
 
   const [images, setImages] = useState([]);
   const [names, setNames] = useState([]);
   const [ocrLang, setOcrLang] = useState('chi_tra+eng');
   const [extraKeyword, setExtraKeyword] = useState('');
+  const [searchMode, setSearchMode] = useState('adverseMedia'); // ★ NEW
   const [isOcring, setIsOcring] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -158,54 +224,36 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 2200); };
 
-  /* ── Image upload ── */
   const handleFiles = async (fileList) => {
     const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
     if (!files.length) return;
     setErrorMsg('');
     try {
       const newImgs = await Promise.all(files.map(async file => ({
-        id: gid(),
-        name: file.name,
-        b64: await preprocessImage(file)
+        id: gid(), name: file.name, b64: await preprocessImage(file)
       })));
       setImages(prev => [...prev, ...newImgs]);
-    } catch (err) {
-      setErrorMsg(`圖片處理失敗: ${err.message}`);
-    }
+    } catch (err) { setErrorMsg(`圖片處理失敗: ${err.message}`); }
   };
-
   const removeImage = (id) => setImages(prev => prev.filter(i => i.id !== id));
   const clearImages = () => setImages([]);
 
-  /* ── OCR ── */
   const runOcr = async () => {
     if (!images.length) { setErrorMsg('請先上傳或拍照'); return; }
     setIsOcring(true); setErrorMsg(''); setProgressMsg('正在初始化 Tesseract...');
     try {
-      const extracted = await ocrWithTesseract(
-        images.map(i => i.b64),
-        ocrLang,
-        msg => setProgressMsg(msg)
-      );
+      const extracted = await ocrWithTesseract(images.map(i => i.b64), ocrLang, msg => setProgressMsg(msg));
       const existing = new Set(names.map(n => n.name.toLowerCase()));
-      const newOnes = extracted
-        .filter(n => !existing.has(n.toLowerCase()))
+      const newOnes = extracted.filter(n => !existing.has(n.toLowerCase()))
         .map(n => ({ id: gid(), name: n, selected: true }));
       setNames(prev => [...prev, ...newOnes]);
       showToast(`✓ 識別到 ${extracted.length} 個 (新增 ${newOnes.length})`);
     } catch (err) {
-      console.error(err);
-      setErrorMsg(`OCR 失敗: ${err.message}`);
-    } finally {
-      setIsOcring(false);
-      setProgressMsg('');
-    }
+      console.error(err); setErrorMsg(`OCR 失敗: ${err.message}`);
+    } finally { setIsOcring(false); setProgressMsg(''); }
   };
 
-  /* ── Name list actions ── */
-  const toggleName = (id) =>
-    setNames(prev => prev.map(n => n.id === id ? { ...n, selected: !n.selected } : n));
+  const toggleName = (id) => setNames(prev => prev.map(n => n.id === id ? { ...n, selected: !n.selected } : n));
   const toggleAll = () => {
     const all = names.every(n => n.selected);
     setNames(prev => prev.map(n => ({ ...n, selected: !all })));
@@ -213,9 +261,7 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
   const removeName = (id) => setNames(prev => prev.filter(n => n.id !== id));
   const startEdit = (n) => { setEditingId(n.id); setEditDraft(n.name); };
   const saveEdit = () => {
-    if (editDraft.trim()) {
-      setNames(prev => prev.map(n => n.id === editingId ? { ...n, name: editDraft.trim() } : n));
-    }
+    if (editDraft.trim()) setNames(prev => prev.map(n => n.id === editingId ? { ...n, name: editDraft.trim() } : n));
     setEditingId(null); setEditDraft('');
   };
   const addManual = () => {
@@ -223,50 +269,31 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
     setNames(prev => [...prev, { id, name: '', selected: true }]);
     setEditingId(id); setEditDraft('');
   };
-  const clearAllNames = () => {
-    if (window.confirm('確定清空所有名字?')) setNames([]);
-  };
+  const clearAllNames = () => { if (window.confirm('確定清空所有名字?')) setNames([]); };
 
-  /* ── Build queries ── */
-  const buildQuery = (name) => {
-    const extra = extraKeyword.trim();
-    return extra ? `"${name}" ${extra}` : `"${name}"`;
-  };
+  /* ★ 用 KYC keywords 構建 query */
+  const buildQuery = (name) => buildKycQuery(name, searchMode, extraKeyword);
 
-  const selectedNames = useMemo(
-    () => names.filter(n => n.selected && n.name.trim()),
-    [names]
-  );
+  const selectedNames = useMemo(() => names.filter(n => n.selected && n.name.trim()), [names]);
   const urls = useMemo(() => selectedNames.map(n => ({
     name: n.name,
-    url: `https://www.google.com/search?q=${encodeURIComponent(buildQuery(n.name))}`
-  })), [selectedNames, extraKeyword]);
+    url: `https://www.google.com/search?q=${encodeURIComponent(buildQuery(n.name))}`,
+    query: buildQuery(n.name),
+  })), [selectedNames, extraKeyword, searchMode]);
 
-  /* ── Batch actions ── */
   const copyAllUrls = async () => {
     const text = urls.map(u => `${u.name}\n${u.url}`).join('\n\n');
-    try {
-      await navigator.clipboard.writeText(text);
-      showToast(`✓ 已複製 ${urls.length} 個 URL`);
-    } catch {
-      showToast('⚠️ 複製失敗');
-    }
+    try { await navigator.clipboard.writeText(text); showToast(`✓ 已複製 ${urls.length} 個 URL`); }
+    catch { showToast('⚠️ 複製失敗'); }
   };
-
   const shareUrls = async () => {
     if (!navigator.share) return showToast('⚠️ 此瀏覽器不支援系統分享');
     const text = urls.map(u => `${u.name}: ${u.url}`).join('\n\n');
-    try {
-      await navigator.share({ title: `Google 搜尋連結 (${urls.length})`, text });
-    } catch (e) {
-      if (e.name !== 'AbortError') showToast(`分享失敗: ${e.message}`);
-    }
+    try { await navigator.share({ title: `Google 搜尋連結 (${urls.length})`, text }); }
+    catch (e) { if (e.name !== 'AbortError') showToast(`分享失敗: ${e.message}`); }
   };
-
   const tryOpenAll = () => {
-    if (urls.length > 5 && !window.confirm(
-      `將開啟 ${urls.length} 個分頁,手機瀏覽器可能封鎖大部分彈窗,繼續?`
-    )) return;
+    if (urls.length > 5 && !window.confirm(`將開啟 ${urls.length} 個分頁,手機可能封鎖,繼續?`)) return;
     let blocked = 0;
     urls.forEach((u, i) => {
       setTimeout(() => {
@@ -280,9 +307,12 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
     });
   };
 
-  /* ════════════════════════════════════════════════════════════════
-     RENDER
-     ════════════════════════════════════════════════════════════════ */
+  /* 第一個名嘅 preview */
+  const previewName = selectedNames[0]?.name || (lang === 'zh' ? '範例名' : 'Sample Name');
+  const previewQuery = buildQuery(previewName);
+  const previewLang = detectLanguageDetail(previewName);
+  const langLabel = previewLang === 'zh_cn' ? '🇨🇳 簡體' : previewLang === 'zh_tw' ? '🇹🇼 繁體' : '🇬🇧 英文';
+
   return (
     <div className={`min-h-full ${darkMode ? 'bg-slate-950' : 'bg-slate-50'}`}>
       {/* Header */}
@@ -299,7 +329,6 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
         </div>
       </div>
 
-      {/* Toast */}
       {toast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] bg-slate-900 text-white px-4 py-2 rounded-xl shadow-xl text-sm font-semibold">
           {toast}
@@ -308,54 +337,31 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
 
       <div className="max-w-3xl mx-auto p-4 space-y-4">
 
-        {/* ─────── STEP 1: Upload ─────── */}
+        {/* ─── STEP 1: Upload (同原本) ─── */}
         <div className={`rounded-2xl border shadow-sm p-5 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
           <div className="flex items-center gap-3 mb-4">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-lg">1</div>
             <h2 className={`text-sm font-bold ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>{T.step1}</h2>
           </div>
-
           <div className="grid grid-cols-2 gap-2 mb-3">
-            <button
-              onClick={() => cameraInputRef.current?.click()}
-              className="flex items-center justify-center gap-2 py-3 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 text-white text-sm font-bold shadow-md hover:shadow-lg transition"
-            >
-              {T.cameraBtn}
-            </button>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 text-sm font-bold transition ${
-                darkMode
-                  ? 'border-slate-700 hover:bg-slate-800 text-slate-200'
-                  : 'border-slate-200 hover:bg-slate-50 text-slate-700'
-              }`}
-            >
-              {T.uploadBtn}
-            </button>
+            <button onClick={() => cameraInputRef.current?.click()}
+              className="flex items-center justify-center gap-2 py-3 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 text-white text-sm font-bold shadow-md">{T.cameraBtn}</button>
+            <button onClick={() => fileInputRef.current?.click()}
+              className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 text-sm font-bold ${darkMode ? 'border-slate-700 hover:bg-slate-800 text-slate-200' : 'border-slate-200 hover:bg-slate-50 text-slate-700'}`}>{T.uploadBtn}</button>
           </div>
-          <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" multiple
-            onChange={e => handleFiles(e.target.files)} className="hidden" />
-          <input ref={fileInputRef} type="file" accept="image/*" multiple
-            onChange={e => handleFiles(e.target.files)} className="hidden" />
-
+          <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" multiple onChange={e => handleFiles(e.target.files)} className="hidden" />
+          <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={e => handleFiles(e.target.files)} className="hidden" />
           {images.length > 0 ? (
             <>
               <div className="flex items-center justify-between mb-2 mt-3">
-                <span className={`text-[11px] font-semibold ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                  {T.selectedImgs} ({images.length})
-                </span>
-                <button onClick={clearImages} className="text-[11px] text-red-500 hover:text-red-700 font-semibold">
-                  ✕ 全部移除
-                </button>
+                <span className={`text-[11px] font-semibold ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>{T.selectedImgs} ({images.length})</span>
+                <button onClick={clearImages} className="text-[11px] text-red-500 hover:text-red-700 font-semibold">✕ 全部移除</button>
               </div>
               <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
                 {images.map(img => (
                   <div key={img.id} className="relative group aspect-square rounded-lg overflow-hidden border border-slate-200">
                     <img src={img.b64} alt={img.name} className="w-full h-full object-cover" />
-                    <button
-                      onClick={() => removeImage(img.id)}
-                      className="absolute top-1 right-1 w-6 h-6 rounded-full bg-red-500/90 text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
-                    >
+                    <button onClick={() => removeImage(img.id)} className="absolute top-1 right-1 w-6 h-6 rounded-full bg-red-500/90 text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100">
                       <X className="w-3 h-3" />
                     </button>
                   </div>
@@ -364,19 +370,17 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
             </>
           ) : (
             <div className={`text-center py-6 text-xs ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-              <ImageIcon className="w-8 h-8 mx-auto mb-2 opacity-40" />
-              {T.emptyImg}
+              <ImageIcon className="w-8 h-8 mx-auto mb-2 opacity-40" />{T.emptyImg}
             </div>
           )}
         </div>
 
-        {/* ─────── STEP 2: OCR ─────── */}
+        {/* ─── STEP 2: OCR (同原本) ─── */}
         <div className={`rounded-2xl border shadow-sm p-5 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
           <div className="flex items-center gap-3 mb-4">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm shadow-lg">2</div>
             <h2 className={`text-sm font-bold ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>{T.step2}</h2>
           </div>
-
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div>
               <label className={`text-[11px] font-semibold mb-1 block ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>{T.ocrLang}</label>
@@ -395,37 +399,80 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
                 className={`w-full text-xs rounded-lg border px-3 py-2 ${darkMode ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-200'}`} />
             </div>
           </div>
-
-          {errorMsg && (
-            <div className="mb-3 bg-red-50 border border-red-200 rounded-lg p-2.5 text-xs text-red-700">
-              {errorMsg}
-            </div>
-          )}
-
-          <button
-            onClick={runOcr}
-            disabled={isOcring || !images.length}
-            className="w-full py-3 rounded-xl text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-purple-600 text-white shadow-md hover:shadow-lg transition"
-          >
+          {errorMsg && <div className="mb-3 bg-red-50 border border-red-200 rounded-lg p-2.5 text-xs text-red-700">{errorMsg}</div>}
+          <button onClick={runOcr} disabled={isOcring || !images.length}
+            className="w-full py-3 rounded-xl text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-purple-600 text-white shadow-md">
             {isOcring ? <><Loader className="w-4 h-4 animate-spin" />{T.ocring}</> : T.runOcr}
           </button>
-
           {isOcring && progressMsg && (
-            <div className={`mt-3 text-[11px] font-mono px-3 py-2 rounded-lg ${darkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
-              {progressMsg}
+            <div className={`mt-3 text-[11px] font-mono px-3 py-2 rounded-lg ${darkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{progressMsg}</div>
+          )}
+          <div className={`mt-3 text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>{T.tip}</div>
+        </div>
+
+        {/* ★★★ STEP 3: KYC Search Mode (新增) ★★★ */}
+        <div className={`rounded-2xl border shadow-sm p-5 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white font-bold text-sm shadow-lg">
+              <Shield className="w-4 h-4" />
+            </div>
+            <div className="flex-1">
+              <h2 className={`text-sm font-bold ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>{T.step3}</h2>
+              <p className={`text-[10px] mt-0.5 ${darkMode ? 'text-slate-500' : 'text-slate-500'}`}>{T.modeDesc}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <button onClick={() => setSearchMode('adverseMedia')}
+              className={`p-3 rounded-xl border-2 text-left transition ${
+                searchMode === 'adverseMedia'
+                  ? 'border-emerald-500 bg-emerald-50 shadow-md'
+                  : darkMode ? 'border-slate-700 hover:border-slate-600 bg-slate-800/30' : 'border-slate-200 hover:border-emerald-300 bg-white'
+              }`}>
+              <div className={`text-sm font-bold mb-1 ${searchMode === 'adverseMedia' ? 'text-emerald-700' : darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{T.modeAdverse}</div>
+              <div className={`text-[10px] font-mono ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>{T.modeAdverseDesc}</div>
+            </button>
+            <button onClick={() => setSearchMode('sanction')}
+              className={`p-3 rounded-xl border-2 text-left transition ${
+                searchMode === 'sanction'
+                  ? 'border-orange-500 bg-orange-50 shadow-md'
+                  : darkMode ? 'border-slate-700 hover:border-slate-600 bg-slate-800/30' : 'border-slate-200 hover:border-orange-300 bg-white'
+              }`}>
+              <div className={`text-sm font-bold mb-1 ${searchMode === 'sanction' ? 'text-orange-700' : darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{T.modeSanction}</div>
+              <div className={`text-[10px] font-mono ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>{T.modeSanctionDesc}</div>
+            </button>
+          </div>
+
+          {/* Language detection display */}
+          {selectedNames.length > 0 && (
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs mb-2 ${darkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
+              <Globe className="w-3.5 h-3.5" />
+              <span>{T.langDetect}: <b>{langLabel}</b>
+                {searchMode === 'sanction' && (
+                  <span className={`ml-2 text-[10px] ${darkMode ? 'text-orange-400' : 'text-orange-600'}`}>
+                    ({lang === 'zh' ? '制裁模式統一用英文 keyword' : 'Sanction mode uses EN keywords'})
+                  </span>
+                )}
+              </span>
             </div>
           )}
 
-          <div className={`mt-3 text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-            {T.tip}
-          </div>
+          {/* Query preview */}
+          <details className="mt-2">
+            <summary className={`text-[11px] cursor-pointer font-bold ${darkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>
+              ▶ {T.queryPreview}
+            </summary>
+            <div className="mt-2 bg-gray-900 rounded-lg p-3 overflow-x-auto">
+              <code className="text-[10px] text-green-400 break-all whitespace-pre-wrap">{previewQuery}</code>
+            </div>
+          </details>
         </div>
 
-        {/* ─────── STEP 3: Name List ─────── */}
+        {/* ─── STEP 4: Name List ─── */}
         <div className={`rounded-2xl border shadow-sm p-5 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
           <div className="flex items-center gap-3 mb-4 flex-wrap">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white font-bold text-sm shadow-lg">3</div>
-            <h2 className={`text-sm font-bold flex-1 ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>{T.step3}</h2>
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-yellow-600 flex items-center justify-center text-white font-bold text-sm shadow-lg">4</div>
+            <h2 className={`text-sm font-bold flex-1 ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>{T.step4}</h2>
             <span className={`text-[11px] font-bold px-2 py-1 rounded-md ${darkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
               {selectedNames.length}/{names.length} {T.selected}
             </span>
@@ -437,14 +484,11 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
                 <button onClick={toggleAll} className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold">
                   {names.every(n => n.selected) ? T.deselectAll : T.selectAll}
                 </button>
-                <button onClick={addManual} className="text-[11px] px-2.5 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-700 font-semibold">
-                  {T.addManual}
-                </button>
+                <button onClick={addManual} className="text-[11px] px-2.5 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-700 font-semibold">{T.addManual}</button>
                 <button onClick={clearAllNames} className="text-[11px] px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 font-semibold ml-auto">
                   <Eraser className="w-3 h-3 inline" /> {T.clearAll}
                 </button>
               </div>
-
               <div className="space-y-1.5 max-h-96 overflow-y-auto pr-1">
                 {names.map(n => (
                   <div key={n.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition ${
@@ -452,39 +496,25 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
                       ? darkMode ? 'bg-blue-500/10 border-blue-500/30' : 'bg-blue-50 border-blue-200'
                       : darkMode ? 'bg-slate-800/50 border-slate-800' : 'bg-slate-50 border-slate-100'
                   }`}>
-                    <input type="checkbox" checked={n.selected} onChange={() => toggleName(n.id)}
-                      className="rounded text-blue-600 focus:ring-blue-500" />
+                    <input type="checkbox" checked={n.selected} onChange={() => toggleName(n.id)} className="rounded text-blue-600 focus:ring-blue-500" />
                     {editingId === n.id ? (
                       <>
-                        <input
-                          value={editDraft}
-                          onChange={e => setEditDraft(e.target.value)}
+                        <input value={editDraft} onChange={e => setEditDraft(e.target.value)}
                           onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') { setEditingId(null); setEditDraft(''); } }}
-                          autoFocus
-                          className="flex-1 text-xs border border-blue-400 rounded px-2 py-1 bg-white text-slate-800"
-                        />
-                        <button onClick={saveEdit} className="text-emerald-600 hover:text-emerald-700">
-                          <Check className="w-4 h-4" />
-                        </button>
+                          autoFocus className="flex-1 text-xs border border-blue-400 rounded px-2 py-1 bg-white text-slate-800" />
+                        <button onClick={saveEdit} className="text-emerald-600 hover:text-emerald-700"><Check className="w-4 h-4" /></button>
                       </>
                     ) : (
                       <>
-                        <span className={`flex-1 text-xs font-medium truncate ${darkMode ? 'text-slate-200' : 'text-slate-800'}`}>{n.name || <em className="text-slate-400">(空白,點 ✏️ 修改)</em>}</span>
-                        <a
-                          href={`https://www.google.com/search?q=${encodeURIComponent(buildQuery(n.name))}`}
-                          target="_blank" rel="noopener noreferrer"
-                          onClick={e => { if (!n.name.trim()) e.preventDefault(); }}
-                          className="text-blue-500 hover:text-blue-700"
-                          title="單獨搜尋"
-                        >
-                          <Search className="w-3.5 h-3.5" />
-                        </a>
-                        <button onClick={() => startEdit(n)} className="text-slate-400 hover:text-slate-600">
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => removeName(n.id)} className="text-red-400 hover:text-red-600">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <span className={`flex-1 text-xs font-medium truncate ${darkMode ? 'text-slate-200' : 'text-slate-800'}`}>
+                          {n.name || <em className="text-slate-400">(空白)</em>}
+                        </span>
+                        <a href={`https://www.google.com/search?q=${encodeURIComponent(buildQuery(n.name))}`}
+                           target="_blank" rel="noopener noreferrer"
+                           onClick={e => { if (!n.name.trim()) e.preventDefault(); }}
+                           className="text-blue-500 hover:text-blue-700" title="單獨搜尋"><Search className="w-3.5 h-3.5" /></a>
+                        <button onClick={() => startEdit(n)} className="text-slate-400 hover:text-slate-600"><Edit2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => removeName(n.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
                       </>
                     )}
                   </div>
@@ -495,46 +525,33 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
             <div className={`text-center py-6 text-xs ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
               {T.emptyName}
               <div className="mt-3">
-                <button onClick={addManual} className="text-[11px] px-3 py-1.5 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-700 font-semibold">
-                  {T.addManual}
-                </button>
+                <button onClick={addManual} className="text-[11px] px-3 py-1.5 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-700 font-semibold">{T.addManual}</button>
               </div>
             </div>
           )}
         </div>
 
-        {/* ─────── STEP 4: Batch Search ─────── */}
+        {/* ─── STEP 5: Batch Search ─── */}
         {selectedNames.length > 0 && (
           <div className={`rounded-2xl border shadow-sm p-5 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-orange-500 to-red-600 flex items-center justify-center text-white font-bold text-sm shadow-lg">4</div>
-              <h2 className={`text-sm font-bold flex-1 ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>{T.step4}</h2>
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-orange-500 to-red-600 flex items-center justify-center text-white font-bold text-sm shadow-lg">5</div>
+              <h2 className={`text-sm font-bold flex-1 ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>{T.step5}</h2>
               <span className="text-[11px] font-bold text-orange-600">{urls.length} {T.totalResults}</span>
             </div>
-
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <button onClick={copyAllUrls} className="py-2.5 rounded-xl text-xs font-bold bg-slate-700 hover:bg-slate-800 text-white shadow">
-                {T.copyAll}
-              </button>
-              <button onClick={shareUrls} className="py-2.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow">
-                {T.shareAll}
-              </button>
-              <button onClick={tryOpenAll} className="py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white shadow">
-                {T.openAll}
-              </button>
+              <button onClick={copyAllUrls} className="py-2.5 rounded-xl text-xs font-bold bg-slate-700 hover:bg-slate-800 text-white shadow">{T.copyAll}</button>
+              <button onClick={shareUrls} className="py-2.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow">{T.shareAll}</button>
+              <button onClick={tryOpenAll} className="py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white shadow">{T.openAll}</button>
             </div>
-
             <details className="mt-3">
-              <summary className={`text-[11px] cursor-pointer font-semibold ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                預覽 URLs
-              </summary>
-              <pre className={`mt-2 text-[10px] font-mono p-2 rounded-lg overflow-auto max-h-40 ${darkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
-                {urls.map(u => `${u.name}\n  ${u.url}`).join('\n\n')}
+              <summary className={`text-[11px] cursor-pointer font-semibold ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>預覽 URLs + Queries</summary>
+              <pre className={`mt-2 text-[10px] font-mono p-2 rounded-lg overflow-auto max-h-60 ${darkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
+                {urls.map(u => `${u.name}\n  Query: ${u.query}\n  URL:   ${u.url}`).join('\n\n')}
               </pre>
             </details>
           </div>
         )}
-
       </div>
     </div>
   );
