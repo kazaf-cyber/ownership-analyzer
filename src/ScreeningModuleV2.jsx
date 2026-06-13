@@ -27,9 +27,43 @@ const ZH_KEYWORDS_CN = [
   '制裁', '恐怖分子', '贩运', '洗钱', '反洗钱'
 ];
 
-const SANCTION_EN = [
-  'Syria', 'Cuba', 'Iran', 'North Korea', 'Crimea', 'DPRK',
-  'Russia', 'Belarus', 'Myanmar', 'Venezuela', 'Yemen', 'Sudan'
+// ── Sanction Keywords: 3 Parts × 3 Languages ──
+const SANCTION_EN_PART1 = ["Syria","Cuba","Iran","North Korea","Crimea","Democratic People's Republic of Korea","DPRK","DONETSK","LUHANSK REGIONS","Zaporizhzhia","Kherson"];
+const SANCTION_ZH_TW_PART1 = ["敘利亞","古巴","伊朗","北韓","克里米亞","朝鮮民主主義人民共和國","頓內茨克","盧甘斯克","札波羅熱","赫爾松"];
+const SANCTION_ZH_CN_PART1 = ["叙利亚","古巴","伊朗","朝鲜","克里米亚","朝鲜民主主义人民共和国","顿涅茨克","卢甘斯克","扎波罗热","赫尔松"];
+
+const SANCTION_EN_PART2 = ["Afghanistan","Albania","Belarus","Bosnia and Herzegovina","Bulgaria","Central African Republic","Congo","Croatia","Ethiopia","Guinea-Bissau","Haiti","Iraq","Kosovo","Kyrgyzstan","Lebanon","Libya"];
+const SANCTION_ZH_TW_PART2 = ["阿富汗","阿爾巴尼亞","白俄羅斯","波士尼亞與赫塞哥維納","保加利亞","中非共和國","剛果","克羅埃西亞","衣索比亞","幾內亞比紹","海地","伊拉克","科索沃","吉爾吉斯斯坦","黎巴嫩","利比亞"];
+const SANCTION_ZH_CN_PART2 = ["阿富汗","阿尔巴尼亚","白俄罗斯","波斯尼亚和黑塞哥维那","保加利亚","中非共和国","刚果","克罗地亚","埃塞俄比亚","几内亚比绍","海地","伊拉克","科索沃","吉尔吉斯斯坦","黎巴嫩","利比亚"];
+
+const SANCTION_EN_PART3 = ["Macedonia","Mali","Montenegro","Myanmar","Nicaragua","Romania","Russia","Serbia","Slovenia","Somalia","South Sudan","Sudan","Ukraine","Venezuela","Yemen"];
+const SANCTION_ZH_TW_PART3 = ["馬其頓","馬裡","蒙特內哥羅","緬甸","尼加拉瓜","羅馬尼亞","俄羅斯","塞爾維亞","斯洛維尼亞","索馬利亞","南蘇丹","蘇丹","烏克蘭","委內瑞拉","葉門"];
+const SANCTION_ZH_CN_PART3 = ["马其顿","马里","黑山","缅甸","尼加拉瓜","罗马尼亚","俄罗斯","塞尔维亚","斯洛文尼亚","索马里","南苏丹","苏丹","乌克兰","委内瑞拉","也门"];
+
+function getSanctionKeywordsByPart(lang) {
+  const m = {
+    en:    { part1: SANCTION_EN_PART1,    part2: SANCTION_EN_PART2,    part3: SANCTION_EN_PART3 },
+    zh_tw: { part1: SANCTION_ZH_TW_PART1, part2: SANCTION_ZH_TW_PART2, part3: SANCTION_ZH_TW_PART3 },
+    zh_cn: { part1: SANCTION_ZH_CN_PART1, part2: SANCTION_ZH_CN_PART2, part3: SANCTION_ZH_CN_PART3 },
+  };
+  return m[lang] || m.en;
+}
+
+// Part 3 — Third Tier
+const SANCTION_EN_PART3 = [
+  "Macedonia", "Mali", "Montenegro", "Myanmar", "Nicaragua",
+  "Romania", "Russia", "Serbia", "Slovenia", "Somalia",
+  "South Sudan", "Sudan", "Ukraine", "Venezuela", "Yemen"
+];
+const SANCTION_ZH_TW_PART3 = [
+  "馬其頓", "馬裡", "蒙特內哥羅", "緬甸", "尼加拉瓜",
+  "羅馬尼亞", "俄羅斯", "塞爾維亞", "斯洛維尼亞",
+  "索馬利亞", "南蘇丹", "蘇丹", "烏克蘭", "委內瑞拉", "葉門"
+];
+const SANCTION_ZH_CN_PART3 = [
+  "马其顿", "马里", "黑山", "缅甸", "尼加拉瓜",
+  "罗马尼亚", "俄罗斯", "塞尔维亚", "斯洛文尼亚",
+  "索马里", "南苏丹", "苏丹", "乌克兰", "委内瑞拉", "也门"
 ];
 
 const NATIONALITIES = [
@@ -149,11 +183,11 @@ function detectLanguageDetail(text) {
   return simpScore > 0 ? 'zh_cn' : 'zh_tw';
 }
 
-function buildQuery(entityName, mode) {
+ffunction buildQuery(entityName, mode, sanctionPart = 'part1') {
   const lang = detectLanguageDetail(entityName);
   let keywords;
   if (mode === 'sanction') {
-    keywords = SANCTION_EN;
+    keywords = getSanctionKeywordsByPart(lang)[sanctionPart];
   } else {
     if (lang === 'zh_cn') keywords = ZH_KEYWORDS_CN;
     else if (lang === 'zh_tw') keywords = ZH_KEYWORDS_TW;
@@ -584,7 +618,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
   const [strFlaggedRanks, setStrFlaggedRanks] = useState(new Set());
   const [expectedCount, setExpectedCount] = useState(null);
   const [retryAttempted, setRetryAttempted] = useState(false);
-
+  const [sanctionPart, setSanctionPart] = useState(saved?.sanctionPart || 'part1'); 
   const [entityContext, setEntityContext] = useState(saved?.entityContext || {
     dob: '', nationality: '', gender: '', company: '', idNumber: '', address: '', notes: ''
   });
@@ -599,6 +633,7 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
       try {
         sessionStorage.setItem(SESSION_KEY, JSON.stringify({
           results, searchEntity, analysisComplete, entityContext, apiKey, rawResponse,
+          sanctionPart,
         }));
       } catch {}
     }
@@ -607,9 +642,9 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
   /* ── Derived ── */
   const lang = useMemo(() => detectLanguageDetail(searchEntity), [searchEntity]);
   const { query, keywords } = useMemo(
-    () => buildQuery(searchEntity, mode),
-    [searchEntity, mode]
-  );
+  () => buildQuery(searchEntity, mode, sanctionPart),  
+  [searchEntity, mode, sanctionPart]                    
+);
   const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
 
   const counts = useMemo(() => {
@@ -1004,6 +1039,45 @@ export default function ScreeningModuleV2({ entityName: initialEntityName, mode 
                   </div>
                 </div>
               </div>
+
+
+               {/* ★ Sanction Part Selector — 只喺 sanction mode 出現 */}
+{isSanction && (
+  <div className="mb-3 p-3 rounded-xl bg-orange-50 border border-orange-200">
+    <div className="text-[11px] font-bold text-orange-700 mb-2">
+      🛡️ 選擇 Sanction Part
+    </div>
+    <div className="grid grid-cols-3 gap-2">
+      {[
+        { v: 'part1', label: 'Part 1', desc: '最高風險' },
+        { v: 'part2', label: 'Part 2', desc: '二級' },
+        { v: 'part3', label: 'Part 3', desc: '三級' },
+      ].map(p => {
+        const kwCount = getSanctionKeywordsByPart(lang)[p.v].length;
+        const active = sanctionPart === p.v;
+        return (
+          <button
+            key={p.v}
+            onClick={() => setSanctionPart(p.v)}
+            className={`p-2 rounded-lg border-2 text-xs font-bold transition ${
+              active
+                ? 'border-orange-500 bg-orange-100 text-orange-800 shadow'
+                : 'border-slate-200 bg-white text-slate-600 hover:border-orange-300'
+            }`}
+          >
+            <div>{p.label}</div>
+            <div className="text-[9px] font-mono opacity-70">({kwCount} kw · {p.desc})</div>
+          </button>
+        );
+      })}
+    </div>
+    <p className="mt-2 text-[10px] text-orange-700">
+      💡 每個 Part 一次跑一次 (跑完 Part 1 → 切到 Part 2 重新 upload PDF)
+    </p>
+  </div>
+)}
+
+              
               <div className="flex flex-col sm:flex-row gap-2">
                 <a href={googleUrl} target="_blank" rel="noopener noreferrer"
                   className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-bold transition ${searchEntity ? (isSanction ? 'bg-orange-600 text-white hover:bg-orange-700' : 'bg-emerald-600 text-white hover:bg-emerald-700') : 'bg-gray-200 text-gray-400 pointer-events-none'}`}>
