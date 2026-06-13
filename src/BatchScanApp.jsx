@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 
 /* ════════════════════════════════════════════════════════════════
-   ★ KYC SCREENING KEYWORDS — 與 ScreeningModuleV2.jsx 完全一致
+   ★ ADVERSE MEDIA KEYWORDS (3 languages — same as ScreeningModuleV2)
    ════════════════════════════════════════════════════════════════ */
 const EN_KEYWORDS = [
   'market abuse', 'regulatory breach', 'tax evasion', 'allegation', 'bribery',
@@ -13,25 +13,77 @@ const EN_KEYWORDS = [
   'laundering', 'lawsuit', 'penalty', 'prosecution', 'sanctions',
   'terrorist', 'trafficking', 'ML', 'AML'
 ];
-
 const ZH_KEYWORDS_TW = [
   '市場濫用', '監管違規', '逃稅', '指控', '賄賂', '腐敗', '刑事',
   '欺詐', '非法', '起訴', '調查', '洗錢', '訴訟', '處罰', '檢舉',
   '制裁', '恐怖分子', '販運', '洗錢', '反洗錢'
 ];
-
 const ZH_KEYWORDS_CN = [
   '市场滥用', '监管违规', '逃税', '指控', '贿赂', '腐败', '刑事',
   '欺诈', '非法', '起诉', '调查', '洗钱', '诉讼', '处罚', '检举',
   '制裁', '恐怖分子', '贩运', '洗钱', '反洗钱'
 ];
 
-const SANCTION_EN = [
-  'Syria', 'Cuba', 'Iran', 'North Korea', 'Crimea', 'DPRK',
-  'Russia', 'Belarus', 'Myanmar', 'Venezuela', 'Yemen', 'Sudan'
+/* ════════════════════════════════════════════════════════════════
+   ★ SANCTION KEYWORDS — 3 Parts × 3 Languages (與 old app.jsx 完全一致)
+   ════════════════════════════════════════════════════════════════ */
+// Part 1 — Comprehensive Sanctions / Highest Risk
+const SANCTION_EN_PART1 = [
+  "Syria", "Cuba", "Iran", "North Korea", "Crimea",
+  "Democratic People's Republic of Korea", "DPRK",
+  "DONETSK", "LUHANSK REGIONS", "Zaporizhzhia", "Kherson"
+];
+const SANCTION_ZH_TW_PART1 = [
+  "敘利亞", "古巴", "伊朗", "北韓", "克里米亞",
+  "朝鮮民主主義人民共和國", "頓內茨克", "盧甘斯克",
+  "札波羅熱", "赫爾松"
+];
+const SANCTION_ZH_CN_PART1 = [
+  "叙利亚", "古巴", "伊朗", "朝鲜", "克里米亚",
+  "朝鲜民主主义人民共和国", "顿涅茨克", "卢甘斯克",
+  "扎波罗热", "赫尔松"
 ];
 
-/* ★ 語言偵測 — 與 ScreeningModuleV2 一致 */
+// Part 2 — Second Tier
+const SANCTION_EN_PART2 = [
+  "Afghanistan", "Albania", "Belarus", "Bosnia and Herzegovina",
+  "Bulgaria", "Central African Republic", "Congo", "Croatia",
+  "Ethiopia", "Guinea-Bissau", "Haiti", "Iraq",
+  "Kosovo", "Kyrgyzstan", "Lebanon", "Libya"
+];
+const SANCTION_ZH_TW_PART2 = [
+  "阿富汗", "阿爾巴尼亞", "白俄羅斯", "波士尼亞與赫塞哥維納",
+  "保加利亞", "中非共和國", "剛果", "克羅埃西亞",
+  "衣索比亞", "幾內亞比紹", "海地", "伊拉克",
+  "科索沃", "吉爾吉斯斯坦", "黎巴嫩", "利比亞"
+];
+const SANCTION_ZH_CN_PART2 = [
+  "阿富汗", "阿尔巴尼亚", "白俄罗斯", "波斯尼亚和黑塞哥维那",
+  "保加利亚", "中非共和国", "刚果", "克罗地亚",
+  "埃塞俄比亚", "几内亚比绍", "海地", "伊拉克",
+  "科索沃", "吉尔吉斯斯坦", "黎巴嫩", "利比亚"
+];
+
+// Part 3 — Third Tier
+const SANCTION_EN_PART3 = [
+  "Macedonia", "Mali", "Montenegro", "Myanmar", "Nicaragua",
+  "Romania", "Russia", "Serbia", "Slovenia", "Somalia",
+  "South Sudan", "Sudan", "Ukraine", "Venezuela", "Yemen"
+];
+const SANCTION_ZH_TW_PART3 = [
+  "馬其頓", "馬裡", "蒙特內哥羅", "緬甸", "尼加拉瓜",
+  "羅馬尼亞", "俄羅斯", "塞爾維亞", "斯洛維尼亞",
+  "索馬利亞", "南蘇丹", "蘇丹", "烏克蘭", "委內瑞拉", "葉門"
+];
+const SANCTION_ZH_CN_PART3 = [
+  "马其顿", "马里", "黑山", "缅甸", "尼加拉瓜",
+  "罗马尼亚", "俄罗斯", "塞尔维亚", "斯洛文尼亚",
+  "索马里", "南苏丹", "苏丹", "乌克兰", "委内瑞拉", "也门"
+];
+
+/* ════════════════════════════════════════════════════════════════
+   LANGUAGE DETECTION (en / zh_tw / zh_cn)
+   ════════════════════════════════════════════════════════════════ */
 function detectLanguageDetail(text) {
   if (!text) return 'en';
   const chinese = text.match(/[\u4e00-\u9fa5]/g);
@@ -44,25 +96,38 @@ function detectLanguageDetail(text) {
   return simpScore > 0 ? 'zh_cn' : 'zh_tw';
 }
 
-/* ★ 構建完整 KYC 查詢字串 — 與 ScreeningModuleV2 一致 */
-function buildKycQuery(entityName, mode, extraKeyword) {
-  const lang = detectLanguageDetail(entityName);
-  let keywords;
-  if (mode === 'sanction') {
-    keywords = SANCTION_EN;
-  } else {
-    if (lang === 'zh_cn') keywords = ZH_KEYWORDS_CN;
-    else if (lang === 'zh_tw') keywords = ZH_KEYWORDS_TW;
-    else keywords = EN_KEYWORDS;
-  }
-  const kStr = keywords.map(k => `"${k}"`).join(' OR ');
-  const extra = (extraKeyword || '').trim();
-  const baseQuery = `"${entityName}" ${kStr}`;
-  return extra ? `${baseQuery} ${extra}` : baseQuery;
+function getSanctionKeywordsByPart(lang) {
+  const m = {
+    en:    { part1: SANCTION_EN_PART1,    part2: SANCTION_EN_PART2,    part3: SANCTION_EN_PART3 },
+    zh_tw: { part1: SANCTION_ZH_TW_PART1, part2: SANCTION_ZH_TW_PART2, part3: SANCTION_ZH_TW_PART3 },
+    zh_cn: { part1: SANCTION_ZH_CN_PART1, part2: SANCTION_ZH_CN_PART2, part3: SANCTION_ZH_CN_PART3 },
+  };
+  return m[lang] || m.en;
 }
 
 /* ════════════════════════════════════════════════════════════════
-   HELPERS (原本嘅 gid / preprocessImage / ocrWithTesseract — 不變)
+   QUERY BUILDERS
+   ════════════════════════════════════════════════════════════════ */
+function buildAdverseQuery(entityName, extraKeyword) {
+  const lang = detectLanguageDetail(entityName);
+  const kws = lang === 'zh_cn' ? ZH_KEYWORDS_CN : lang === 'zh_tw' ? ZH_KEYWORDS_TW : EN_KEYWORDS;
+  const kStr = kws.map(k => `"${k}"`).join(' OR ');
+  const extra = (extraKeyword || '').trim();
+  const base = `"${entityName}" ${kStr}`;
+  return extra ? `${base} ${extra}` : base;
+}
+
+function buildSanctionPartQuery(entityName, part, extraKeyword) {
+  const lang = detectLanguageDetail(entityName);
+  const kws = getSanctionKeywordsByPart(lang)[part];
+  const kStr = kws.map(k => `"${k}"`).join(' OR ');
+  const extra = (extraKeyword || '').trim();
+  const base = `"${entityName}" ${kStr}`;
+  return extra ? `${base} ${extra}` : base;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   ORIGINAL HELPERS (unchanged)
    ════════════════════════════════════════════════════════════════ */
 const gid = () =>
   (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -104,9 +169,7 @@ async function preprocessImage(file, maxDim = 1600, quality = 0.9) {
 }
 
 async function ocrWithTesseract(imagesB64, lang, onProgress) {
-  if (!window.Tesseract) {
-    throw new Error('Tesseract.js 未載入,請喺 index.html 加 CDN script');
-  }
+  if (!window.Tesseract) throw new Error('Tesseract.js 未載入,請喺 index.html 加 CDN script');
   const allLines = [];
   for (let i = 0; i < imagesB64.length; i++) {
     const { data } = await window.Tesseract.recognize(imagesB64[i], lang, {
@@ -165,12 +228,18 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
     emptyName: '未有識別到名字,先上傳圖片再識別',
     tip: '💡 印刷字體 / Excel 截圖效果最好',
     modeAdverse: '🔎 不良媒體',
-    modeAdverseDesc: 'fraud / bribery / 洗錢...',
+    modeAdverseDesc: 'fraud / bribery / 洗錢 ... (20 keywords)',
     modeSanction: '🛡️ 制裁名單',
-    modeSanctionDesc: 'Iran / DPRK / Russia...',
+    modeSanctionDesc: '分 3 Parts · 國家名',
     modeDesc: '揀邊組 KYC 關鍵字加入每個搜尋',
-    queryPreview: '查詢字串預覽 (第一個揀咗嘅名)',
-    langDetect: '第一個名語言偵測',
+    sanctionPart: '選擇 Part',
+    partAll: 'All 3 Parts',
+    partAllDesc: '每個名生成 3 條 URL',
+    queryPreview: '查詢字串預覽 (第一個名)',
+    langDetect: '第一個名語言',
+    eachName: '個名 ×',
+    partLabel: 'Part',
+    queries: '條查詢',
   } : {
     title: 'Batch Scan & Search',
     sub: 'Offline OCR + KYC keywords · No API Key',
@@ -200,19 +269,26 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
     emptyName: 'No names yet — upload images and run OCR',
     tip: '💡 Best with printed text',
     modeAdverse: '🔎 Adverse Media',
-    modeAdverseDesc: 'fraud / bribery / laundering...',
-    modeSanction: '🛡️ Sanction',
-    modeSanctionDesc: 'Iran / DPRK / Russia...',
+    modeAdverseDesc: 'fraud / bribery / laundering (20 keywords)',
+    modeSanction: '🛡️ Sanction List',
+    modeSanctionDesc: 'Split into 3 Parts · Country names',
     modeDesc: 'Pick which KYC keyword set to append',
-    queryPreview: 'Query Preview (first selected name)',
-    langDetect: 'First name lang detected',
+    sanctionPart: 'Select Part',
+    partAll: 'All 3 Parts',
+    partAllDesc: '3 URLs per name',
+    queryPreview: 'Query Preview (first name)',
+    langDetect: 'First name lang',
+    eachName: 'name ×',
+    partLabel: 'Part',
+    queries: 'queries',
   };
 
   const [images, setImages] = useState([]);
   const [names, setNames] = useState([]);
   const [ocrLang, setOcrLang] = useState('chi_tra+eng');
   const [extraKeyword, setExtraKeyword] = useState('');
-  const [searchMode, setSearchMode] = useState('adverseMedia'); // ★ NEW
+  const [searchMode, setSearchMode] = useState('adverseMedia'); // 'adverseMedia' | 'sanction'
+  const [sanctionPart, setSanctionPart] = useState('all');      // 'part1' | 'part2' | 'part3' | 'all'
   const [isOcring, setIsOcring] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -224,6 +300,7 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 2200); };
 
+  /* ── Image upload ── */
   const handleFiles = async (fileList) => {
     const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
     if (!files.length) return;
@@ -238,6 +315,7 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
   const removeImage = (id) => setImages(prev => prev.filter(i => i.id !== id));
   const clearImages = () => setImages([]);
 
+  /* ── OCR ── */
   const runOcr = async () => {
     if (!images.length) { setErrorMsg('請先上傳或拍照'); return; }
     setIsOcring(true); setErrorMsg(''); setProgressMsg('正在初始化 Tesseract...');
@@ -253,6 +331,7 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
     } finally { setIsOcring(false); setProgressMsg(''); }
   };
 
+  /* ── Name list actions ── */
   const toggleName = (id) => setNames(prev => prev.map(n => n.id === id ? { ...n, selected: !n.selected } : n));
   const toggleAll = () => {
     const all = names.every(n => n.selected);
@@ -271,24 +350,58 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
   };
   const clearAllNames = () => { if (window.confirm('確定清空所有名字?')) setNames([]); };
 
-  /* ★ 用 KYC keywords 構建 query */
-  const buildQuery = (name) => buildKycQuery(name, searchMode, extraKeyword);
+  /* ── Build single URL for given name (used in row Search icon) ── */
+  const buildSingleQuery = (name) => {
+    if (searchMode === 'adverseMedia') {
+      return buildAdverseQuery(name, extraKeyword);
+    }
+    // sanction — use selected part, or part1 if "all"
+    const part = sanctionPart === 'all' ? 'part1' : sanctionPart;
+    return buildSanctionPartQuery(name, part, extraKeyword);
+  };
 
   const selectedNames = useMemo(() => names.filter(n => n.selected && n.name.trim()), [names]);
-  const urls = useMemo(() => selectedNames.map(n => ({
-    name: n.name,
-    url: `https://www.google.com/search?q=${encodeURIComponent(buildQuery(n.name))}`,
-    query: buildQuery(n.name),
-  })), [selectedNames, extraKeyword, searchMode]);
 
+  /* ── Build full URL list based on mode ── */
+  const urls = useMemo(() => {
+    const out = [];
+    selectedNames.forEach(n => {
+      if (searchMode === 'adverseMedia') {
+        const q = buildAdverseQuery(n.name, extraKeyword);
+        out.push({
+          name: n.name,
+          label: n.name,
+          query: q,
+          url: `https://www.google.com/search?q=${encodeURIComponent(q)}`,
+        });
+      } else {
+        // sanction mode
+        const parts = sanctionPart === 'all' ? ['part1', 'part2', 'part3'] : [sanctionPart];
+        parts.forEach(p => {
+          const q = buildSanctionPartQuery(n.name, p, extraKeyword);
+          const partNum = p.replace('part', '');
+          out.push({
+            name: n.name,
+            label: `${n.name} [Part ${partNum}]`,
+            part: p,
+            query: q,
+            url: `https://www.google.com/search?q=${encodeURIComponent(q)}`,
+          });
+        });
+      }
+    });
+    return out;
+  }, [selectedNames, searchMode, sanctionPart, extraKeyword]);
+
+  /* ── Batch actions ── */
   const copyAllUrls = async () => {
-    const text = urls.map(u => `${u.name}\n${u.url}`).join('\n\n');
+    const text = urls.map(u => `${u.label}\n${u.url}`).join('\n\n');
     try { await navigator.clipboard.writeText(text); showToast(`✓ 已複製 ${urls.length} 個 URL`); }
     catch { showToast('⚠️ 複製失敗'); }
   };
   const shareUrls = async () => {
     if (!navigator.share) return showToast('⚠️ 此瀏覽器不支援系統分享');
-    const text = urls.map(u => `${u.name}: ${u.url}`).join('\n\n');
+    const text = urls.map(u => `${u.label}: ${u.url}`).join('\n\n');
     try { await navigator.share({ title: `Google 搜尋連結 (${urls.length})`, text }); }
     catch (e) { if (e.name !== 'AbortError') showToast(`分享失敗: ${e.message}`); }
   };
@@ -307,11 +420,28 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
     });
   };
 
-  /* 第一個名嘅 preview */
+  /* ── Preview helpers ── */
   const previewName = selectedNames[0]?.name || (lang === 'zh' ? '範例名' : 'Sample Name');
-  const previewQuery = buildQuery(previewName);
   const previewLang = detectLanguageDetail(previewName);
   const langLabel = previewLang === 'zh_cn' ? '🇨🇳 簡體' : previewLang === 'zh_tw' ? '🇹🇼 繁體' : '🇬🇧 英文';
+
+  // For sanction preview, build query for each part
+  const previewQueries = useMemo(() => {
+    if (searchMode === 'adverseMedia') {
+      return [{ label: 'Adverse Media', q: buildAdverseQuery(previewName, extraKeyword) }];
+    }
+    const parts = sanctionPart === 'all' ? ['part1', 'part2', 'part3'] : [sanctionPart];
+    return parts.map(p => ({
+      label: `Sanction Part ${p.replace('part', '')}`,
+      q: buildSanctionPartQuery(previewName, p, extraKeyword),
+    }));
+  }, [searchMode, sanctionPart, previewName, extraKeyword]);
+
+  // Count for sanction parts
+  const partCounts = useMemo(() => {
+    const k = getSanctionKeywordsByPart(previewLang);
+    return { part1: k.part1.length, part2: k.part2.length, part3: k.part3.length };
+  }, [previewLang]);
 
   return (
     <div className={`min-h-full ${darkMode ? 'bg-slate-950' : 'bg-slate-50'}`}>
@@ -337,7 +467,7 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
 
       <div className="max-w-3xl mx-auto p-4 space-y-4">
 
-        {/* ─── STEP 1: Upload (同原本) ─── */}
+        {/* ─── STEP 1: Upload ─── */}
         <div className={`rounded-2xl border shadow-sm p-5 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
           <div className="flex items-center gap-3 mb-4">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-lg">1</div>
@@ -375,7 +505,7 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
           )}
         </div>
 
-        {/* ─── STEP 2: OCR (同原本) ─── */}
+        {/* ─── STEP 2: OCR ─── */}
         <div className={`rounded-2xl border shadow-sm p-5 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
           <div className="flex items-center gap-3 mb-4">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm shadow-lg">2</div>
@@ -410,7 +540,7 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
           <div className={`mt-3 text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>{T.tip}</div>
         </div>
 
-        {/* ★★★ STEP 3: KYC Search Mode (新增) ★★★ */}
+        {/* ★★★ STEP 3: KYC Search Mode (Mode + Part Selector) ★★★ */}
         <div className={`rounded-2xl border shadow-sm p-5 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
           <div className="flex items-center gap-3 mb-4">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white font-bold text-sm shadow-lg">
@@ -422,6 +552,7 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
             </div>
           </div>
 
+          {/* Mode selector */}
           <div className="grid grid-cols-2 gap-2 mb-3">
             <button onClick={() => setSearchMode('adverseMedia')}
               className={`p-3 rounded-xl border-2 text-left transition ${
@@ -443,17 +574,46 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
             </button>
           </div>
 
-          {/* Language detection display */}
+          {/* ★ Part Selector — only show when Sanction mode */}
+          {searchMode === 'sanction' && (
+            <div className="mb-3 p-3 rounded-xl bg-orange-50/50 border border-orange-200">
+              <div className="text-[11px] font-bold text-orange-700 mb-2 flex items-center gap-1.5">
+                <span>🛡️</span>{T.sanctionPart}
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                {[
+                  { v: 'part1', label: 'Part 1', count: partCounts.part1, color: 'red' },
+                  { v: 'part2', label: 'Part 2', count: partCounts.part2, color: 'orange' },
+                  { v: 'part3', label: 'Part 3', count: partCounts.part3, color: 'amber' },
+                  { v: 'all',   label: T.partAll, count: '★', color: 'purple' },
+                ].map(p => {
+                  const active = sanctionPart === p.v;
+                  return (
+                    <button key={p.v} onClick={() => setSanctionPart(p.v)}
+                      className={`p-2 rounded-lg border-2 text-xs font-bold transition ${
+                        active
+                          ? `border-${p.color}-500 bg-${p.color}-100 text-${p.color}-700 shadow`
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                      }`}>
+                      <div>{p.label}</div>
+                      <div className="text-[9px] font-mono opacity-70">({p.count}{typeof p.count === 'number' ? ' kw' : ''})</div>
+                    </button>
+                  );
+                })}
+              </div>
+              {sanctionPart === 'all' && (
+                <p className="mt-2 text-[10px] text-purple-700 bg-purple-50 border border-purple-200 rounded px-2 py-1">
+                  💡 {T.partAllDesc} — {selectedNames.length} {T.eachName} 3 = <b>{selectedNames.length * 3} {T.queries}</b>
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Language detection */}
           {selectedNames.length > 0 && (
             <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs mb-2 ${darkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
               <Globe className="w-3.5 h-3.5" />
-              <span>{T.langDetect}: <b>{langLabel}</b>
-                {searchMode === 'sanction' && (
-                  <span className={`ml-2 text-[10px] ${darkMode ? 'text-orange-400' : 'text-orange-600'}`}>
-                    ({lang === 'zh' ? '制裁模式統一用英文 keyword' : 'Sanction mode uses EN keywords'})
-                  </span>
-                )}
-              </span>
+              <span>{T.langDetect}: <b>{langLabel}</b></span>
             </div>
           )}
 
@@ -462,8 +622,13 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
             <summary className={`text-[11px] cursor-pointer font-bold ${darkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>
               ▶ {T.queryPreview}
             </summary>
-            <div className="mt-2 bg-gray-900 rounded-lg p-3 overflow-x-auto">
-              <code className="text-[10px] text-green-400 break-all whitespace-pre-wrap">{previewQuery}</code>
+            <div className="mt-2 bg-gray-900 rounded-lg p-3 overflow-x-auto space-y-2">
+              {previewQueries.map((pq, i) => (
+                <div key={i}>
+                  <div className="text-[10px] text-orange-400 mb-0.5 font-bold">{pq.label}</div>
+                  <code className="text-[10px] text-green-400 break-all whitespace-pre-wrap block">{pq.q}</code>
+                </div>
+              ))}
             </div>
           </details>
         </div>
@@ -509,7 +674,7 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
                         <span className={`flex-1 text-xs font-medium truncate ${darkMode ? 'text-slate-200' : 'text-slate-800'}`}>
                           {n.name || <em className="text-slate-400">(空白)</em>}
                         </span>
-                        <a href={`https://www.google.com/search?q=${encodeURIComponent(buildQuery(n.name))}`}
+                        <a href={`https://www.google.com/search?q=${encodeURIComponent(buildSingleQuery(n.name))}`}
                            target="_blank" rel="noopener noreferrer"
                            onClick={e => { if (!n.name.trim()) e.preventDefault(); }}
                            className="text-blue-500 hover:text-blue-700" title="單獨搜尋"><Search className="w-3.5 h-3.5" /></a>
@@ -539,15 +704,32 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
               <h2 className={`text-sm font-bold flex-1 ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>{T.step5}</h2>
               <span className="text-[11px] font-bold text-orange-600">{urls.length} {T.totalResults}</span>
             </div>
+
+            {/* Mode summary banner */}
+            <div className={`mb-3 p-2.5 rounded-lg text-[11px] border ${
+              searchMode === 'sanction'
+                ? 'bg-orange-50 border-orange-200 text-orange-800'
+                : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+            }`}>
+              {searchMode === 'sanction' ? (
+                <>
+                  🛡️ <b>Sanction</b> · {sanctionPart === 'all' ? `All 3 Parts (${selectedNames.length} × 3 = ${urls.length} URLs)` : `Part ${sanctionPart.replace('part','')} (${selectedNames.length} URLs)`}
+                </>
+              ) : (
+                <>🔎 <b>Adverse Media</b> · {selectedNames.length} URLs</>
+              )}
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <button onClick={copyAllUrls} className="py-2.5 rounded-xl text-xs font-bold bg-slate-700 hover:bg-slate-800 text-white shadow">{T.copyAll}</button>
               <button onClick={shareUrls} className="py-2.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow">{T.shareAll}</button>
               <button onClick={tryOpenAll} className="py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white shadow">{T.openAll}</button>
             </div>
+
             <details className="mt-3">
-              <summary className={`text-[11px] cursor-pointer font-semibold ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>預覽 URLs + Queries</summary>
+              <summary className={`text-[11px] cursor-pointer font-semibold ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>預覽 URLs</summary>
               <pre className={`mt-2 text-[10px] font-mono p-2 rounded-lg overflow-auto max-h-60 ${darkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
-                {urls.map(u => `${u.name}\n  Query: ${u.query}\n  URL:   ${u.url}`).join('\n\n')}
+                {urls.map(u => `${u.label}\n  ${u.url}`).join('\n\n')}
               </pre>
             </details>
           </div>
