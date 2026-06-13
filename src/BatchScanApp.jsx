@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
-  Camera, Loader, X, Edit2, Check, ExternalLink,
+  Camera, Loader, X, Edit2, Check,
   Trash2, Plus, Search, Image as ImageIcon, Eraser, Shield, Globe
 } from 'lucide-react';
 
@@ -295,6 +295,7 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
   const [editingId, setEditingId] = useState(null);
   const [editDraft, setEditDraft] = useState('');
   const [toast, setToast] = useState('');
+  const [showFallbackLinks, setShowFallbackLinks] = useState(false);
   const cameraInputRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -391,19 +392,23 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
   /* ── Batch actions ── */
   
   const tryOpenAll = () => {
-    if (urls.length > 5 && !window.confirm(`將開啟 ${urls.length} 個分頁,手機可能封鎖,繼續?`)) return;
-    let blocked = 0;
-    urls.forEach((u, i) => {
-      setTimeout(() => {
-        const w = window.open(u.url, '_blank', 'noopener,noreferrer');
-        if (!w) blocked++;
-        if (i === urls.length - 1) {
-          if (blocked > 0) showToast(`⚠️ ${blocked}/${urls.length} 被封鎖`);
-          else showToast(`✓ 已開啟 ${urls.length} 個分頁`);
-        }
-      }, i * 150);
-    });
-  };
+  if (urls.length > 5 && !window.confirm(`將開啟 ${urls.length} 個分頁,繼續?`)) return;
+
+  // ★ 同步 loop — 全部喺同一個 click event 入面 call window.open
+  let blocked = 0;
+  for (const u of urls) {
+    const w = window.open(u.url, '_blank', 'noopener,noreferrer');
+    if (!w) blocked++;
+  }
+
+  if (blocked > 0) {
+    setShowFallbackLinks(true);    // ★ 有 block → 顯示 fallback list
+    showToast(`⚠️ ${blocked}/${urls.length} 被封鎖,請撳下方連結逐個開`);
+  } else {
+    setShowFallbackLinks(false);
+    showToast(`✓ 已開啟 ${urls.length} 個分頁`);
+  }
+};
 
   /* ── Preview helpers ── */
   const previewName = selectedNames[0]?.name || (lang === 'zh' ? '範例名' : 'Sample Name');
@@ -697,9 +702,45 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
               )}
             </div>
 
-            <div>
+           <div>
               <button onClick={tryOpenAll} className="w-full py-3 rounded-xl text-sm font-bold bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white shadow">{T.openAll}</button>
             </div>
+
+            {/* ★ Fallback Links — 當 popup blocker 攔截咗,先顯示 */}
+            {showFallbackLinks && (
+              <div className="mt-3 p-3 rounded-xl bg-amber-50 border-2 border-amber-300">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-[11px] font-bold text-amber-800">
+                    ⚠️ 瀏覽器封鎖咗彈出視窗 — 請逐個撳開:
+                  </div>
+                  <button
+                    onClick={() => setShowFallbackLinks(false)}
+                    className="text-amber-600 hover:text-amber-800"
+                    title="關閉"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="space-y-1 max-h-80 overflow-y-auto">
+                  {urls.map((u, i) => (
+                    <a
+                      key={i}
+                      href={u.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white hover:bg-blue-50 border border-amber-200 transition group"
+                    >
+                      <span className="text-[10px] font-mono text-amber-600 w-6 flex-shrink-0">{i + 1}.</span>
+                      <span className="flex-1 text-xs font-medium text-slate-700 truncate">{u.label}</span>
+                      <ExternalLink className="w-3.5 h-3.5 text-blue-500 group-hover:text-blue-700 flex-shrink-0" />
+                    </a>
+                  ))}
+                </div>
+                <p className="mt-2 text-[10px] text-amber-700 leading-relaxed">
+                  💡 想下次自動開啟全部:撳網址列嘅 🔒 / ⓘ 圖示 → <b>網站設定</b> → <b>彈出式視窗</b> → <b>允許</b>
+                </p>
+              </div>
+            )}
 
             <details className="mt-3">
               <summary className={`text-[11px] cursor-pointer font-semibold ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>預覽 URLs</summary>
