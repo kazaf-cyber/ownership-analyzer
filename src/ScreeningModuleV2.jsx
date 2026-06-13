@@ -49,23 +49,6 @@ function getSanctionKeywordsByPart(lang) {
   return m[lang] || m.en;
 }
 
-// Part 3 — Third Tier
-const SANCTION_EN_PART3 = [
-  "Macedonia", "Mali", "Montenegro", "Myanmar", "Nicaragua",
-  "Romania", "Russia", "Serbia", "Slovenia", "Somalia",
-  "South Sudan", "Sudan", "Ukraine", "Venezuela", "Yemen"
-];
-const SANCTION_ZH_TW_PART3 = [
-  "馬其頓", "馬裡", "蒙特內哥羅", "緬甸", "尼加拉瓜",
-  "羅馬尼亞", "俄羅斯", "塞爾維亞", "斯洛維尼亞",
-  "索馬利亞", "南蘇丹", "蘇丹", "烏克蘭", "委內瑞拉", "葉門"
-];
-const SANCTION_ZH_CN_PART3 = [
-  "马其顿", "马里", "黑山", "缅甸", "尼加拉瓜",
-  "罗马尼亚", "俄罗斯", "塞尔维亚", "斯洛文尼亚",
-  "索马里", "南苏丹", "苏丹", "乌克兰", "委内瑞拉", "也门"
-];
-
 const NATIONALITIES = [
   { value: 'CN', zh: '中國大陸', en: 'China (Mainland)' },
   { value: 'HK', zh: '中國香港', en: 'Hong Kong' },
@@ -183,7 +166,7 @@ function detectLanguageDetail(text) {
   return simpScore > 0 ? 'zh_cn' : 'zh_tw';
 }
 
-ffunction buildQuery(entityName, mode, sanctionPart = 'part1') {
+function buildQuery(entityName, mode, sanctionPart = 'part1') {
   const lang = detectLanguageDetail(entityName);
   let keywords;
   if (mode === 'sanction') {
