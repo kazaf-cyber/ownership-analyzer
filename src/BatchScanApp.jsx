@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
-  Camera, Loader, X, Edit2, Check, ExternalLink, Copy, Share2,
+  Camera, Loader, X, Edit2, Check, ExternalLink,
   Trash2, Plus, Search, Image as ImageIcon, Eraser, Shield, Globe
 } from 'lucide-react';
 
@@ -288,7 +288,7 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
   const [ocrLang, setOcrLang] = useState('chi_tra+eng');
   const [extraKeyword, setExtraKeyword] = useState('');
   const [searchMode, setSearchMode] = useState('adverseMedia'); // 'adverseMedia' | 'sanction'
-  const [sanctionPart, setSanctionPart] = useState('all');      // 'part1' | 'part2' | 'part3' | 'all'
+  const [sanctionPart, setSanctionPart] = useState(const [sanctionPart, setSanctionPart] = useState('part1'); 
   const [isOcring, setIsOcring] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -352,13 +352,11 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
 
   /* ── Build single URL for given name (used in row Search icon) ── */
   const buildSingleQuery = (name) => {
-    if (searchMode === 'adverseMedia') {
-      return buildAdverseQuery(name, extraKeyword);
-    }
-    // sanction — use selected part, or part1 if "all"
-    const part = sanctionPart === 'all' ? 'part1' : sanctionPart;
-    return buildSanctionPartQuery(name, part, extraKeyword);
-  };
+  if (searchMode === 'adverseMedia') {
+    return buildAdverseQuery(name, extraKeyword);
+  }
+  return buildSanctionPartQuery(name, sanctionPart, extraKeyword);
+};
 
   const selectedNames = useMemo(() => names.filter(n => n.selected && n.name.trim()), [names]);
 
@@ -375,36 +373,23 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
           url: `https://www.google.com/search?q=${encodeURIComponent(q)}`,
         });
       } else {
-        // sanction mode
-        const parts = sanctionPart === 'all' ? ['part1', 'part2', 'part3'] : [sanctionPart];
-        parts.forEach(p => {
-          const q = buildSanctionPartQuery(n.name, p, extraKeyword);
-          const partNum = p.replace('part', '');
-          out.push({
-            name: n.name,
-            label: `${n.name} [Part ${partNum}]`,
-            part: p,
-            query: q,
-            url: `https://www.google.com/search?q=${encodeURIComponent(q)}`,
-          });
-        });
-      }
+  // sanction mode — single part
+  const q = buildSanctionPartQuery(n.name, sanctionPart, extraKeyword);
+  const partNum = sanctionPart.replace('part', '');
+  out.push({
+    name: n.name,
+    label: `${n.name} [Part ${partNum}]`,
+    part: sanctionPart,
+    query: q,
+    url: `https://www.google.com/search?q=${encodeURIComponent(q)}`,
+  });
+}
     });
     return out;
   }, [selectedNames, searchMode, sanctionPart, extraKeyword]);
 
   /* ── Batch actions ── */
-  const copyAllUrls = async () => {
-    const text = urls.map(u => `${u.label}\n${u.url}`).join('\n\n');
-    try { await navigator.clipboard.writeText(text); showToast(`✓ 已複製 ${urls.length} 個 URL`); }
-    catch { showToast('⚠️ 複製失敗'); }
-  };
-  const shareUrls = async () => {
-    if (!navigator.share) return showToast('⚠️ 此瀏覽器不支援系統分享');
-    const text = urls.map(u => `${u.label}: ${u.url}`).join('\n\n');
-    try { await navigator.share({ title: `Google 搜尋連結 (${urls.length})`, text }); }
-    catch (e) { if (e.name !== 'AbortError') showToast(`分享失敗: ${e.message}`); }
-  };
+  
   const tryOpenAll = () => {
     if (urls.length > 5 && !window.confirm(`將開啟 ${urls.length} 個分頁,手機可能封鎖,繼續?`)) return;
     let blocked = 0;
@@ -427,15 +412,14 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
 
   // For sanction preview, build query for each part
   const previewQueries = useMemo(() => {
-    if (searchMode === 'adverseMedia') {
-      return [{ label: 'Adverse Media', q: buildAdverseQuery(previewName, extraKeyword) }];
-    }
-    const parts = sanctionPart === 'all' ? ['part1', 'part2', 'part3'] : [sanctionPart];
-    return parts.map(p => ({
-      label: `Sanction Part ${p.replace('part', '')}`,
-      q: buildSanctionPartQuery(previewName, p, extraKeyword),
-    }));
-  }, [searchMode, sanctionPart, previewName, extraKeyword]);
+  if (searchMode === 'adverseMedia') {
+    return [{ label: 'Adverse Media', q: buildAdverseQuery(previewName, extraKeyword) }];
+  }
+  return [{
+    label: `Sanction Part ${sanctionPart.replace('part', '')}`,
+    q: buildSanctionPartQuery(previewName, sanctionPart, extraKeyword),
+  }];
+}, [searchMode, sanctionPart, previewName, extraKeyword]);
 
   // Count for sanction parts
   const partCounts = useMemo(() => {
@@ -580,32 +564,27 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
               <div className="text-[11px] font-bold text-orange-700 mb-2 flex items-center gap-1.5">
                 <span>🛡️</span>{T.sanctionPart}
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              <div className="grid grid-cols-3 gap-1.5">
                 {[
-                  { v: 'part1', label: 'Part 1', count: partCounts.part1, color: 'red' },
-                  { v: 'part2', label: 'Part 2', count: partCounts.part2, color: 'orange' },
-                  { v: 'part3', label: 'Part 3', count: partCounts.part3, color: 'amber' },
-                  { v: 'all',   label: T.partAll, count: '★', color: 'purple' },
+                  { v: 'part1', label: 'Part 1', count: partCounts.part1,
+                    activeCls: 'border-red-500 bg-red-100 text-red-700 shadow' },
+                  { v: 'part2', label: 'Part 2', count: partCounts.part2,
+                    activeCls: 'border-orange-500 bg-orange-100 text-orange-700 shadow' },
+                  { v: 'part3', label: 'Part 3', count: partCounts.part3,
+                    activeCls: 'border-amber-500 bg-amber-100 text-amber-700 shadow' },
                 ].map(p => {
                   const active = sanctionPart === p.v;
                   return (
                     <button key={p.v} onClick={() => setSanctionPart(p.v)}
                       className={`p-2 rounded-lg border-2 text-xs font-bold transition ${
-                        active
-                          ? `border-${p.color}-500 bg-${p.color}-100 text-${p.color}-700 shadow`
-                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                        active ? p.activeCls : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
                       }`}>
                       <div>{p.label}</div>
-                      <div className="text-[9px] font-mono opacity-70">({p.count}{typeof p.count === 'number' ? ' kw' : ''})</div>
+                      <div className="text-[9px] font-mono opacity-70">({p.count} kw)</div>
                     </button>
                   );
                 })}
               </div>
-              {sanctionPart === 'all' && (
-                <p className="mt-2 text-[10px] text-purple-700 bg-purple-50 border border-purple-200 rounded px-2 py-1">
-                  💡 {T.partAllDesc} — {selectedNames.length} {T.eachName} 3 = <b>{selectedNames.length * 3} {T.queries}</b>
-                </p>
-              )}
             </div>
           )}
 
@@ -711,19 +690,15 @@ export default function BatchScanApp({ lang = 'zh', darkMode = false }) {
                 ? 'bg-orange-50 border-orange-200 text-orange-800'
                 : 'bg-emerald-50 border-emerald-200 text-emerald-800'
             }`}>
-              {searchMode === 'sanction' ? (
-                <>
-                  🛡️ <b>Sanction</b> · {sanctionPart === 'all' ? `All 3 Parts (${selectedNames.length} × 3 = ${urls.length} URLs)` : `Part ${sanctionPart.replace('part','')} (${selectedNames.length} URLs)`}
-                </>
+             {searchMode === 'sanction' ? (
+                <>🛡️ <b>Sanction</b> · Part {sanctionPart.replace('part','')} ({selectedNames.length} URLs)</>
               ) : (
                 <>🔎 <b>Adverse Media</b> · {selectedNames.length} URLs</>
               )}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <button onClick={copyAllUrls} className="py-2.5 rounded-xl text-xs font-bold bg-slate-700 hover:bg-slate-800 text-white shadow">{T.copyAll}</button>
-              <button onClick={shareUrls} className="py-2.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow">{T.shareAll}</button>
-              <button onClick={tryOpenAll} className="py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white shadow">{T.openAll}</button>
+            <div>
+              <button onClick={tryOpenAll} className="w-full py-3 rounded-xl text-sm font-bold bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white shadow">{T.openAll}</button>
             </div>
 
             <details className="mt-3">
